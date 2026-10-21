@@ -1,0 +1,12 @@
+[package]
+name = "shell-icons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+resvg = "0.48.1"
+tiny-skia = "0.12.0"
+
+[lints]
+workspace = true
