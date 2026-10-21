@@ -9,6 +9,3 @@ shell-core = { path = "../../crates/core" }
 
 [lints]
 workspace = true
-
-[lints]
-workspace = true
