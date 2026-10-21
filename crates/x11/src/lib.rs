@@ -163,6 +163,7 @@ impl Display {
                     shift: state & 0x1 != 0,
                     ctrl: state & 0x4 != 0,
                     alt: state & 0x8 != 0,
+                    logo: state & 0x40 != 0,
                 })
             }
             XEvent::ButtonPress(e) => Event::Button {

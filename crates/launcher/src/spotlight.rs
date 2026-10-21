@@ -100,6 +100,9 @@ impl Spotlight {
                 Action::Redraw
             }
             Key::Escape => Action::Close,
+            // Повторное Super+Пробел закрывает, как Cmd+Пробел на Mac: пока окно
+            // открыто, клавиатура у него, и до Xfce это нажатие не доходит.
+            Key::Char(' ') if k.logo => Action::Close,
             Key::Return => match self.results.get(self.selected) {
                 Some(&i) => Action::Launch(Box::new(self.apps[i].clone())),
                 None => Action::Nothing,
@@ -142,7 +145,7 @@ impl Spotlight {
                 self.cursor = self.query.chars().count();
                 Action::Redraw
             }
-            Key::Char(c) if !k.ctrl && !k.alt => {
+            Key::Char(c) if !k.ctrl && !k.alt && !k.logo => {
                 let at = self.byte_index(self.cursor);
                 self.query.insert(at, c);
                 self.cursor += 1;
@@ -395,6 +398,23 @@ pub(crate) mod tests {
         assert!(matches!(s.click(100, row2, 1), Action::Launch(_)));
         assert_eq!(s.click(-5, 10, 1), Action::Close);
         assert_eq!(s.click(100, 10, 1), Action::Nothing);
+    }
+
+    #[test]
+    fn super_space_closes() {
+        let mut s = spotlight();
+        press(&mut s, "fi");
+        let super_space = KeyPress {
+            logo: true,
+            ..KeyPress::plain(Key::Char(' '))
+        };
+        assert_eq!(s.key(super_space), Action::Close);
+        let super_a = KeyPress {
+            logo: true,
+            ..KeyPress::plain(Key::Char('a'))
+        };
+        assert_eq!(s.key(super_a), Action::Nothing);
+        assert_eq!(s.query(), "fi");
     }
 
     #[test]

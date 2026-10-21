@@ -26,6 +26,8 @@ pub struct KeyPress {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    /// Клавиша Super (с логотипом Windows) — на Mac её место занимает Cmd.
+    pub logo: bool,
 }
 
 impl KeyPress {
@@ -36,6 +38,7 @@ impl KeyPress {
             ctrl: false,
             shift: false,
             alt: false,
+            logo: false,
         }
     }
 }

@@ -85,8 +85,11 @@ NoDisplay/Hidden, TryExec, OnlyShowIn), Icon Theme (поиск иконки по
 - `shell apps`, `shell search ТЕКСТ`, `shell watch` — проверки без окна.
 Окно: override-redirect, 32-битный вид (прозрачность через композитор xfwm4), захват
 клавиатуры и мыши; раскладка us/ru — из битов группы XKB в событии.
-Горячая клавиша Super+Пробел пока у Xfce (`/commands/custom/<Super>space` →
-`macos-look spotlight`); переключать на `shell spotlight` — только с согласия пользователя.
+**Включено (21.10.2026, с согласия пользователя):** `macos-look set spotlight.engine shell` —
+Super+Пробел → `~/.local/bin/shell spotlight`, автозапуск `~/.config/autostart/shell-daemon.desktop`
+(ставит macos-look, `doctor` проверяет). Вернуть rofi: `macos-look set spotlight.engine rofi`.
+После пересборки: `install -m 755 target/release/shell ~/.local/bin/shell`, остановить службу
+по номеру (урок 10) и `macos-look apply menu` — запустит её заново с окружением сеанса.
 
 ## Аналоги для изучения (смотреть поведение и решения, код не копировать)
 
