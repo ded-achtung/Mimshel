@@ -207,31 +207,7 @@ fn find_executable(name: &str, path: &[PathBuf]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Временная папка, удаляется в конце теста.
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> TempDir {
-            let dir =
-                std::env::temp_dir().join(format!("shell-apps-test-{}-{name}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            TempDir(dir)
-        }
-
-        fn write(&self, rel: &str, text: &str) {
-            let p = self.0.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, text).unwrap();
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_util::TempDir;
 
     fn app(name: &str, extra: &str) -> String {
         format!("[Desktop Entry]\nType=Application\nName={name}\nExec={name} %U\n{extra}\n")

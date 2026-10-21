@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+inotify = { version = "0.11.5", default-features = false }
 
 [lints]
 workspace = true
