@@ -61,7 +61,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 
 ### Порядок работы
 Заменяем чужие программы по одной, в любой момент можно вернуться к старой через конфиг:
-1. **Spotlight + Launchpad** вместо rofi  ← **первая задача**
+1. **Spotlight + Launchpad** вместо rofi — **сделано** (21.10.2026)
 2. Док вместо Plank (увеличение, точки у открытых окон, правильная группировка)
 3. Строка меню вместо панели Xfce (яблоко, глобальное меню, трей, раскладка, часы)
 4. Пункт управления и уведомления
@@ -78,16 +78,22 @@ NoDisplay/Hidden, TryExec, OnlyShowIn), Icon Theme (поиск иконки по
 Сравнить скорость открытия с нынешним (~1 с).
 
 **Сделано:** `apps` (индекс, запуск, слежение), `core::search`, `text`, `icons`, `x11`,
-`launcher` (Spotlight: состояние + рисование в PNG), `apps/shell`:
+`launcher` (Spotlight и Launchpad: состояние + рисование в PNG; общее поле ввода `field`),
+`apps/shell`:
 - `shell daemon` — служба: грузит всё заранее, ждёт команд в `$XDG_RUNTIME_DIR/shell.sock`;
-- `shell spotlight` — открыть/закрыть (через службу; без неё — сам, медленнее);
-- `shell snapshot ТЕКСТ файл.png` — нарисовать окно без экрана (проверка вида);
+- `shell spotlight`, `shell launchpad` — открыть/закрыть (через службу; без неё — сами, медленнее);
+- `shell snapshot spotlight|launchpad ТЕКСТ файл.png` — нарисовать окно в картинку (проверка вида);
 - `shell apps`, `shell search ТЕКСТ`, `shell watch` — проверки без окна.
 Окно: override-redirect, 32-битный вид (прозрачность через композитор xfwm4), захват
 клавиатуры и мыши; раскладка us/ru — из битов группы XKB в событии.
-**Включено (21.10.2026, с согласия пользователя):** `macos-look set spotlight.engine shell` —
-Super+Пробел → `~/.local/bin/shell spotlight`, автозапуск `~/.config/autostart/shell-daemon.desktop`
-(ставит macos-look, `doctor` проверяет). Вернуть rofi: `macos-look set spotlight.engine rofi`.
+Launchpad: снимок экрана → уменьшить в 8 раз, размыть, затемнить, растянуть обратно (своё
+растягивание: общее рисование tiny-skia было в 4 раза медленнее). Открытие ~0,2 с: снимок
+~60 мс, размытие ~40 мс, рисование ~10 мс, вывод ~60 мс. Дальше ускорять — MIT-SHM для вывода.
+**Включено (21.10.2026, с согласия пользователя):** `macos-look set spotlight.engine shell` и
+`macos-look set launchpad.engine shell` — Super+Пробел/Super+A и значок Launchpad в доке →
+`~/.local/bin/shell spotlight|launchpad`, автозапуск `~/.config/autostart/shell-daemon.desktop`
+(ставит macos-look, `doctor` проверяет). Вернуть rofi: `macos-look set spotlight.engine rofi`
+(и `launchpad.engine rofi`).
 После пересборки: `install -m 755 target/release/shell ~/.local/bin/shell`, остановить службу
 по номеру (урок 10) и `macos-look apply menu` — запустит её заново с окружением сеанса.
 

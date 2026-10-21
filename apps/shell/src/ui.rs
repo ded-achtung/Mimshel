@@ -1,8 +1,11 @@
-//! Окно Spotlight на экране: служба (`shell daemon`) или разовый запуск.
+//! Окна оболочки на экране — Spotlight и Launchpad: служба (`shell daemon`)
+//! или разовый запуск.
 //!
 //! Служба заранее загружает шрифты, иконки и список программ и ждёт команды
-//! через сокет `$XDG_RUNTIME_DIR/shell.sock`; поэтому окно открывается сразу.
-//! Без службы `shell spotlight` делает всё сам — медленнее, но работает.
+//! через сокет `$XDG_RUNTIME_DIR/shell.sock`; поэтому окна открываются сразу.
+//! Без службы `shell spotlight` / `shell launchpad` делают всё сами —
+//! медленнее, но работают. Открыто не больше одного окна: открытие одного
+//! закрывает другое.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -14,22 +17,47 @@ use std::time::Instant;
 use shell_apps::{App, Settings, Watcher};
 use shell_core::config::Config;
 use shell_icons::Icons;
-use shell_launcher::{Action, Spotlight};
+use shell_launcher::{Action, Grid, Launchpad, Spotlight, backdrop};
 use shell_text::Fonts;
-use shell_x11::{Display, Event, Popup};
+use shell_x11::{Display, Event, Key, KeyPress, Popup};
 use tiny_skia::Pixmap;
 
 type Result<T> = shell_x11::Result<T>;
 
-/// Иконки программ в списке — такого размера (см. оформление Spotlight).
+/// Иконки программ в списке Spotlight — такого размера (см. его оформление).
 const ROW_ICON: u32 = 26;
-/// Окно стоит на этой доле высоты экрана сверху, как в macOS.
+/// Spotlight стоит на этой доле высоты экрана сверху, как в macOS.
 const TOP: f32 = 0.22;
+/// Сколько ждать перерисовки композитора после того, как окно спрятано.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
+
+/// Какое окно.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Spotlight,
+    Launchpad,
+}
+
+impl Panel {
+    /// Имя команды — и в командной строке, и в сокете.
+    pub fn name(self) -> &'static str {
+        match self {
+            Panel::Spotlight => "spotlight",
+            Panel::Launchpad => "launchpad",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Panel> {
+        [Panel::Spotlight, Panel::Launchpad]
+            .into_iter()
+            .find(|p| p.name() == s)
+    }
+}
 
 enum Msg {
     X(Event),
     /// Открыть или закрыть окно.
-    Toggle,
+    Toggle(Panel),
     /// Список программ изменился.
     Apps(Vec<App>),
 }
@@ -42,17 +70,26 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
-/// Просит запущенную службу открыть Spotlight. `false` — службы нет.
-pub fn ask_daemon() -> bool {
+/// Просит запущенную службу открыть окно. `false` — службы нет.
+pub fn ask_daemon(panel: Panel) -> bool {
     UnixStream::connect(socket_path())
-        .and_then(|mut s| s.write_all(b"spotlight\n"))
+        .and_then(|mut s| s.write_all(format!("{}\n", panel.name()).as_bytes()))
         .is_ok()
 }
 
-/// Запускает окно. `daemon` — работать службой и ждать команд;
-/// иначе открыть окно один раз и выйти после закрытия.
-pub fn run(daemon: bool) -> Result<()> {
+fn grid(config: &Config) -> Grid {
+    Grid {
+        columns: config.launchpad_columns,
+        rows: config.launchpad_rows,
+        icon: config.launchpad_icon,
+    }
+}
+
+/// Запускает окна. `once` — открыть это окно один раз и выйти после закрытия;
+/// `None` — работать службой и ждать команд.
+pub fn run(once: Option<Panel>) -> Result<()> {
     let start = Instant::now();
+    let daemon = once.is_none();
     let config = Config::default();
     let (tx, rx) = mpsc::channel();
 
@@ -60,7 +97,6 @@ pub fn run(daemon: bool) -> Result<()> {
         listen(tx.clone())?;
     }
     let display = Arc::new(Display::connect()?);
-    let popup = display.create_popup("spotlight")?;
     {
         let display = display.clone();
         let tx = tx.clone();
@@ -75,92 +111,149 @@ pub fn run(daemon: bool) -> Result<()> {
 
     let settings = Settings::from_env();
     let apps = shell_apps::load(&settings);
-    let fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
     if daemon {
         watch_apps(settings, tx.clone());
         // Иконки всех программ — заранее, чтобы первое открытие было мгновенным.
         for name in apps.iter().filter_map(|a| a.icon.as_deref()) {
             icons.get(name, ROW_ICON);
+            icons.get(name, config.launchpad_icon);
         }
-        eprintln!("Служба готова за {:?}", start.elapsed());
     }
-
-    let mut window = Window {
+    let (sw, sh) = display.screen_size();
+    let mut ui = Ui {
         display: &display,
-        popup,
-        spotlight: Spotlight::new(apps),
-        fonts,
+        fonts: Fonts::new(&config.font),
         icons,
+        spot_popup: display.create_popup("spotlight")?,
+        pad_popup: display.create_popup("launchpad")?,
+        spotlight: Spotlight::new(apps.clone()),
+        launchpad: Launchpad::new(apps, (u32::from(sw), u32::from(sh)), grid(&config)),
+        background: None,
         frame: None,
-        visible: false,
+        shown: None,
         terminal: config.terminal,
     };
-    if !daemon {
-        window.toggle()?;
-        eprintln!("Окно открыто за {:?}", start.elapsed());
+    match once {
+        None => eprintln!("Служба готова за {:?}", start.elapsed()),
+        Some(panel) => {
+            ui.toggle(panel)?;
+            eprintln!("Окно открыто за {:?}", start.elapsed());
+        }
     }
 
     for msg in rx {
         match msg {
-            Msg::Toggle => window.toggle()?,
-            Msg::Apps(apps) => {
-                window.spotlight.set_apps(apps);
-                if window.visible {
-                    window.redraw()?;
-                }
-            }
-            Msg::X(ev) if window.visible => window.event(ev)?,
+            Msg::Toggle(panel) => ui.toggle(panel)?,
+            Msg::Apps(apps) => ui.set_apps(apps)?,
+            Msg::X(ev) if ui.shown.is_some() => ui.event(ev)?,
             Msg::X(_) => {}
         }
-        if !daemon && !window.visible {
+        if !daemon && ui.shown.is_none() {
             break;
         }
     }
     Ok(())
 }
 
-struct Window<'a> {
+struct Ui<'a> {
     display: &'a Display,
-    popup: Popup,
-    spotlight: Spotlight,
     fonts: Fonts,
     icons: Icons,
+    spot_popup: Popup,
+    pad_popup: Popup,
+    spotlight: Spotlight,
+    launchpad: Launchpad,
+    /// Размытый снимок стола под Launchpad — делается при каждом открытии.
+    background: Option<Pixmap>,
     /// Последняя нарисованная картинка — чтобы быстро повторить её по Expose.
     frame: Option<Pixmap>,
-    visible: bool,
+    shown: Option<Panel>,
     terminal: Vec<String>,
 }
 
-impl Window<'_> {
-    fn toggle(&mut self) -> Result<()> {
-        if self.visible {
-            return self.hide();
+impl Ui<'_> {
+    fn toggle(&mut self, panel: Panel) -> Result<()> {
+        let was = self.shown;
+        if was.is_some() {
+            self.hide()?;
         }
+        if was == Some(panel) {
+            return Ok(());
+        }
+        if was.is_some() && panel == Panel::Launchpad {
+            // Переход из Spotlight: композитор должен успеть убрать его с экрана,
+            // иначе он попадёт в снимок под размытый фон.
+            self.display.sync()?;
+            std::thread::sleep(SETTLE);
+        }
+        match panel {
+            Panel::Spotlight => self.show_spotlight(),
+            Panel::Launchpad => self.show_launchpad(),
+        }
+    }
+
+    fn show_spotlight(&mut self) -> Result<()> {
         self.spotlight.reset();
         let frame = self.spotlight.render(&mut self.fonts, &mut self.icons);
-        let (x, y) = self.position(frame.width());
-        self.popup.show(
-            self.display,
-            x,
-            y,
-            frame.width() as u16,
-            frame.height() as u16,
-        )?;
-        self.popup.present(self.display, &frame)?;
+        let (x, y) = self.spotlight_position(frame.width());
+        let (w, h) = (frame.width() as u16, frame.height() as u16);
+        self.spot_popup.show(self.display, x, y, w, h)?;
+        self.spot_popup.present(self.display, &frame)?;
         self.frame = Some(frame);
-        self.visible = true;
+        self.shown = Some(Panel::Spotlight);
+        Ok(())
+    }
+
+    fn show_launchpad(&mut self) -> Result<()> {
+        let start = Instant::now();
+        let (w, h) = self.display.screen_size();
+        self.launchpad.set_screen(u32::from(w), u32::from(h));
+        self.launchpad.reset();
+        // Снимок — до показа окна, иначе в него попадёт сам Launchpad.
+        let shot = match self.display.capture_screen() {
+            Ok(shot) => Some(shot),
+            Err(e) => {
+                eprintln!("Снимок экрана не получился, фон будет ровным: {e}");
+                None
+            }
+        };
+        let shot_time = start.elapsed();
+        let background = backdrop(shot.as_ref(), self.launchpad.size());
+        let blur_time = start.elapsed();
+        let frame = self
+            .launchpad
+            .render(&background, &mut self.fonts, &mut self.icons);
+        let render_time = start.elapsed();
+        self.pad_popup.show(self.display, 0, 0, w, h)?;
+        self.pad_popup.present(self.display, &frame)?;
+        eprintln!(
+            "Launchpad: снимок {shot_time:?}, размытие {:?}, рисование {:?}, вывод {:?}",
+            blur_time - shot_time,
+            render_time - blur_time,
+            start.elapsed() - render_time
+        );
+        self.background = Some(background);
+        self.frame = Some(frame);
+        self.shown = Some(Panel::Launchpad);
         Ok(())
     }
 
     fn hide(&mut self) -> Result<()> {
-        self.popup.hide(self.display)?;
-        self.visible = false;
+        match self.shown {
+            Some(Panel::Spotlight) => self.spot_popup.hide(self.display)?,
+            Some(Panel::Launchpad) => self.pad_popup.hide(self.display)?,
+            None => {}
+        }
+        self.shown = None;
+        self.frame = None;
+        // Снимок стола занимает ~15 МБ — незачем держать его закрытым.
+        self.background = None;
         Ok(())
     }
 
-    /// Левый верхний угол окна: по центру, на 22 % высоты экрана.
-    fn position(&self, width: u32) -> (i16, i16) {
+    /// Левый верхний угол Spotlight: по центру, на 22 % высоты экрана.
+    fn spotlight_position(&self, width: u32) -> (i16, i16) {
         let (sw, sh) = self.display.screen_size();
         let x = (i32::from(sw) - width as i32) / 2;
         let y = (f32::from(sh) * TOP) as i32;
@@ -168,38 +261,77 @@ impl Window<'_> {
     }
 
     fn redraw(&mut self) -> Result<()> {
-        let frame = self.spotlight.render(&mut self.fonts, &mut self.icons);
-        let old = self.frame.as_ref().map(|f| (f.width(), f.height()));
-        if old != Some((frame.width(), frame.height())) {
-            let (x, y) = self.position(frame.width());
-            self.popup.set_geometry(
-                self.display,
-                x,
-                y,
-                frame.width() as u16,
-                frame.height() as u16,
-            )?;
+        match self.shown {
+            Some(Panel::Spotlight) => {
+                let frame = self.spotlight.render(&mut self.fonts, &mut self.icons);
+                let old = self.frame.as_ref().map(|f| (f.width(), f.height()));
+                if old != Some((frame.width(), frame.height())) {
+                    let (x, y) = self.spotlight_position(frame.width());
+                    let (w, h) = (frame.width() as u16, frame.height() as u16);
+                    self.spot_popup.set_geometry(self.display, x, y, w, h)?;
+                }
+                self.spot_popup.present(self.display, &frame)?;
+                self.frame = Some(frame);
+            }
+            Some(Panel::Launchpad) => {
+                let Some(background) = &self.background else {
+                    return Ok(());
+                };
+                let frame = self
+                    .launchpad
+                    .render(background, &mut self.fonts, &mut self.icons);
+                self.pad_popup.present(self.display, &frame)?;
+                self.frame = Some(frame);
+            }
+            None => {}
         }
-        self.popup.present(self.display, &frame)?;
-        self.frame = Some(frame);
+        Ok(())
+    }
+
+    fn set_apps(&mut self, apps: Vec<App>) -> Result<()> {
+        self.spotlight.set_apps(apps.clone());
+        self.launchpad.set_apps(apps);
+        if self.shown.is_some() {
+            self.redraw()?;
+        }
         Ok(())
     }
 
     fn event(&mut self, ev: Event) -> Result<()> {
-        let action = match ev {
-            Event::Key(k) => self.spotlight.key(k),
-            Event::Button { x, y, button } => {
+        let Some(panel) = self.shown else {
+            return Ok(());
+        };
+        let action = match (panel, ev) {
+            (Panel::Spotlight, Event::Key(k)) => self.spotlight.key(k),
+            (Panel::Launchpad, Event::Key(k)) => self.launchpad.key(k),
+            (Panel::Spotlight, Event::Button { x, y, button }) => {
                 self.spotlight.click(i32::from(x), i32::from(y), button)
             }
-            Event::Motion { x, y } => self.spotlight.motion(i32::from(x), i32::from(y)),
-            Event::Expose => {
+            (Panel::Launchpad, Event::Button { x, y, button }) => {
+                self.launchpad.click(i32::from(x), i32::from(y), button)
+            }
+            (Panel::Spotlight, Event::Motion { x, y }) => {
+                self.spotlight.motion(i32::from(x), i32::from(y))
+            }
+            (_, Event::Expose) => {
                 if let Some(frame) = &self.frame {
-                    self.popup.present(self.display, frame)?;
+                    let popup = match panel {
+                        Panel::Spotlight => &self.spot_popup,
+                        Panel::Launchpad => &self.pad_popup,
+                    };
+                    popup.present(self.display, frame)?;
                 }
                 Action::Nothing
             }
-            Event::Other => Action::Nothing,
+            _ => Action::Nothing,
         };
+        // Из Spotlight Super+A сразу открывает Launchpad и наоборот.
+        if let Event::Key(k) = ev
+            && k.logo
+            && let Some(other) = switch_to(panel, k)
+        {
+            return self.toggle(other);
+        }
         match action {
             Action::Nothing => {}
             Action::Redraw => self.redraw()?,
@@ -212,6 +344,15 @@ impl Window<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// Сочетание другого окна: Super+Пробел в Launchpad, Super+A в Spotlight.
+fn switch_to(panel: Panel, k: KeyPress) -> Option<Panel> {
+    match (panel, k.key) {
+        (Panel::Spotlight, Key::Char('a')) => Some(Panel::Launchpad),
+        (Panel::Launchpad, Key::Char(' ')) => Some(Panel::Spotlight),
+        _ => None,
     }
 }
 
@@ -233,14 +374,11 @@ fn listen(tx: Sender<Msg>) -> Result<()> {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             for line in BufReader::new(stream).lines().map_while(|l| l.ok()) {
-                let msg = match line.trim() {
-                    "spotlight" => Msg::Toggle,
-                    other => {
-                        eprintln!("Неизвестная команда: {other}");
-                        continue;
-                    }
+                let Some(panel) = Panel::parse(line.trim()) else {
+                    eprintln!("Неизвестная команда: {}", line.trim());
+                    continue;
                 };
-                if tx.send(msg).is_err() {
+                if tx.send(Msg::Toggle(panel)).is_err() {
                     return;
                 }
             }
@@ -267,19 +405,40 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
     });
 }
 
-/// Рисует Spotlight с набранным текстом в PNG — без экрана.
-pub fn snapshot(text: &str, file: &str) -> Result<()> {
+/// Рисует окно с набранным текстом в PNG. Для Launchpad, если доступен
+/// экран, берёт его размер и снимок для фона; иначе — 1920×1080, ровный фон.
+pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let config = Config::default();
     let start = Instant::now();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
-    let mut spotlight = Spotlight::new(shell_apps::load(&Settings::from_env()));
+    let apps = shell_apps::load(&Settings::from_env());
     eprintln!("Загрузка: {:?}", start.elapsed());
-    for c in text.chars() {
-        spotlight.key(shell_x11::KeyPress::plain(shell_x11::Key::Char(c)));
-    }
+    let keys = text.chars().map(|c| KeyPress::plain(Key::Char(c)));
     let start = Instant::now();
-    let frame = spotlight.render(&mut fonts, &mut icons);
+    let frame = match panel {
+        Panel::Spotlight => {
+            let mut s = Spotlight::new(apps);
+            keys.for_each(|k| {
+                s.key(k);
+            });
+            s.render(&mut fonts, &mut icons)
+        }
+        Panel::Launchpad => {
+            let display = Display::connect().ok();
+            let size = display.as_ref().map_or((1920, 1080), |d| {
+                let (w, h) = d.screen_size();
+                (u32::from(w), u32::from(h))
+            });
+            let shot = display.and_then(|d| d.capture_screen().ok());
+            let mut l = Launchpad::new(apps, size, grid(&config));
+            keys.for_each(|k| {
+                l.key(k);
+            });
+            let background = backdrop(shot.as_ref(), size);
+            l.render(&background, &mut fonts, &mut icons)
+        }
+    };
     eprintln!("Рисование: {:?}", start.elapsed());
     frame.save_png(file)?;
     Ok(())

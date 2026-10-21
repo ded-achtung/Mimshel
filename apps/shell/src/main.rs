@@ -1,6 +1,6 @@
-//! Оболочка рабочего стола: Spotlight и проверочные команды.
+//! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
 
-mod spotlight;
+mod ui;
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -12,10 +12,11 @@ const HELP: &str = "\
   shell apps            список программ, которые увидит Launchpad
   shell search ТЕКСТ    что найдёт Spotlight по этому тексту
   shell watch           следить за ярлыками и печатать, что появилось и пропало
-  shell daemon          служба: держит Spotlight наготове
+  shell daemon          служба: держит Spotlight и Launchpad наготове
   shell spotlight       открыть или закрыть Spotlight (через службу, без неё — сам)
-  shell snapshot ТЕКСТ ФАЙЛ.png
-                        нарисовать Spotlight с этим текстом в картинку (без экрана)";
+  shell launchpad       открыть или закрыть Launchpad (через службу, без неё — сам)
+  shell snapshot spotlight|launchpad ТЕКСТ ФАЙЛ.png
+                        нарисовать окно с этим текстом в картинку";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -23,14 +24,16 @@ fn main() {
         Some("apps") => list_apps(),
         Some("search") if args.len() > 1 => search(&args[1..].join(" ")),
         Some("watch") => watch(),
-        Some("daemon") => exit_on_error(spotlight::run(true)),
-        Some("spotlight") => {
-            if !spotlight::ask_daemon() {
-                exit_on_error(spotlight::run(false));
+        Some("daemon") => exit_on_error(ui::run(None)),
+        Some(cmd) if ui::Panel::parse(cmd).is_some() => {
+            let panel = ui::Panel::parse(cmd).expect("проверено выше");
+            if !ui::ask_daemon(panel) {
+                exit_on_error(ui::run(Some(panel)));
             }
         }
-        Some("snapshot") if args.len() == 3 => {
-            exit_on_error(spotlight::snapshot(&args[1], &args[2]))
+        Some("snapshot") if args.len() == 4 && ui::Panel::parse(&args[1]).is_some() => {
+            let panel = ui::Panel::parse(&args[1]).expect("проверено выше");
+            exit_on_error(ui::snapshot(panel, &args[2], &args[3]))
         }
         _ => {
             println!("{HELP}");

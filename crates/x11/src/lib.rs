@@ -85,9 +85,14 @@ impl Display {
         })
     }
 
-    /// Размер экрана в пикселях.
+    /// Размер экрана в пикселях. Спрашиваем каждый раз: в ВМ он меняется вместе
+    /// с окном VirtualBox. Если сервер не ответил — размер при подключении.
     pub fn screen_size(&self) -> (u16, u16) {
-        self.screen_size
+        self.conn
+            .get_geometry(self.root)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or(self.screen_size, |g| (g.width, g.height))
     }
 
     /// Создаёт скрытое всплывающее окно (без рамки, поверх остальных).
@@ -127,6 +132,34 @@ impl Display {
         self.conn.create_gc(gc, window, &CreateGCAux::new())?;
         self.conn.flush()?;
         Ok(Popup { window, gc })
+    }
+
+    /// Снимок всего экрана (как он виден сейчас, с окнами).
+    pub fn capture_screen(&self) -> Result<Pixmap> {
+        let (w, h) = self.screen_size();
+        let reply = self
+            .conn
+            .get_image(ImageFormat::Z_PIXMAP, self.root, 0, 0, w, h, !0)?
+            .reply()?;
+        let mut data = reply.data;
+        if data.len() != usize::from(w) * usize::from(h) * 4 {
+            return Err(
+                format!("неожиданный формат снимка экрана (глубина {})", reply.depth).into(),
+            );
+        }
+        // X отдаёт BGRX, картинке нужен RGBA без прозрачности.
+        for px in data.as_chunks_mut::<4>().0 {
+            px.swap(0, 2);
+            px[3] = 255;
+        }
+        let size = tiny_skia::IntSize::from_wh(u32::from(w), u32::from(h)).ok_or("пустой экран")?;
+        Pixmap::from_vec(data, size).ok_or_else(|| "не удалось собрать снимок экрана".into())
+    }
+
+    /// Дожидается, пока сервер выполнит все отправленные запросы.
+    pub fn sync(&self) -> Result<()> {
+        self.conn.get_input_focus()?.reply()?;
+        Ok(())
     }
 
     /// Перечитывает таблицу клавиш. Смену раскладок (setxkbmap, настройки Xfce)
