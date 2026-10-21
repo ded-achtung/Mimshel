@@ -7,6 +7,11 @@ license.workspace = true
 [dependencies]
 shell-core = { path = "../../crates/core" }
 shell-apps = { path = "../../crates/apps" }
+shell-text = { path = "../../crates/text" }
+shell-icons = { path = "../../crates/icons" }
+shell-x11 = { path = "../../crates/x11" }
+shell-launcher = { path = "../../crates/launcher" }
+tiny-skia = "0.12.0"
 
 [lints]
 workspace = true

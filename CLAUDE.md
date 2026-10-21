@@ -77,6 +77,17 @@ NoDisplay/Hidden, TryExec, OnlyShowIn), Icon Theme (поиск иконки по
 полупрозрачное), запуск выбранной программы, вызов по Super+Пробел.
 Сравнить скорость открытия с нынешним (~1 с).
 
+**Сделано:** `apps` (индекс, запуск, слежение), `core::search`, `text`, `icons`, `x11`,
+`launcher` (Spotlight: состояние + рисование в PNG), `apps/shell`:
+- `shell daemon` — служба: грузит всё заранее, ждёт команд в `$XDG_RUNTIME_DIR/shell.sock`;
+- `shell spotlight` — открыть/закрыть (через службу; без неё — сам, медленнее);
+- `shell snapshot ТЕКСТ файл.png` — нарисовать окно без экрана (проверка вида);
+- `shell apps`, `shell search ТЕКСТ`, `shell watch` — проверки без окна.
+Окно: override-redirect, 32-битный вид (прозрачность через композитор xfwm4), захват
+клавиатуры и мыши; раскладка us/ru — из битов группы XKB в событии.
+Горячая клавиша Super+Пробел пока у Xfce (`/commands/custom/<Super>space` →
+`macos-look spotlight`); переключать на `shell spotlight` — только с согласия пользователя.
+
 ## Аналоги для изучения (смотреть поведение и решения, код не копировать)
 
 Готового проекта «Linux + X11 + Rust + поведение macOS» нет — это наша ниша.
@@ -120,7 +131,10 @@ NoDisplay/Hidden, TryExec, OnlyShowIn), Icon Theme (поиск иконки по
   (**включая LANG и LC_\***, иначе программа станет английской).
 - Снимок экрана: `xfce4-screenshooter -f -s /tmp/x.png` (VBoxManage из ВМ недоступен —
   для снимков средствами VirtualBox попроси пользователя подключить сессию с хоста).
-- Нажатия: `xdotool key super+space`, `xdotool type --delay 100 текст`.
+- Нажатия: `xdotool key super+space`, `xdotool type --delay 100 text` — **только латиница**
+  (см. урок 9). Русский набор «как с клавиатуры»: `target/release/examples/xkb_group 1 57 28`
+  (включить раскладку ru и нажать клавиши по кодам; `… 0` — вернуть us). Журнал клавиш
+  службы: запустить с `SHELL_DEBUG_KEYS=1`.
 - Фоновый запуск, чтобы не держать терминал: `setsid -f cmd >/dev/null 2>&1 </dev/null`.
 
 ## Что уже есть: `macos-look` (~/macos-look, git)
@@ -156,6 +170,12 @@ Python-скрипт, который сейчас делает весь вид ma
    окна надёжно (WM_CLASS, _NET_WM_PID, GIO_LAUNCHED_DESKTOP_FILE, StartupWMClass).
 7. i3lock-color не умеет сложение в координатах (`h*0.12+121`) — только готовые числа.
 8. Перед заявлением «готово» — проверить глазами (снимок экрана) и `macos-look doctor`.
+9. **`xdotool type` с кириллицей ломает раскладку**: он меняет таблицу клавиш старым
+   способом, сервер перестраивает XKB и теряет вторую раскладку (ru). Восстановление:
+   `setxkbmap -rules evdev -model pc105 -layout us,ru -option '' -option grp:alt_shift_toggle`
+   (как в /etc/X11/xorg.conf.d/00-keyboard.conf). Для проверок — `examples/xkb_group`.
+10. `pkill -f 'шаблон'` находит и саму команду оболочки, где этот шаблон написан, — и
+   убивает её. Останавливать по номеру: `kill $(pgrep -f '^target/release/shell daemon')`.
 
 ## Правила работы
 - Git: маленькие осмысленные коммиты, сообщения по-русски.
