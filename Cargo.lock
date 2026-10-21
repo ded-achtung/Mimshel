@@ -6,8 +6,13 @@ version = 4
 name = "shell"
 version = "0.1.0"
 dependencies = [
+ "shell-apps",
  "shell-core",
 ]
+
+[[package]]
+name = "shell-apps"
+version = "0.1.0"
 
 [[package]]
 name = "shell-core"
