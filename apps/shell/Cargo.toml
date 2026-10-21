@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 shell-core = { path = "../../crates/core" }
+shell-apps = { path = "../../crates/apps" }
 
 [lints]
 workspace = true
