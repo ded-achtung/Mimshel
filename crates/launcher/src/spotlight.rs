@@ -2,9 +2,9 @@
 
 use shell_apps::App;
 use shell_core::input::{Key, KeyPress};
-use shell_core::search::{Query, best};
 
 use crate::draw::{BAR_H, LIST_PAD, MAX_ROWS, ROW_H, WIDTH};
+use crate::field::{Edit, TextField};
 
 /// Что сделать после события.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,9 +20,7 @@ pub enum Action {
 
 pub struct Spotlight {
     apps: Vec<App>,
-    pub(crate) query: String,
-    /// Позиция курсора в строке, в символах (не байтах).
-    pub(crate) cursor: usize,
+    pub(crate) field: TextField,
     /// Номера подходящих программ в `apps`, лучшие первыми.
     results: Vec<usize>,
     pub(crate) selected: usize,
@@ -34,8 +32,7 @@ impl Spotlight {
     pub fn new(apps: Vec<App>) -> Spotlight {
         Spotlight {
             apps,
-            query: String::new(),
-            cursor: 0,
+            field: TextField::default(),
             results: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -54,13 +51,12 @@ impl Spotlight {
 
     /// Пустое поле — так окно открывается каждый раз.
     pub fn reset(&mut self) {
-        self.query.clear();
-        self.cursor = 0;
+        self.field.clear();
         self.search();
     }
 
     pub fn query(&self) -> &str {
-        &self.query
+        self.field.text()
     }
 
     /// Подходящие программы, лучшие первыми.
@@ -74,7 +70,7 @@ impl Spotlight {
 
     /// Сколько строк списка видно (0 — списка нет).
     pub(crate) fn visible_rows(&self) -> usize {
-        if self.query.is_empty() {
+        if self.field.is_empty() {
             0
         } else {
             // Ничего не нашлось — одна строка с надписью об этом.
@@ -95,7 +91,7 @@ impl Spotlight {
 
     pub fn key(&mut self, k: KeyPress) -> Action {
         match k.key {
-            Key::Escape if !self.query.is_empty() => {
+            Key::Escape if !self.field.is_empty() => {
                 self.reset();
                 Action::Redraw
             }
@@ -113,45 +109,14 @@ impl Spotlight {
             Key::Tab => self.select(self.selected as isize + 1),
             Key::PageDown => self.select(self.selected as isize + MAX_ROWS as isize),
             Key::PageUp => self.select(self.selected as isize - MAX_ROWS as isize),
-            Key::Char('u') if k.ctrl => {
-                self.query.clear();
-                self.cursor = 0;
-                self.edited()
-            }
-            Key::Char('w') if k.ctrl => self.delete_word(),
-            Key::BackSpace if k.ctrl || k.alt => self.delete_word(),
-            Key::BackSpace if self.cursor > 0 => {
-                self.cursor -= 1;
-                self.remove_char(self.cursor);
-                self.edited()
-            }
-            Key::Delete if self.cursor < self.query.chars().count() => {
-                self.remove_char(self.cursor);
-                self.edited()
-            }
-            Key::Left if self.cursor > 0 => {
-                self.cursor -= 1;
-                Action::Redraw
-            }
-            Key::Right if self.cursor < self.query.chars().count() => {
-                self.cursor += 1;
-                Action::Redraw
-            }
-            Key::Home => {
-                self.cursor = 0;
-                Action::Redraw
-            }
-            Key::End => {
-                self.cursor = self.query.chars().count();
-                Action::Redraw
-            }
-            Key::Char(c) if !k.ctrl && !k.alt && !k.logo => {
-                let at = self.byte_index(self.cursor);
-                self.query.insert(at, c);
-                self.cursor += 1;
-                self.edited()
-            }
-            _ => Action::Nothing,
+            _ => match self.field.key(k) {
+                Edit::Changed => {
+                    self.search();
+                    Action::Redraw
+                }
+                Edit::Moved => Action::Redraw,
+                Edit::Ignored => Action::Nothing,
+            },
         }
     }
 
@@ -217,51 +182,14 @@ impl Spotlight {
         Action::Redraw
     }
 
-    fn edited(&mut self) -> Action {
-        self.search();
-        Action::Redraw
-    }
-
     fn search(&mut self) {
-        let query = Query::new(&self.query);
-        let indices: Vec<usize> = (0..self.apps.len()).collect();
-        let apps = &self.apps;
-        self.results = best(&query, &indices, |&i| crate::fields(&apps[i]))
-            .into_iter()
-            .copied()
-            .collect();
+        self.results = if self.field.is_empty() {
+            Vec::new()
+        } else {
+            crate::rank(&self.apps, self.field.text())
+        };
         self.selected = 0;
         self.scroll = 0;
-    }
-
-    fn delete_word(&mut self) -> Action {
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut start = self.cursor;
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        while start > 0 && !chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        if start == self.cursor {
-            return Action::Nothing;
-        }
-        let (a, b) = (self.byte_index(start), self.byte_index(self.cursor));
-        self.query.replace_range(a..b, "");
-        self.cursor = start;
-        self.edited()
-    }
-
-    fn remove_char(&mut self, at: usize) {
-        let i = self.byte_index(at);
-        self.query.remove(i);
-    }
-
-    fn byte_index(&self, chars: usize) -> usize {
-        self.query
-            .char_indices()
-            .nth(chars)
-            .map_or(self.query.len(), |(i, _)| i)
     }
 }
 
@@ -351,28 +279,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn editing() {
+    fn editing_searches_again() {
         let mut s = spotlight();
-        press(&mut s, "тест ред");
-        s.key(KeyPress::plain(Key::Home));
-        s.key(KeyPress::plain(Key::Delete));
-        press(&mut s, "Т");
-        assert_eq!(s.query(), "Тест ред");
-        s.key(KeyPress::plain(Key::End));
-        let ctrl_w = KeyPress {
-            ctrl: true,
-            ..KeyPress::plain(Key::Char('w'))
-        };
-        s.key(ctrl_w);
-        assert_eq!(s.query(), "Тест ");
+        press(&mut s, "терм");
+        assert_eq!(names(&s), ["Терминал"]);
         s.key(KeyPress::plain(Key::BackSpace));
-        assert_eq!(s.query(), "Тест");
-        let ctrl_u = KeyPress {
-            ctrl: true,
-            ..KeyPress::plain(Key::Char('u'))
-        };
-        s.key(ctrl_u);
-        assert_eq!(s.query(), "");
+        s.key(KeyPress::plain(Key::BackSpace));
+        assert_eq!(names(&s)[..2], ["Терминал", "Текстовый редактор"]);
     }
 
     #[test]

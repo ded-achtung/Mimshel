@@ -82,11 +82,17 @@ impl Spotlight {
 
         // Строка поиска: лупа, текст или подсказка, курсор.
         let bar = BAR_H as f32;
-        magnifier(&mut pm, BAR_PAD_X, (bar - SEARCH_ICON as f32) / 2.0);
+        magnifier(
+            &mut pm,
+            BAR_PAD_X,
+            (bar - SEARCH_ICON as f32) / 2.0,
+            SEARCH_ICON as f32,
+            MAGNIFIER,
+        );
         let text_x = BAR_PAD_X + SEARCH_ICON as f32 + GAP;
         let text_y = (bar - ENTRY.line_height()) / 2.0;
         let text_w = wf - text_x - BAR_PAD_X;
-        if self.query.is_empty() {
+        if self.field.is_empty() {
             fonts.draw(
                 &mut pm,
                 "Поиск Spotlight",
@@ -96,10 +102,17 @@ impl Spotlight {
                 Some(text_w),
             );
         } else {
-            fonts.draw(&mut pm, &self.query, &ENTRY, text_x, text_y, Some(text_w));
+            fonts.draw(
+                &mut pm,
+                self.field.text(),
+                &ENTRY,
+                text_x,
+                text_y,
+                Some(text_w),
+            );
         }
-        let before: String = self.query.chars().take(self.cursor).collect();
-        let cursor_x = (text_x + fonts.measure(&before, &ENTRY)).min(wf - BAR_PAD_X);
+        let cursor_x =
+            (text_x + fonts.measure(self.field.before_cursor(), &ENTRY)).min(wf - BAR_PAD_X);
         let cursor_h = ENTRY.size * 1.1;
         fill_rect(
             &mut pm,
@@ -161,16 +174,15 @@ impl Spotlight {
     }
 }
 
-fn paint(c: [u8; 4]) -> Paint<'static> {
+pub(crate) fn paint(c: [u8; 4]) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color(Color::from_rgba8(c[0], c[1], c[2], c[3]));
     p.anti_alias = true;
     p
 }
 
-/// Серая лупа, как в Spotlight на Mac, в квадрате [`SEARCH_ICON`] с углом в `x`, `y`.
-fn magnifier(pm: &mut Pixmap, x: f32, y: f32) {
-    let size = SEARCH_ICON as f32;
+/// Серая лупа, как в Spotlight на Mac, в квадрате `size` с углом в `x`, `y`.
+pub(crate) fn magnifier(pm: &mut Pixmap, x: f32, y: f32, size: f32, color: [u8; 4]) {
     let r = size * 0.3;
     let (cx, cy) = (x + size * 0.42, y + size * 0.42);
     let mut pb = PathBuilder::new();
@@ -181,27 +193,21 @@ fn magnifier(pm: &mut Pixmap, x: f32, y: f32) {
     pb.line_to(x + size * 0.9, y + size * 0.9);
     if let Some(path) = pb.finish() {
         let stroke = Stroke {
-            width: 2.2,
+            width: (size / 10.0).max(1.4),
             line_cap: tiny_skia::LineCap::Round,
             ..Stroke::default()
         };
-        pm.stroke_path(
-            &path,
-            &paint(MAGNIFIER),
-            &stroke,
-            Transform::identity(),
-            None,
-        );
+        pm.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
     }
 }
 
-fn fill_rect(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
+pub(crate) fn fill_rect(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
     if let Some(r) = Rect::from_xywh(x, y, w, h) {
         pm.fill_rect(r, &paint(c), Transform::identity(), None);
     }
 }
 
-fn draw_icon(pm: &mut Pixmap, icon: &Pixmap, x: i32, y: i32) {
+pub(crate) fn draw_icon(pm: &mut Pixmap, icon: &Pixmap, x: i32, y: i32) {
     pm.draw_pixmap(
         x,
         y,
@@ -213,7 +219,7 @@ fn draw_icon(pm: &mut Pixmap, icon: &Pixmap, x: i32, y: i32) {
 }
 
 /// Прямоугольник со скруглёнными углами.
-fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
+pub(crate) fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
     let r = r.min(w / 2.0).min(h / 2.0);
     // Доля радиуса для кривой Безье, приближающей четверть окружности.
     let k = r * 0.552_284_8;
