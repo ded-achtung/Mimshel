@@ -5,6 +5,7 @@
 pub mod entry;
 pub mod exec;
 mod index;
+mod launch;
 #[cfg(test)]
 mod test_util;
 mod watch;

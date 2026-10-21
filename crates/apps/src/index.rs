@@ -9,7 +9,7 @@ use crate::entry::{DesktopEntry, Locale};
 use crate::exec;
 
 /// Одна программа, готовая к показу и запуску.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct App {
     /// Идентификатор по стандарту: путь внутри `applications` с `-` вместо `/`,
     /// например `org.xfce.mousepad.desktop`.

@@ -60,7 +60,11 @@ pub struct Fields<'a> {
 
 /// Отбирает подходящие элементы и ставит лучшие вперёд. При равной оценке
 /// сохраняется исходный порядок (например, алфавитный).
-pub fn best<'a, T>(query: &Query, items: &'a [T], fields: impl Fn(&T) -> Fields) -> Vec<&'a T> {
+pub fn best<'a, T>(
+    query: &Query,
+    items: &'a [T],
+    fields: impl Fn(&'a T) -> Fields<'a>,
+) -> Vec<&'a T> {
     let mut found: Vec<(u32, &T)> = items
         .iter()
         .filter_map(|item| query.score(&fields(item)).map(|s| (s, item)))
