@@ -31,9 +31,17 @@ impl Display {
     }
 
     /// Получать события об изменениях окна программы (свёрнуто, заголовок,
-    /// иконка, перемещение).
+    /// иконка, перемещение). Набор событий окна у нашего соединения один на
+    /// всех (урок 11 в CLAUDE.md): подписка заменила бы события, которые уже
+    /// выбраны, — например, щелчки у нашего же окна строки меню. Поэтому
+    /// добавляем к уже выбранным.
     pub fn watch_window(&self, w: Window) -> Result<()> {
-        let mask = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
+        let mine = self
+            .conn
+            .get_window_attributes(w)?
+            .reply()
+            .map_or(EventMask::NO_EVENT, |a| a.your_event_mask);
+        let mask = mine | EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
         self.conn
             .change_window_attributes(w, &ChangeWindowAttributesAux::new().event_mask(mask))?;
         Ok(())

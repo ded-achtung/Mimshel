@@ -12,6 +12,8 @@ shell-icons = { path = "../../crates/icons" }
 shell-x11 = { path = "../../crates/x11" }
 shell-launcher = { path = "../../crates/launcher" }
 shell-dock = { path = "../../crates/dock" }
+shell-menubar = { path = "../../crates/menubar" }
+shell-widgets = { path = "../../crates/widgets" }
 tiny-skia = "0.12.0"
 
 [lints]

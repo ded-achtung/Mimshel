@@ -2,6 +2,7 @@
 
 mod dock_ui;
 mod guard;
+mod menubar_ui;
 mod ui;
 
 use std::collections::HashMap;

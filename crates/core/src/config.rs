@@ -39,6 +39,13 @@ pub struct Config {
     pub dock_hide: DockHide,
     /// Показывать свой док (`[dock] engine = shell`); иначе док — Plank.
     pub dock: bool,
+    /// Своя строка меню (`[menubar] engine = shell`); иначе — панель Xfce.
+    pub menubar: bool,
+    /// Высота строки меню, иконка меню яблока и формат часов (как у `date`) —
+    /// из `[panel]`, как у нынешней панели Xfce.
+    pub menubar_height: u32,
+    pub menu_icon: String,
+    pub clock_format: String,
 }
 
 impl Default for Config {
@@ -64,6 +71,10 @@ impl Default for Config {
             dock_zoom: Some(140),
             dock_hide: DockHide::Smart,
             dock: false,
+            menubar: false,
+            menubar_height: 28,
+            menu_icon: "start-here".into(),
+            clock_format: "%a %-d %b  %H:%M".into(),
         }
     }
 }
@@ -114,6 +125,16 @@ impl Config {
             c.dock_zoom = None;
         }
         c.dock = get("dock", "engine").is_some_and(|e| e == "shell");
+        c.menubar = get("menubar", "engine").is_some_and(|e| e == "shell");
+        if let Some(v) = num("panel", "height").filter(|&v| v >= 16) {
+            c.menubar_height = v;
+        }
+        if let Some(v) = get("panel", "menu_icon").filter(|v| !v.is_empty()) {
+            c.menu_icon = v.clone();
+        }
+        if let Some(v) = get("panel", "clock_format").filter(|v| !v.is_empty()) {
+            c.clock_format = v.clone();
+        }
         c.dock_hide = match num("dock", "hide_mode") {
             Some(0) => DockHide::Never,
             Some(2) => DockHide::Auto,

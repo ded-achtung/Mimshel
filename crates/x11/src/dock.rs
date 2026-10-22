@@ -151,6 +151,29 @@ impl DockWindow {
         Ok(())
     }
 
+    /// Резерв места вверху экрана (строка меню): развёрнутые окна
+    /// начинаются под ней. `x0..x1` — где по ширине.
+    pub fn set_strut_top(&self, d: &Display, height: u32, x0: u32, x1: u32) -> Result<()> {
+        let a = &d.atoms;
+        let partial = [0, 0, height, 0, 0, 0, 0, 0, x0, x1, 0, 0];
+        d.conn.change_property32(
+            PropMode::REPLACE,
+            self.window,
+            a._NET_WM_STRUT_PARTIAL,
+            AtomEnum::CARDINAL,
+            &partial,
+        )?;
+        d.conn.change_property32(
+            PropMode::REPLACE,
+            self.window,
+            a._NET_WM_STRUT,
+            AtomEnum::CARDINAL,
+            &[0, 0, height, 0],
+        )?;
+        d.conn.flush()?;
+        Ok(())
+    }
+
     /// Резерв места внизу экрана: развёрнутые окна заканчиваются над доком
     /// (`height` — сколько пикселей снизу, `x0..x1` — где по ширине). 0 — без резерва.
     pub fn set_strut(&self, d: &Display, height: u32, x0: u32, x1: u32) -> Result<()> {

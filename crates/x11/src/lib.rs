@@ -4,6 +4,7 @@
 //! окно-док ([`dock`]).
 
 mod dock;
+mod keyboard;
 mod shm;
 mod windows;
 
@@ -121,6 +122,10 @@ pub enum Event {
     Configure {
         window: u32,
     },
+    /// Включилась раскладка с этим номером (с 0).
+    KeyboardGroup(u8),
+    /// Поменялся набор раскладок (например, setxkbmap).
+    KeyboardLayouts,
     Other,
 }
 
@@ -343,12 +348,15 @@ impl Display {
                 }
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
+            XEvent::XkbStateNotify(e) => Event::KeyboardGroup(u8::from(e.group)),
+            XEvent::XkbNamesNotify(_) | XEvent::XkbNewKeyboardNotify(_) => Event::KeyboardLayouts,
             XEvent::MappingNotify(_) => {
-                // Сменилась раскладка клавиатуры — перечитываем.
+                // Сменилась раскладка клавиатуры (например, setxkbmap) —
+                // перечитываем таблицу клавиш и сообщаем о новом наборе.
                 if let Ok(k) = Keymap::load(&self.conn) {
                     *self.keymap.lock().unwrap_or_else(|p| p.into_inner()) = k;
                 }
-                Event::Other
+                Event::KeyboardLayouts
             }
             other => {
                 if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {

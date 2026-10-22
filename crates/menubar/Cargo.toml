@@ -1,0 +1,15 @@
+[package]
+name = "shell-menubar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shell-apps = { path = "../apps" }
+shell-icons = { path = "../icons" }
+shell-text = { path = "../text" }
+shell-widgets = { path = "../widgets" }
+tiny-skia = "0.12.0"
+
+[lints]
+workspace = true

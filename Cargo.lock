@@ -552,7 +552,9 @@ dependencies = [
  "shell-dock",
  "shell-icons",
  "shell-launcher",
+ "shell-menubar",
  "shell-text",
+ "shell-widgets",
  "shell-x11",
  "tiny-skia",
 ]
@@ -596,6 +598,17 @@ dependencies = [
  "shell-core",
  "shell-icons",
  "shell-text",
+ "tiny-skia",
+]
+
+[[package]]
+name = "shell-menubar"
+version = "0.1.0"
+dependencies = [
+ "shell-apps",
+ "shell-icons",
+ "shell-text",
+ "shell-widgets",
  "tiny-skia",
 ]
 

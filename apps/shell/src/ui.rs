@@ -22,6 +22,7 @@ use shell_text::Fonts;
 use shell_x11::{Display, Event, Key, KeyPress, Popup};
 
 use crate::dock_ui::DockUi;
+use crate::menubar_ui::MenubarUi;
 use tiny_skia::Pixmap;
 
 pub(crate) type Result<T> = shell_x11::Result<T>;
@@ -66,6 +67,8 @@ pub(crate) enum Msg {
     Tick,
     /// Корзина стала полной (`true`) или пустой.
     Trash(bool),
+    /// Часы в строке меню (новая минута).
+    Clock(String),
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -154,6 +157,18 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             icons.get(name, config.launchpad_icon);
         }
     }
+    // Своя строка меню — только у службы и только если выбрана вместо панели
+    // Xfce (`SHELL_MENUBAR=1` — включить для проверки, не трогая настройки).
+    let menubar = if daemon && (config.menubar || std::env::var_os("SHELL_MENUBAR").is_some()) {
+        Some(MenubarUi::new(
+            &display,
+            &config,
+            all_apps.clone(),
+            tx.clone(),
+        )?)
+    } else {
+        None
+    };
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {
         let dock = DockUi::new(&display, &config, all_apps, tx.clone())?;
@@ -176,10 +191,9 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         shown: None,
         terminal: config.terminal,
         dock,
+        menubar,
     };
-    if let Some(dock) = &mut ui.dock {
-        dock.flush(ui.display, &mut ui.fonts, &mut ui.icons)?;
-    }
+    ui.flush()?;
     match once {
         None => eprintln!("Служба готова за {:?}", start.elapsed()),
         Some(panel) => {
@@ -196,9 +210,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         while let Ok(msg) = rx.try_recv() {
             ui.message(msg)?;
         }
-        if let Some(dock) = &mut ui.dock {
-            dock.flush(ui.display, &mut ui.fonts, &mut ui.icons)?;
-        }
+        ui.flush()?;
         if !daemon && ui.shown.is_none() {
             break;
         }
@@ -221,12 +233,16 @@ struct Ui<'a> {
     shown: Option<Panel>,
     terminal: Vec<String>,
     dock: Option<DockUi>,
+    menubar: Option<MenubarUi>,
 }
 
 impl Ui<'_> {
     fn toggle(&mut self, panel: Panel) -> Result<()> {
         if let Some(dock) = &mut self.dock {
             dock.close_popups(self.display)?;
+        }
+        if let Some(menubar) = &mut self.menubar {
+            menubar.close_menu(self.display)?;
         }
         let was = self.shown;
         if was.is_some() {
@@ -342,10 +358,24 @@ impl Ui<'_> {
         Ok(())
     }
 
+    /// Перерисовать строку меню и док, если в них что-то изменилось.
+    fn flush(&mut self) -> Result<()> {
+        if let Some(menubar) = &mut self.menubar {
+            menubar.flush(self.display, &mut self.fonts, &mut self.icons)?;
+        }
+        if let Some(dock) = &mut self.dock {
+            dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
+        }
+        Ok(())
+    }
+
     fn set_apps(&mut self, all: Vec<App>) -> Result<()> {
         let apps = visible(&all);
         self.spotlight.set_apps(apps.clone());
         self.launchpad.set_apps(apps);
+        if let Some(menubar) = &mut self.menubar {
+            menubar.set_apps(self.display, all.clone());
+        }
         if let Some(dock) = &mut self.dock {
             dock.set_apps(self.display, all);
         }
@@ -377,14 +407,33 @@ impl Ui<'_> {
                 }
                 Ok(())
             }
+            Msg::Clock(text) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_clock(text);
+                }
+                Ok(())
+            }
         }
     }
 
     fn event(&mut self, ev: Event) -> Result<()> {
+        // Одно событие может быть нужно и строке меню, и доку (например,
+        // сменилось активное окно).
+        let mut handled = false;
+        if let Some(menubar) = &mut self.menubar
+            && menubar.wants(self.display, &ev)
+        {
+            menubar.event(self.display, &mut self.fonts, ev)?;
+            handled = true;
+        }
         if let Some(dock) = &mut self.dock
             && dock.wants(self.display, &ev)
         {
-            return dock.event(self.display, &mut self.fonts, ev);
+            dock.event(self.display, &mut self.fonts, ev)?;
+            handled = true;
+        }
+        if handled {
+            return Ok(());
         }
         let Some(panel) = self.shown else {
             return Ok(());
