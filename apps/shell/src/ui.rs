@@ -69,6 +69,10 @@ pub(crate) enum Msg {
     Trash(bool),
     /// Часы в строке меню (новая минута).
     Clock(String),
+    /// Звук, батарея, «Не беспокоить» изменились.
+    Sound(Option<shell_menubar::status::Sound>),
+    Battery(Option<shell_menubar::status::Battery>),
+    Dnd(bool),
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -242,7 +246,7 @@ impl Ui<'_> {
             dock.close_popups(self.display)?;
         }
         if let Some(menubar) = &mut self.menubar {
-            menubar.close_menu(self.display)?;
+            menubar.close_popup(self.display)?;
         }
         let was = self.shown;
         if was.is_some() {
@@ -410,6 +414,24 @@ impl Ui<'_> {
             Msg::Clock(text) => {
                 if let Some(menubar) = &mut self.menubar {
                     menubar.set_clock(text);
+                }
+                Ok(())
+            }
+            Msg::Sound(sound) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_sound(sound);
+                }
+                Ok(())
+            }
+            Msg::Battery(battery) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_battery(battery);
+                }
+                Ok(())
+            }
+            Msg::Dnd(on) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_dnd(on);
                 }
                 Ok(())
             }

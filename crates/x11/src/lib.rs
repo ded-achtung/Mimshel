@@ -194,6 +194,7 @@ impl Display {
         let window = self.conn.generate_id()?;
         let events = EventMask::KEY_PRESS
             | EventMask::BUTTON_PRESS
+            | EventMask::BUTTON_RELEASE
             | EventMask::POINTER_MOTION
             | EventMask::ENTER_WINDOW
             | EventMask::LEAVE_WINDOW
@@ -404,7 +405,7 @@ impl Popup {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        let mask = EventMask::BUTTON_PRESS | EventMask::POINTER_MOTION;
+        let mask = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
         d.conn
             .grab_pointer(
                 true,

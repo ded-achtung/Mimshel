@@ -1,22 +1,43 @@
 //! Строка меню на экране: окно-полоса во всю ширину у верхнего края (с
 //! резервом места), меню яблока, название активной программы, раскладка
-//! (щелчок — следующая) и часы.
+//! (щелчок — следующая), громкость (окошко с ползунком, колёсико), батарея,
+//! колокольчик («Не беспокоить») и часы.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use shell_apps::App;
 use shell_core::config::Config;
 use shell_core::keyboard::layout_label;
 use shell_icons::Icons;
-use shell_menubar::{AppleItem, Bar, Part, apple_menu};
+use shell_menubar::status::{Battery, Sound};
+use shell_menubar::{AppleItem, Bar, Part, SoundAction, SoundPanel, apple_menu};
 use shell_text::Fonts;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
 use shell_x11::{Display, DockWindow, Event, Popup, Property};
 
+use crate::status::{self, Audio};
 use crate::ui::{Msg, Result};
+
+/// Что делает пункт меню строки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    /// Пункт меню яблока (номер в `apple`).
+    Apple(usize),
+    /// Строка-сведения (заряд батареи) — ничего не делает.
+    Info,
+    PowerSettings,
+    ToggleDnd,
+    NotifySettings,
+}
+
+/// Шаг громкости колёсиком мыши над значком.
+const VOLUME_STEP: u32 = 5;
+/// Столько после своего изменения громкости не верим присланной: она
+/// отстаёт и вернула бы старое значение между двумя щелчками колёсика.
+const VOLUME_SETTLE: Duration = Duration::from_millis(700);
 
 pub struct MenubarUi {
     window: DockWindow,
@@ -26,11 +47,19 @@ pub struct MenubarUi {
     /// Раскладки по порядку групп (`["us", "ru"]`) и нынешняя.
     layouts: Vec<String>,
     group: u8,
-    /// Меню яблока (пункт — номер в `apple`), его окно; `menu_dirty` — перерисовать.
     apple: Vec<AppleItem>,
-    menu: Option<Menu<usize>>,
-    menu_popup: Popup,
-    menu_dirty: bool,
+    sound: Option<Sound>,
+    battery: Option<Battery>,
+    dnd: bool,
+    audio: Sender<Audio>,
+    /// Когда громкость меняли отсюда.
+    volume_changed: Option<Instant>,
+    /// Открытое меню (яблока, батареи, колокольчика) или окошко громкости —
+    /// в одном всплывающем окне; `popup_dirty` — перерисовать его.
+    menu: Option<Menu<Cmd>>,
+    sound_panel: Option<SoundPanel>,
+    popup: Popup,
+    popup_dirty: bool,
     dirty: bool,
 }
 
@@ -44,9 +73,15 @@ impl MenubarUi {
             layouts: Vec::new(),
             group: 0,
             apple: apple_menu(&apple_menu_file()),
+            sound: None,
+            battery: None,
+            dnd: false,
+            audio: status::audio_worker(),
+            volume_changed: None,
             menu: None,
-            menu_popup: d.create_popup("menubar-menu")?,
-            menu_dirty: false,
+            sound_panel: None,
+            popup: d.create_popup("menubar-menu")?,
+            popup_dirty: false,
             dirty: true,
         };
         d.watch_root()?;
@@ -54,7 +89,13 @@ impl MenubarUi {
         ui.read_layouts(d);
         ui.bar.app_name = ui.app_name(d);
         ui.bar.clock = clock(&config.clock_format).0;
-        watch_clock(config.clock_format.clone(), tx);
+        ui.set_sound(status::read_sound());
+        ui.set_battery(status::read_battery());
+        ui.set_dnd(status::read_dnd());
+        watch_clock(config.clock_format.clone(), tx.clone());
+        status::watch_sound(tx.clone());
+        status::watch_battery(tx.clone());
+        status::watch_dnd(tx);
         ui.place(d)?;
         ui.window.show(d)?;
         Ok(ui)
@@ -73,15 +114,58 @@ impl MenubarUi {
         }
     }
 
+    pub fn set_sound(&mut self, mut sound: Option<Sound>) {
+        if let (Some(new), Some(old)) = (&mut sound, &self.sound)
+            && self
+                .volume_changed
+                .is_some_and(|t| t.elapsed() < VOLUME_SETTLE)
+        {
+            new.volume = old.volume;
+            new.muted = old.muted;
+        }
+        self.bar.volume = sound.as_ref().map(|s| s.icon().to_string());
+        // Пока тащат ползунок, он главнее: ответ звуковой системы отстаёт.
+        if let (Some(panel), Some(s)) = (&mut self.sound_panel, &sound)
+            && !panel.dragging()
+        {
+            panel.sound = s.clone();
+            self.popup_dirty = true;
+        }
+        self.sound = sound;
+        self.dirty = true;
+    }
+
+    pub fn set_battery(&mut self, battery: Option<Battery>) {
+        self.bar.battery = battery
+            .as_ref()
+            .map(|b| (b.icon.clone(), format!("{}%", b.percent)));
+        self.battery = battery;
+        self.dirty = true;
+    }
+
+    pub fn set_dnd(&mut self, on: bool) {
+        self.dnd = on;
+        let icon = if on {
+            "notification-disabled-symbolic"
+        } else {
+            "notification-symbolic"
+        };
+        self.bar.bell = Some(icon.into());
+        self.dirty = true;
+    }
+
+    fn popup_open(&self) -> bool {
+        self.menu.is_some() || self.sound_panel.is_some()
+    }
+
     /// Это событие для строки меню?
     pub fn wants(&self, d: &Display, ev: &Event) -> bool {
         match *ev {
             Event::Button { window, .. }
+            | Event::Release { window, .. }
             | Event::Motion { window, .. }
-            | Event::Expose { window } => {
-                window == self.window.id() || window == self.menu_popup.id()
-            }
-            Event::Key(_) => self.menu.is_some(),
+            | Event::Expose { window } => window == self.window.id() || window == self.popup.id(),
+            Event::Key(_) => self.popup_open(),
             Event::Property { window, what } => {
                 window == d.root() && what == Property::ActiveWindow
             }
@@ -92,53 +176,88 @@ impl MenubarUi {
     }
 
     pub fn event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
-        let popup = self.menu_popup.id();
+        let popup = self.popup.id();
         match ev {
-            // Меню открыто: его мышь и клавиатура.
+            // Открытое меню или окошко громкости: их мышь и клавиатура.
             Event::Motion { window, x, y } if window == popup => {
+                let (x, y) = (f32::from(x), f32::from(y));
                 if let Some(menu) = &mut self.menu
-                    && menu.motion(f32::from(x), f32::from(y))
+                    && menu.motion(x, y)
                 {
-                    self.menu_dirty = true;
+                    self.popup_dirty = true;
+                }
+                if let Some(panel) = &mut self.sound_panel {
+                    let action = panel.motion(x, y);
+                    self.sound_action(d, action)?;
                 }
             }
             Event::Button { window, x, y, .. } if window == popup => {
-                let result = match &self.menu {
-                    Some(menu) => menu.click(f32::from(x), f32::from(y)),
-                    None => MenuResult::Nothing,
-                };
-                self.menu_result(d, result)?;
+                let (x, y) = (f32::from(x), f32::from(y));
+                if let Some(menu) = &self.menu {
+                    let result = menu.click(x, y);
+                    self.menu_result(d, result)?;
+                } else if let Some(panel) = &mut self.sound_panel {
+                    let action = panel.press(x, y);
+                    self.sound_action(d, action)?;
+                }
+            }
+            Event::Release { window, .. } if window == popup => {
+                if let Some(panel) = &mut self.sound_panel {
+                    panel.release();
+                }
             }
             Event::Key(k) => {
-                let result = match &mut self.menu {
-                    Some(menu) => menu.key(k.key),
-                    None => MenuResult::Nothing,
-                };
-                self.menu_result(d, result)?;
+                if let Some(menu) = &mut self.menu {
+                    let result = menu.key(k.key);
+                    self.menu_result(d, result)?;
+                } else if let Some(panel) = &mut self.sound_panel {
+                    let action = panel.key(k.key);
+                    self.sound_action(d, action)?;
+                }
             }
-            Event::Expose { window } if window == popup => self.menu_dirty = true,
-            Event::Button { x, button: 1, .. } => {
+            Event::Expose { window } if window == popup => self.popup_dirty = true,
+            Event::Button { x, button, .. } => {
                 let part = self.bar.part_at(fonts, f32::from(x));
                 if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
                     eprintln!(
-                        "строка меню: щелчок по {part:?}, раскладки {:?}, нынешняя {}",
+                        "строка меню: кнопка {button} по {part:?}, раскладки {:?}, нынешняя {}",
                         self.layouts, self.group
                     );
                 }
-                // Щелчок при открытом меню (по яблоку снова или мимо) — закрыть.
-                if self.menu.is_some() {
-                    self.close_menu(d)?;
+                // Колёсико и средняя кнопка над динамиком — громкость и «без звука».
+                if let Some((Part::Volume, _)) = part
+                    && let Some(sound) = &self.sound
+                {
+                    let v = sound.volume;
+                    match button {
+                        4 => self.change_volume(d, (v + VOLUME_STEP).min(100))?,
+                        5 => self.change_volume(d, v.saturating_sub(VOLUME_STEP))?,
+                        2 => {
+                            let _ = self.audio.send(Audio::ToggleMute);
+                        }
+                        _ => {}
+                    }
+                }
+                if button != 1 {
+                    if self.popup_open() && !matches!(button, 4 | 5) {
+                        self.close_popup(d)?;
+                    }
                     return Ok(());
                 }
-                match part {
-                    Some((Part::Apple, px)) => self.open_apple(d, fonts, px)?,
-                    Some((Part::Layout, _)) => self.next_layout(d)?,
-                    _ => {}
+                // Щелчок при открытом меню: по той же части — закрыть, по
+                // другой — открыть её меню, как на Mac.
+                let was = self.bar.open;
+                if self.popup_open() {
+                    self.close_popup(d)?;
                 }
-            }
-            Event::Button { .. } => {
-                if self.menu.is_some() {
-                    self.close_menu(d)?;
+                match part {
+                    Some((p, _)) if Some(p) == was => {}
+                    Some((Part::Apple, px)) => self.open_apple(d, fonts, px)?,
+                    Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,
+                    Some((Part::Bell, px)) => self.open_bell(d, fonts, px)?,
+                    Some((Part::Volume, px)) => self.open_sound(d, px)?,
+                    Some((Part::Layout, _)) if was.is_none() => self.next_layout(d)?,
+                    _ => {}
                 }
             }
             Event::Expose { .. } => self.dirty = true,
@@ -160,54 +279,157 @@ impl MenubarUi {
         Ok(())
     }
 
-    fn menu_result(&mut self, d: &Display, result: MenuResult<usize>) -> Result<()> {
+    fn change_volume(&mut self, _d: &Display, v: u32) -> Result<()> {
+        let _ = self.audio.send(Audio::Volume(v));
+        self.volume_changed = Some(Instant::now());
+        if let Some(sound) = &mut self.sound {
+            sound.volume = v;
+            sound.muted = false;
+            self.bar.volume = Some(sound.icon().to_string());
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
+    fn sound_action(&mut self, d: &Display, action: SoundAction) -> Result<()> {
+        match action {
+            SoundAction::Nothing => {}
+            SoundAction::Redraw => self.popup_dirty = true,
+            SoundAction::Close => self.close_popup(d)?,
+            SoundAction::SetVolume(v) => {
+                self.change_volume(d, v)?;
+                self.popup_dirty = true;
+            }
+            SoundAction::SetSink(i) => {
+                if let Some(panel) = &mut self.sound_panel
+                    && let Some(sink) = panel.sound.sinks.get(i)
+                {
+                    let _ = self.audio.send(Audio::Sink(sink.name.clone()));
+                    panel.sound.default = sink.name.clone();
+                    self.popup_dirty = true;
+                }
+            }
+            SoundAction::Settings => {
+                self.close_popup(d)?;
+                run(&["pavucontrol".to_string()]);
+            }
+        }
+        Ok(())
+    }
+
+    fn menu_result(&mut self, d: &Display, result: MenuResult<Cmd>) -> Result<()> {
         match result {
             MenuResult::Nothing => {}
-            MenuResult::Redraw => self.menu_dirty = true,
-            MenuResult::Close => self.close_menu(d)?,
-            MenuResult::Run(i) => {
-                self.close_menu(d)?;
-                if let Some(item) = self.apple.get(i) {
-                    run(&item.command);
+            MenuResult::Redraw => self.popup_dirty = true,
+            MenuResult::Close => self.close_popup(d)?,
+            MenuResult::Run(cmd) => {
+                self.close_popup(d)?;
+                match cmd {
+                    Cmd::Apple(i) => {
+                        if let Some(item) = self.apple.get(i) {
+                            run(&item.command);
+                        }
+                    }
+                    Cmd::Info => {}
+                    Cmd::PowerSettings => run(&["xfce4-power-manager-settings".to_string()]),
+                    Cmd::ToggleDnd => {
+                        let on = !self.dnd;
+                        self.set_dnd(on);
+                        std::thread::spawn(move || status::set_dnd(on));
+                    }
+                    Cmd::NotifySettings => run(&["xfce4-notifyd-config".to_string()]),
                 }
             }
         }
         Ok(())
     }
 
-    fn open_apple(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
-        // Пункты перечитываем: macos-look мог их поменять.
-        self.apple = apple_menu(&apple_menu_file());
-        if self.apple.is_empty() {
-            return Ok(());
-        }
-        let entries = self
-            .apple
-            .iter()
-            .enumerate()
-            .map(|(i, item)| MenuEntry {
-                label: item.label.clone(),
-                command: i,
-                checked: false,
-                separator_before: item.separator_before,
-            })
-            .collect();
-        let mut menu = Menu::new("apple".into(), entries);
-        let (w, h) = menu.measure(fonts);
-        // Под строкой меню, вровень с левым краем подсветки яблока.
-        self.menu_popup
+    /// Показать всплывающее окно под частью строки (левый край — `x`).
+    fn show_popup(&mut self, d: &Display, part: Part, x: f32, (w, h): (u32, u32)) -> Result<()> {
+        let x = x.min(self.bar.width as f32 - w as f32 - 4.0).max(4.0);
+        self.popup
             .show(d, x as i16, self.bar.height as i16, w as u16, h as u16)?;
-        self.menu = Some(menu);
-        self.menu_dirty = true;
-        self.bar.open = Some(Part::Apple);
+        self.popup_dirty = true;
+        self.bar.open = Some(part);
         self.dirty = true;
         Ok(())
     }
 
-    /// Закрыть меню (если открыто): например, перед открытием Spotlight.
-    pub fn close_menu(&mut self, d: &Display) -> Result<()> {
-        if self.menu.take().is_some() {
-            self.menu_popup.hide(d)?;
+    fn open_menu(
+        &mut self,
+        d: &Display,
+        fonts: &mut Fonts,
+        part: Part,
+        x: f32,
+        entries: Vec<MenuEntry<Cmd>>,
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut menu = Menu::new(format!("{part:?}"), entries);
+        let size = menu.measure(fonts);
+        self.menu = Some(menu);
+        self.show_popup(d, part, x, size)
+    }
+
+    fn open_apple(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
+        // Пункты перечитываем: macos-look мог их поменять.
+        self.apple = apple_menu(&apple_menu_file());
+        let entries = self
+            .apple
+            .iter()
+            .enumerate()
+            .map(|(i, item)| entry(&item.label, Cmd::Apple(i), false, item.separator_before))
+            .collect();
+        self.open_menu(d, fonts, Part::Apple, x, entries)
+    }
+
+    fn open_battery(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
+        let Some(b) = &self.battery else {
+            return Ok(());
+        };
+        let entries = vec![
+            entry(
+                &format!("Аккумулятор: {} %", b.percent),
+                Cmd::Info,
+                false,
+                false,
+            ),
+            entry(&b.state_text(), Cmd::Info, false, false),
+            entry(
+                "Настройки энергосбережения…",
+                Cmd::PowerSettings,
+                false,
+                true,
+            ),
+        ];
+        self.open_menu(d, fonts, Part::Battery, x, entries)
+    }
+
+    fn open_bell(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
+        let entries = vec![
+            entry("Не беспокоить", Cmd::ToggleDnd, self.dnd, false),
+            entry("Настройки уведомлений…", Cmd::NotifySettings, false, true),
+        ];
+        self.open_menu(d, fonts, Part::Bell, x, entries)
+    }
+
+    fn open_sound(&mut self, d: &Display, x: f32) -> Result<()> {
+        // Свежее состояние: устройства могли появиться или пропасть.
+        let Some(sound) = status::read_sound().or_else(|| self.sound.clone()) else {
+            return Ok(());
+        };
+        let panel = SoundPanel::new(sound);
+        let size = panel.size();
+        self.sound_panel = Some(panel);
+        self.show_popup(d, Part::Volume, x, size)
+    }
+
+    /// Закрыть меню или окошко громкости (если открыто): например, перед
+    /// открытием Spotlight.
+    pub fn close_popup(&mut self, d: &Display) -> Result<()> {
+        if self.menu.take().is_some() | self.sound_panel.take().is_some() {
+            self.popup.hide(d)?;
             self.bar.open = None;
             self.dirty = true;
         }
@@ -282,13 +504,24 @@ impl MenubarUi {
             self.dirty = false;
             self.window.present(d, &self.bar.render(fonts, icons))?;
         }
-        if self.menu_dirty {
-            self.menu_dirty = false;
+        if self.popup_dirty {
+            self.popup_dirty = false;
             if let Some(menu) = &self.menu {
-                self.menu_popup.present(d, &menu.render(fonts))?;
+                self.popup.present(d, &menu.render(fonts))?;
+            } else if let Some(panel) = &self.sound_panel {
+                self.popup.present(d, &panel.render(fonts))?;
             }
         }
         Ok(())
+    }
+}
+
+fn entry(label: &str, command: Cmd, checked: bool, separator_before: bool) -> MenuEntry<Cmd> {
+    MenuEntry {
+        label: label.to_string(),
+        command,
+        checked,
+        separator_before,
     }
 }
 

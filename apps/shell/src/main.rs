@@ -3,6 +3,7 @@
 mod dock_ui;
 mod guard;
 mod menubar_ui;
+mod status;
 mod ui;
 
 use std::collections::HashMap;

@@ -1,11 +1,14 @@
 //! Строка меню, как в macOS: сверху во всю ширину экрана, полупрозрачная.
 //! Слева — яблоко (меню яблока) и жирное название активной программы,
-//! справа — раскладка клавиатуры и часы. Здесь нет X11: состояние, где что
+//! справа — раскладка, громкость, батарея, колокольчик уведомлений и часы. Здесь нет X11: состояние, где что
 //! стоит, и рисование в картинку.
 
 mod apple;
+mod sound;
+pub mod status;
 
 pub use apple::{AppleItem, apple_menu, parse_menu};
+pub use sound::{Row, SoundAction, SoundPanel};
 
 use shell_icons::Icons;
 use shell_text::{Fonts, Style};
@@ -18,6 +21,9 @@ pub enum Part {
     Apple,
     App,
     Layout,
+    Volume,
+    Battery,
+    Bell,
     Clock,
 }
 
@@ -32,6 +38,12 @@ pub struct Bar {
     pub app_name: String,
     /// Подпись раскладки («en», «ru»); `None` — раскладка одна, не показываем.
     pub layout: Option<String>,
+    /// Иконка громкости; `None` — звука нет.
+    pub volume: Option<String>,
+    /// Иконка батареи и проценты; `None` — батареи нет.
+    pub battery: Option<(String, String)>,
+    /// Иконка колокольчика (обычный или «Не беспокоить»).
+    pub bell: Option<String>,
     pub clock: String,
     /// Подсвеченная часть — та, чьё меню открыто.
     pub open: Option<Part>,
@@ -42,6 +54,8 @@ const EDGE: f32 = 6.0;
 /// Поля вокруг надписи или иконки: столько же занимает подсветка.
 const ITEM_PAD: f32 = 9.0;
 const ICON: u32 = 16;
+/// Между иконкой батареи и процентами.
+const BATTERY_GAP: f32 = 4.0;
 
 /// Полупрозрачная полоса: чуть светлее обоев, как строка меню Sonoma.
 const BG: [u8; 4] = [0xff, 0xff, 0xff, 0x14];
@@ -66,6 +80,9 @@ impl Bar {
             icon: icon.to_string(),
             app_name: String::new(),
             layout: None,
+            volume: None,
+            battery: None,
+            bell: None,
             clock: String::new(),
             open: None,
         }
@@ -85,6 +102,20 @@ impl Bar {
             let w = fonts.measure(&self.clock, &TEXT) + 2.0 * ITEM_PAD;
             right -= w;
             out.push((Part::Clock, right, w));
+        }
+        let icon_w = ICON as f32 + 2.0 * ITEM_PAD;
+        if self.bell.is_some() {
+            right -= icon_w;
+            out.push((Part::Bell, right, icon_w));
+        }
+        if let Some((_, text)) = &self.battery {
+            let w = icon_w + BATTERY_GAP + fonts.measure(text, &TEXT);
+            right -= w;
+            out.push((Part::Battery, right, w));
+        }
+        if self.volume.is_some() {
+            right -= icon_w;
+            out.push((Part::Volume, right, icon_w));
         }
         if let Some(layout) = &self.layout {
             let w = fonts.measure(layout, &BOLD) + 2.0 * ITEM_PAD;
@@ -123,17 +154,35 @@ impl Bar {
                 );
             }
             let tx = x + ITEM_PAD;
+            let mut icon = |pm: &mut Pixmap, name: &str| {
+                if let Some(icon) = icons.get(name, ICON) {
+                    let k = ICON as f32 / icon.width() as f32;
+                    let iy = ((hf - ICON as f32) / 2.0).round();
+                    let t = Transform::from_scale(k, k).post_translate(tx, iy);
+                    let quality = PixmapPaint {
+                        quality: FilterQuality::Bicubic,
+                        ..PixmapPaint::default()
+                    };
+                    pm.draw_pixmap(0, 0, icon.as_ref(), &quality, t, None);
+                }
+            };
             match part {
-                Part::Apple => {
-                    if let Some(icon) = icons.get(&self.icon, ICON) {
-                        let k = ICON as f32 / icon.width() as f32;
-                        let iy = ((hf - ICON as f32) / 2.0).round();
-                        let t = Transform::from_scale(k, k).post_translate(tx, iy);
-                        let quality = PixmapPaint {
-                            quality: FilterQuality::Bicubic,
-                            ..PixmapPaint::default()
-                        };
-                        pm.draw_pixmap(0, 0, icon.as_ref(), &quality, t, None);
+                Part::Apple => icon(&mut pm, &self.icon),
+                Part::Volume => {
+                    if let Some(name) = &self.volume {
+                        icon(&mut pm, name);
+                    }
+                }
+                Part::Bell => {
+                    if let Some(name) = &self.bell {
+                        icon(&mut pm, name);
+                    }
+                }
+                Part::Battery => {
+                    if let Some((name, text)) = &self.battery {
+                        icon(&mut pm, name);
+                        let px = tx + ICON as f32 + BATTERY_GAP;
+                        fonts.draw(&mut pm, text, &TEXT, px, text_y, None);
                     }
                 }
                 Part::App => {
@@ -162,6 +211,29 @@ mod tests {
         b.layout = Some("en".into());
         b.clock = "Чт 22 окт  11:49".into();
         b
+    }
+
+    #[test]
+    fn status_icons_between_layout_and_clock() {
+        let mut fonts = Fonts::new("Inter");
+        let mut b = bar();
+        b.volume = Some("audio-volume-medium-symbolic".into());
+        b.battery = Some(("battery-full-charged-symbolic".into(), "100%".into()));
+        b.bell = Some("notification-symbolic".into());
+        let parts = b.parts(&mut fonts);
+        let mut right: Vec<(Part, f32)> = parts.iter().skip(2).map(|p| (p.0, p.1)).collect();
+        right.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let order: Vec<Part> = right.iter().map(|p| p.0).collect();
+        assert_eq!(
+            order,
+            [
+                Part::Layout,
+                Part::Volume,
+                Part::Battery,
+                Part::Bell,
+                Part::Clock
+            ]
+        );
     }
 
     #[test]

@@ -606,6 +606,7 @@ name = "shell-menubar"
 version = "0.1.0"
 dependencies = [
  "shell-apps",
+ "shell-core",
  "shell-icons",
  "shell-text",
  "shell-widgets",
