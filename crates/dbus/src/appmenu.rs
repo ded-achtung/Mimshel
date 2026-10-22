@@ -5,8 +5,9 @@
 //!   окна X11 (`_GTK_UNIQUE_BUS_NAME`, `_GTK_MENUBAR_OBJECT_PATH`, пути
 //!   действий программы, окна и модуля appmenu-gtk-module). Так — Mousepad,
 //!   Thunar и прочие GTK-программы (модуль включён в `GTK_MODULES`).
-//! - **DBusMenu через регистратор** (`com.canonical.AppMenu.Registrar`,
-//!   держит appmenu-registrar из vala-panel): Qt и другие.
+//! - **DBusMenu через регистратор** (`com.canonical.AppMenu.Registrar`):
+//!   Qt и другие. Регистратор — наш же ([`crate::registrar`]); пока он есть,
+//!   GTK-программы прячут строки меню в окнах.
 //!
 //! Работает в своём потоке; наружу — [`AppMenuUpdate`], внутрь — [`AppMenuCmd`].
 
@@ -17,6 +18,7 @@ use zbus::blocking::Connection;
 use zbus::zvariant::{OwnedValue, Signature, Value};
 
 use crate::menu::{Layout, MenuItem, parse_layout, strip_mnemonic};
+use crate::registrar::{self, Registrar, Windows};
 
 const GTK_MENUS: &str = "org.gtk.Menus";
 const GTK_ACTIONS: &str = "org.gtk.Actions";
@@ -85,6 +87,20 @@ enum Act {
 
 pub fn start(notify: impl Fn(AppMenuUpdate) + Send + 'static) -> zbus::Result<AppMenu> {
     let conn = Connection::session()?;
+    // Свой регистратор меню. Имя занято (регистратор vala-panel) — встаём в
+    // очередь: он выключается, когда им не пользуются, и имя перейдёт к нам.
+    let windows: Windows = Default::default();
+    conn.object_server().at(
+        registrar::PATH,
+        Registrar {
+            windows: windows.clone(),
+        },
+    )?;
+    use zbus::fdo::RequestNameFlags;
+    match conn.request_name_with_flags(registrar::NAME, RequestNameFlags::ReplaceExisting.into()) {
+        Ok(reply) => eprintln!("Регистратор меню: {reply:?}"),
+        Err(e) => eprintln!("Регистратор меню не занят: {e}"),
+    }
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         // Что делают пункты последнего прочитанного меню.
@@ -96,12 +112,12 @@ pub fn start(notify: impl Fn(AppMenuUpdate) + Send + 'static) -> zbus::Result<Ap
                 match (&cmd, &next) {
                     (AppMenuCmd::Load { .. }, AppMenuCmd::Load { .. }) => cmd = next,
                     _ => {
-                        handle(&conn, cmd, &mut acts, &mut dbusmenu, &notify);
+                        handle(&conn, &windows, cmd, &mut acts, &mut dbusmenu, &notify);
                         cmd = next;
                     }
                 }
             }
-            handle(&conn, cmd, &mut acts, &mut dbusmenu, &notify);
+            handle(&conn, &windows, cmd, &mut acts, &mut dbusmenu, &notify);
         }
     });
     Ok(AppMenu(tx))
@@ -109,6 +125,7 @@ pub fn start(notify: impl Fn(AppMenuUpdate) + Send + 'static) -> zbus::Result<Ap
 
 fn handle(
     conn: &Connection,
+    windows: &Windows,
     cmd: AppMenuCmd,
     acts: &mut HashMap<i32, Act>,
     dbusmenu: &mut Option<(String, String)>,
@@ -124,7 +141,7 @@ fn handle(
             *dbusmenu = None;
             let menus = match source {
                 Source::Gtk(paths) => load_gtk(conn, &paths, acts).unwrap_or_default(),
-                Source::Registrar => match load_registrar(conn, window, open) {
+                Source::Registrar => match load_registrar(conn, windows, window, open) {
                     Some((bus, path, menus)) => {
                         *dbusmenu = Some((bus, path));
                         menus
@@ -189,11 +206,89 @@ type GtkItems = HashMap<(u32, u32), Vec<GtkItem>>;
 pub type Menus = Vec<(String, Vec<MenuItem>)>;
 
 fn load_gtk(conn: &Connection, p: &GtkPaths, acts: &mut HashMap<i32, Act>) -> Option<Menus> {
-    // Подписываемся на группы меню, пока находятся новые ссылки
-    // (`:section`, `:submenu` указывают на другие группы).
+    let (mut items, mut started) = fetch_gtk(conn, p, Vec::new())?;
+    let mut states = describe_gtk(conn, p);
+    // appmenu-gtk-module заполняет подменю, только когда их «открывают»:
+    // у подменю есть действие-флажок (`submenu-action`). Ставим флажки и
+    // читаем меню заново.
+    let closed: Vec<String> = items
+        .values()
+        .flatten()
+        .filter_map(|item| text(item, "submenu-action"))
+        .filter(|a| {
+            states.get(a).is_some_and(|(_, st)| {
+                st.as_ref()
+                    .and_then(|v| bool::try_from(v.try_clone().ok()?).ok())
+                    == Some(false)
+            })
+        })
+        .collect();
+    if !closed.is_empty() {
+        for action in &closed {
+            set_state(conn, p, action, true);
+        }
+        if let Some((again, groups)) = fetch_gtk(conn, p, started.clone()) {
+            items = again;
+            started = groups;
+        }
+        states = describe_gtk(conn, p);
+    }
+    let _ = conn.call_method(
+        Some(p.bus.as_str()),
+        p.menubar.as_str(),
+        Some(GTK_MENUS),
+        "End",
+        &(started,),
+    );
+
+    let mut next_id = 1;
+    let mut build = Builder {
+        items: &items,
+        states: &states,
+        paths: p,
+        acts,
+        next_id: &mut next_id,
+    };
+    // Верхние пункты бывают завёрнуты в разделы (так у appmenu-gtk-module:
+    // (0,0) → (0,1) → (0,2) → «Файл», «Правка»…).
+    let mut top = Vec::new();
+    top_items(&items, (0, 0), 0, &mut top);
+    let menus = top
+        .into_iter()
+        .filter_map(|item| {
+            let label = strip_mnemonic(&text(item, "label")?);
+            let (g, m) = link(item, ":submenu")?;
+            Some((label, build.menu(g, m, 0)))
+        })
+        .collect();
+    Some(menus)
+}
+
+/// Пункты меню `at`, с разделами, раскрытыми на месте.
+fn top_items<'a>(items: &'a GtkItems, at: (u32, u32), depth: u32, out: &mut Vec<&'a GtkItem>) {
+    let Some(list) = items.get(&at) else {
+        return;
+    };
+    for item in list {
+        match link(item, ":section") {
+            Some(section) if depth < 8 => top_items(items, section, depth + 1, out),
+            Some(_) => {}
+            None => out.push(item),
+        }
+    }
+}
+
+/// Подписаться на группы меню, пока находятся новые ссылки (`:section`,
+/// `:submenu` указывают на другие группы). `already` — уже подписанные
+/// (их тоже перечитываем). Ответ: пункты и все подписанные группы.
+fn fetch_gtk(conn: &Connection, p: &GtkPaths, already: Vec<u32>) -> Option<(GtkItems, Vec<u32>)> {
     let mut items: GtkItems = HashMap::new();
     let mut started: Vec<u32> = Vec::new();
-    let mut want = vec![0u32];
+    let mut want = if already.is_empty() {
+        vec![0u32]
+    } else {
+        already
+    };
     for _ in 0..16 {
         want.retain(|g| !started.contains(g));
         if want.is_empty() {
@@ -225,16 +320,12 @@ fn load_gtk(conn: &Connection, p: &GtkPaths, acts: &mut HashMap<i32, Act>) -> Op
             items.insert((g, m), list);
         }
     }
-    let _ = conn.call_method(
-        Some(p.bus.as_str()),
-        p.menubar.as_str(),
-        Some(GTK_MENUS),
-        "End",
-        &(started,),
-    );
+    Some((items, started))
+}
 
-    // Действия: доступно ли, галочка.
-    let mut states: HashMap<String, (bool, Option<OwnedValue>)> = HashMap::new();
+/// Действия программы, окна и модуля: доступно ли и состояние.
+fn describe_gtk(conn: &Connection, p: &GtkPaths) -> HashMap<String, (bool, Option<OwnedValue>)> {
+    let mut states = HashMap::new();
     for (prefix, path) in [("app", &p.app), ("win", &p.window), ("unity", &p.unity)] {
         let Some(path) = path else { continue };
         let Ok(reply) = conn.call_method(
@@ -259,25 +350,29 @@ fn load_gtk(conn: &Connection, p: &GtkPaths, acts: &mut HashMap<i32, Act>) -> Op
             );
         }
     }
+    states
+}
 
-    let mut next_id = 1;
-    let mut build = Builder {
-        items: &items,
-        states: &states,
-        paths: p,
-        acts,
-        next_id: &mut next_id,
+/// Поставить состояние действия-флажка (`unity.имя`).
+fn set_state(conn: &Connection, p: &GtkPaths, action: &str, value: bool) {
+    let Some((prefix, name)) = action.split_once('.') else {
+        return;
     };
-    let top = items.get(&(0, 0))?;
-    let menus = top
-        .iter()
-        .filter_map(|item| {
-            let label = strip_mnemonic(&text(item, "label")?);
-            let (g, m) = link(item, ":submenu")?;
-            Some((label, build.menu(g, m, 0)))
-        })
-        .collect();
-    Some(menus)
+    let path = match prefix {
+        "app" => &p.app,
+        "win" => &p.window,
+        "unity" => &p.unity,
+        _ => return,
+    };
+    let Some(path) = path else { return };
+    let platform: HashMap<&str, Value> = HashMap::new();
+    let _ = conn.call_method(
+        Some(p.bus.as_str()),
+        path.as_str(),
+        Some(GTK_ACTIONS),
+        "SetState",
+        &(name, Value::from(value), platform),
+    );
 }
 
 struct Builder<'a> {
@@ -409,23 +504,36 @@ fn link(item: &HashMap<String, OwnedValue>, key: &str) -> Option<(u32, u32)> {
 /// Меню через регистратор: где оно (имя на шине и путь) и верхние пункты.
 fn load_registrar(
     conn: &Connection,
+    windows: &Windows,
     window: u32,
     open: Option<usize>,
 ) -> Option<(String, String, Menus)> {
-    let reply = conn
-        .call_method(
-            Some(REGISTRAR),
-            "/com/canonical/AppMenu/Registrar",
-            Some(REGISTRAR),
-            "GetMenuForWindow",
-            &(window,),
-        )
-        .ok()?;
-    let (bus, path): (String, zbus::zvariant::OwnedObjectPath) = reply.body().deserialize().ok()?;
+    // Сначала — у себя; нет — у регистратора на шине (если он не наш).
+    let local = windows
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&window)
+        .cloned();
+    let (bus, path) = match local {
+        Some(found) => found,
+        None => {
+            let reply = conn
+                .call_method(
+                    Some(REGISTRAR),
+                    registrar::PATH,
+                    Some(REGISTRAR),
+                    "GetMenuForWindow",
+                    &(window,),
+                )
+                .ok()?;
+            let (bus, path): (String, zbus::zvariant::OwnedObjectPath) =
+                reply.body().deserialize().ok()?;
+            (bus, path.as_str().to_string())
+        }
+    };
     if bus.is_empty() {
         return None;
     }
-    let path = path.as_str().to_string();
     let layout = |id: i32| -> Option<Vec<MenuItem>> {
         let reply = conn
             .call_method(

@@ -3,6 +3,7 @@
 
 pub mod appmenu;
 pub mod menu;
+pub mod registrar;
 pub mod tray;
 
 pub use appmenu::{AppMenu, AppMenuCmd, AppMenuUpdate, GtkPaths, Source};
