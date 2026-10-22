@@ -6,10 +6,11 @@ pub mod entry;
 pub mod exec;
 mod index;
 mod launch;
+pub mod process;
 #[cfg(test)]
 mod test_util;
 mod watch;
 
 pub use entry::Locale;
-pub use index::{App, Settings, load};
+pub use index::{App, Settings, load, load_all};
 pub use watch::Watcher;

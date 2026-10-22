@@ -213,6 +213,7 @@ pub(crate) mod tests {
             working_dir: None,
             terminal: false,
             startup_wm_class: None,
+            no_display: false,
         }
     }
 

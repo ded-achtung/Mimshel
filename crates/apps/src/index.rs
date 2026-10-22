@@ -35,6 +35,9 @@ pub struct App {
     pub terminal: bool,
     /// Класс окна программы — пригодится доку, чтобы узнавать её окна.
     pub startup_wm_class: Option<String>,
+    /// `NoDisplay=true`: не показывать в Spotlight и Launchpad. Доку такие
+    /// ярлыки всё равно нужны (значок Launchpad, окна служебных программ).
+    pub no_display: bool,
 }
 
 /// Где искать ярлыки и для кого.
@@ -86,6 +89,13 @@ impl Settings {
 
 /// Читает все ярлыки и возвращает видимые программы, по алфавиту.
 pub fn load(settings: &Settings) -> Vec<App> {
+    let mut apps = load_all(settings);
+    apps.retain(|a| !a.no_display);
+    apps
+}
+
+/// То же, но вместе с ярлыками `NoDisplay=true` (для дока).
+pub fn load_all(settings: &Settings) -> Vec<App> {
     let mut seen = HashSet::new();
     let mut apps = Vec::new();
 
@@ -135,10 +145,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
 }
 
 fn make_app(id: String, path: PathBuf, e: &DesktopEntry, s: &Settings) -> Option<App> {
-    if e.string("Type").as_deref() != Some("Application")
-        || e.boolean("Hidden")
-        || e.boolean("NoDisplay")
-    {
+    if e.string("Type").as_deref() != Some("Application") || e.boolean("Hidden") {
         return None;
     }
 
@@ -188,6 +195,7 @@ fn make_app(id: String, path: PathBuf, e: &DesktopEntry, s: &Settings) -> Option
             .map(PathBuf::from),
         terminal: e.boolean("Terminal"),
         startup_wm_class: e.string("StartupWMClass"),
+        no_display: e.boolean("NoDisplay"),
         id,
         path,
     })
@@ -239,6 +247,10 @@ mod tests {
 
         let apps = load(&settings(&[&user, &system]));
         assert_eq!(names(&apps), ["Files", "Мой редактор"]);
+        // Для дока скрытый Plank есть, но с пометкой.
+        let all = load_all(&settings(&[&user, &system]));
+        assert_eq!(names(&all), ["Files", "Plank", "Мой редактор"]);
+        assert!(all[1].no_display);
         assert_eq!(apps[1].path, user.0.join("editor.desktop"));
         assert_eq!(apps[0].command, ["Files"]);
     }

@@ -9,28 +9,36 @@ use std::process::{Command, Stdio};
 use crate::App;
 
 impl App {
-    /// Запускает программу. `terminal` — команда терминала, после которой
-    /// идёт запускаемая программа (например, `xfce4-terminal -x`).
-    pub fn launch(&self, terminal: &[String]) -> io::Result<()> {
+    /// Запускает программу и возвращает номер её процесса. `terminal` — команда
+    /// терминала, после которой идёт запускаемая программа (`xfce4-terminal -x`).
+    pub fn launch(&self, terminal: &[String]) -> io::Result<u32> {
         let argv = self.argv(terminal);
         let (program, args) = argv
             .split_first()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "пустая команда"))?;
-        let mut cmd = Command::new(program);
-        cmd.args(args)
+        // Как GLib: путь к ярлыку и номер процесса, которому он принадлежит, —
+        // по ним док узнаёт окна программы. Номер заранее неизвестен, поэтому
+        // его подставляет sh ($$) и тут же заменяет себя программой (exec):
+        // номер у программы остаётся тем же. Дочерние процессы (например,
+        // запущенные из Терминала) переменные наследуют, но номер не совпадёт.
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c")
+            .arg(r#"GIO_LAUNCHED_DESKTOP_FILE_PID=$$; export GIO_LAUNCHED_DESKTOP_FILE_PID; exec "$0" "$@""#)
+            .arg(program)
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0)
-            // По этой переменной окна программы потом узнаёт док (как в GLib).
             .env("GIO_LAUNCHED_DESKTOP_FILE", &self.path);
         if let Some(dir) = self.working_dir.as_ref().filter(|d| d.is_dir()) {
             cmd.current_dir(dir);
         }
         let mut child = cmd.spawn()?;
+        let pid = child.id();
         // Дожидаемся завершения в отдельном потоке, чтобы не копились «зомби».
         std::thread::spawn(move || child.wait());
-        Ok(())
+        Ok(pid)
     }
 
     /// Полная команда запуска с учётом терминала.
@@ -63,6 +71,7 @@ mod tests {
             working_dir: None,
             terminal,
             startup_wm_class: None,
+            no_display: false,
         }
     }
 
@@ -81,17 +90,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shell-launch-{}", std::process::id()));
         let flag = dir.join("ran");
         std::fs::create_dir_all(&dir).unwrap();
-        let script = format!("echo \"$GIO_LAUNCHED_DESKTOP_FILE\" > {}", flag.display());
-        app(&["sh", "-c", &script], false).launch(&[]).unwrap();
+        let script = format!(
+            "echo \"$GIO_LAUNCHED_DESKTOP_FILE $GIO_LAUNCHED_DESKTOP_FILE_PID $$\" > {}",
+            flag.display()
+        );
+        let pid = app(&["sh", "-c", &script], false).launch(&[]).unwrap();
         for _ in 0..100 {
             if std::fs::read_to_string(&flag).is_ok_and(|s| !s.is_empty()) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+        // Ярлык, номер из переменной и настоящий номер процесса совпадают.
         assert_eq!(
             std::fs::read_to_string(&flag).unwrap().trim(),
-            "/tmp/t.desktop"
+            format!("/tmp/t.desktop {pid} {pid}")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
