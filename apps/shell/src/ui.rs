@@ -73,6 +73,8 @@ pub(crate) enum Msg {
     Sound(Option<shell_menubar::status::Sound>),
     Battery(Option<shell_menubar::status::Battery>),
     Dnd(bool),
+    /// Значки трея или меню значка.
+    Tray(shell_dbus::TrayUpdate),
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -435,6 +437,12 @@ impl Ui<'_> {
                 }
                 Ok(())
             }
+            Msg::Tray(update) => match &mut self.menubar {
+                Some(menubar) => {
+                    menubar.tray_update(self.display, &mut self.fonts, &mut self.icons, update)
+                }
+                None => Ok(()),
+            },
         }
     }
 

@@ -249,6 +249,8 @@ impl Dock {
                 command: MenuCommand::OpenTrash,
                 checked: false,
                 separator_before: false,
+                enabled: true,
+                indent: false,
             }];
             if self.trash == Some(true) {
                 entries.push(MenuEntry {
@@ -256,6 +258,8 @@ impl Dock {
                     command: MenuCommand::EmptyTrash,
                     checked: false,
                     separator_before: true,
+                    enabled: true,
+                    indent: false,
                 });
             }
             return Some(Menu::new(item.key.clone(), entries));
@@ -276,6 +280,8 @@ impl Dock {
                 command: MenuCommand::Activate(w.id),
                 checked: Some(w.id) == self.active,
                 separator_before: false,
+                enabled: true,
+                indent: false,
             })
             .collect();
         // У окна без ярлыка нечего запускать и закреплять — только завершить.
@@ -290,12 +296,16 @@ impl Dock {
                 command: MenuCommand::Launch,
                 checked: false,
                 separator_before: running,
+                enabled: true,
+                indent: false,
             });
             entries.push(MenuEntry {
                 label: "Оставить в Dock".into(),
                 command: MenuCommand::TogglePin,
                 checked: item.pinned,
                 separator_before: true,
+                enabled: true,
+                indent: false,
             });
         }
         if running {
@@ -304,6 +314,8 @@ impl Dock {
                 command: MenuCommand::Quit,
                 checked: false,
                 separator_before: true,
+                enabled: true,
+                indent: false,
             });
         }
         (!entries.is_empty()).then(|| Menu::new(item.key.clone(), entries))

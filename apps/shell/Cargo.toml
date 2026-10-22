@@ -11,6 +11,7 @@ shell-text = { path = "../../crates/text" }
 shell-icons = { path = "../../crates/icons" }
 shell-x11 = { path = "../../crates/x11" }
 shell-launcher = { path = "../../crates/launcher" }
+shell-dbus = { path = "../../crates/dbus" }
 shell-dock = { path = "../../crates/dock" }
 shell-menubar = { path = "../../crates/menubar" }
 shell-widgets = { path = "../../crates/widgets" }

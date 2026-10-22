@@ -79,7 +79,15 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      колёсико ±5 %, средняя кнопка — без звука), батарея (`upower`; проценты, меню с состоянием),
      колокольчик («Не беспокоить» — xfconf `xfce4-notifyd /do-not-disturb`). Изменения ловятся
      наблюдателями (`pactl subscribe`, `upower --monitor`, `xfconf-query -m`) — `apps/shell/src/status.rs`.
-   - 3в трей; 3г глобальное меню.
+   - 3в **сделано** (22.10.2026): трей StatusNotifierItem — `crates/dbus` (zbus 5, blocking):
+     служба занимает `org.kde.StatusNotifierWatcher` (если свободно — панель Xfce его держит, пока
+     запущена), читает значки и меню (DBusMenu), передаёт щелчки. Значки `Passive` не показываем
+     (blueman так прячет свой). Левый щелчок — `Activate`, нет такого метода (appindicator,
+     nm-applet) — меню; правый — меню; подменю показываются внутри меню с отступом.
+     nm-applet переведён на `--indicator` копией ярлыка `~/.config/autostart/nm-applet.desktop`
+     (удалить её — вернуть как было); blueman переходит сам. Проверка трея без службы:
+     `cargo run -p shell-dbus --example tray`.
+   - 3г глобальное меню.
    - **Трей — решение пользователя:** только современный StatusNotifierItem (D-Bus); старое
      встраивание (XEmbed) не делаем. nm-applet перевести на `--indicator`, blueman — на SNI.
 4. Пункт управления и уведомления

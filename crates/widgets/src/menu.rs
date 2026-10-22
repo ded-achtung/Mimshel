@@ -18,6 +18,10 @@ pub struct MenuEntry<C> {
     pub checked: bool,
     /// Перед пунктом — разделительная линия.
     pub separator_before: bool,
+    /// Неактивный пункт — серый, не подсвечивается и не выбирается.
+    pub enabled: bool,
+    /// С отступом (пункт подменю, показанного внутри меню).
+    pub indent: bool,
 }
 
 /// Чем закончилось действие в меню.
@@ -66,6 +70,12 @@ const TEXT: Style = Style {
     color: [0xf2, 0xf2, 0xf2, 0xff],
     weight: 400,
 };
+const DISABLED: Style = Style {
+    color: [0x8a, 0x8a, 0x8a, 0xff],
+    ..TEXT
+};
+/// Отступ пунктов подменю.
+const INDENT: f32 = 14.0;
 
 impl<C: Copy> Menu<C> {
     pub fn new(key: String, entries: Vec<MenuEntry<C>>) -> Menu<C> {
@@ -82,7 +92,7 @@ impl<C: Copy> Menu<C> {
         let text = self
             .entries
             .iter()
-            .map(|e| fonts.measure(&e.label, &TEXT))
+            .map(|e| fonts.measure(&e.label, &TEXT) + if e.indent { INDENT } else { 0.0 })
             .fold(0.0, f32::max);
         self.width = (LEFT + text + RIGHT).clamp(MIN_WIDTH, MAX_WIDTH).ceil();
         (self.width as u32, self.height() as u32)
@@ -121,7 +131,7 @@ impl<C: Copy> Menu<C> {
 
     /// Указатель сдвинулся (координаты меню). `true` — подсветка поменялась.
     pub fn motion(&mut self, x: f32, y: f32) -> bool {
-        let hover = self.entry_at(x, y);
+        let hover = self.entry_at(x, y).filter(|&i| self.entries[i].enabled);
         let changed = hover != self.hover;
         self.hover = hover;
         changed
@@ -130,6 +140,9 @@ impl<C: Copy> Menu<C> {
     /// Клик в точке меню; за краями меню — закрыть.
     pub fn click(&self, x: f32, y: f32) -> MenuResult<C> {
         if let Some(i) = self.entry_at(x, y) {
+            if !self.entries[i].enabled {
+                return MenuResult::Nothing;
+            }
             return MenuResult::Run(self.entries[i].command);
         }
         let inside = x >= 0.0 && x < self.width && y >= 0.0 && y < self.height();
@@ -143,16 +156,30 @@ impl<C: Copy> Menu<C> {
     /// Стрелки — выбор пункта по кругу, Enter — выполнить, Esc — закрыть.
     pub fn key(&mut self, key: Key) -> MenuResult<C> {
         let n = self.entries.len();
-        if n == 0 {
+        if !self.entries.iter().any(|e| e.enabled) {
             return MenuResult::Close;
         }
+        // Следующий доступный пункт по кругу (неактивные пропускаем).
+        let step = |from: usize, forward: bool| {
+            let mut i = from;
+            loop {
+                i = if forward {
+                    (i + 1) % n
+                } else {
+                    (i + n - 1) % n
+                };
+                if self.entries[i].enabled {
+                    return i;
+                }
+            }
+        };
         match key {
             Key::Down => {
-                self.hover = Some(self.hover.map_or(0, |i| (i + 1) % n));
+                self.hover = Some(step(self.hover.unwrap_or(n - 1), true));
                 MenuResult::Redraw
             }
             Key::Up => {
-                self.hover = Some(self.hover.map_or(n - 1, |i| (i + n - 1) % n));
+                self.hover = Some(step(self.hover.unwrap_or(0), false));
                 MenuResult::Redraw
             }
             Key::Return => match self.hover {
@@ -205,11 +232,13 @@ impl<C: Copy> Menu<C> {
                     None,
                 );
             }
+            let left = if e.indent { LEFT + INDENT } else { LEFT };
             if e.checked {
-                check(&mut pm, 11.0, top + ROW / 2.0);
+                check(&mut pm, left - 15.0, top + ROW / 2.0);
             }
             let ty = top + ((ROW - TEXT.line_height()) / 2.0).round();
-            fonts.draw(&mut pm, &e.label, &TEXT, LEFT, ty, Some(w - LEFT - 8.0));
+            let style = if e.enabled { TEXT } else { DISABLED };
+            fonts.draw(&mut pm, &e.label, &style, left, ty, Some(w - left - 8.0));
         }
         pm
     }
@@ -256,6 +285,8 @@ mod tests {
             command,
             checked: command == MenuCommand::TogglePin,
             separator_before,
+            enabled: true,
+            indent: false,
         };
         Menu::new(
             "firefox.desktop".into(),
@@ -282,6 +313,22 @@ mod tests {
         );
         assert_eq!(m.click(50.0, PAD + ROW + 2.0), MenuResult::Nothing);
         assert_eq!(m.click(50.0, -20.0), MenuResult::Close, "клик мимо");
+    }
+
+    #[test]
+    fn disabled_entries_are_skipped() {
+        let mut m = menu();
+        m.entries[1].enabled = false;
+        // Ни подсветки, ни выбора у неактивного пункта.
+        let y1 = PAD + ROW + SEPARATOR + 1.0;
+        assert!(!m.motion(50.0, y1) || m.hover.is_none());
+        assert_eq!(m.click(50.0, y1), MenuResult::Nothing);
+        // Стрелки перескакивают через него.
+        m.hover = Some(0);
+        m.key(Key::Down);
+        assert_eq!(m.hover, Some(2));
+        m.key(Key::Up);
+        assert_eq!(m.hover, Some(0));
     }
 
     #[test]

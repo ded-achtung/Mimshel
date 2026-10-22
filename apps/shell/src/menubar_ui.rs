@@ -1,7 +1,7 @@
 //! Строка меню на экране: окно-полоса во всю ширину у верхнего края (с
 //! резервом места), меню яблока, название активной программы, раскладка
 //! (щелчок — следующая), громкость (окошко с ползунком, колёсико), батарея,
-//! колокольчик («Не беспокоить») и часы.
+//! колокольчик («Не беспокоить»), трей (StatusNotifierItem) и часы.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use shell_apps::App;
 use shell_core::config::Config;
 use shell_core::keyboard::layout_label;
+use shell_dbus::{MenuItem, Tray, TrayCmd, TrayItem, TrayUpdate};
 use shell_icons::Icons;
 use shell_menubar::status::{Battery, Sound};
 use shell_menubar::{AppleItem, Bar, Part, SoundAction, SoundPanel, apple_menu};
@@ -31,6 +32,8 @@ enum Cmd {
     PowerSettings,
     ToggleDnd,
     NotifySettings,
+    /// Пункт меню значка трея (id пункта в DBusMenu).
+    Tray(i32),
 }
 
 /// Шаг громкости колёсиком мыши над значком.
@@ -54,6 +57,11 @@ pub struct MenubarUi {
     audio: Sender<Audio>,
     /// Когда громкость меняли отсюда.
     volume_changed: Option<Instant>,
+    /// Трей (`None` — его держит кто-то другой, например панель Xfce),
+    /// показанные значки и чьё меню ждём (ключ значка и где открыть).
+    tray: Option<Tray>,
+    tray_items: Vec<TrayItem>,
+    tray_menu_wait: Option<(String, f32)>,
     /// Открытое меню (яблока, батареи, колокольчика) или окошко громкости —
     /// в одном всплывающем окне; `popup_dirty` — перерисовать его.
     menu: Option<Menu<Cmd>>,
@@ -78,6 +86,9 @@ impl MenubarUi {
             dnd: false,
             audio: status::audio_worker(),
             volume_changed: None,
+            tray: None,
+            tray_items: Vec::new(),
+            tray_menu_wait: None,
             menu: None,
             sound_panel: None,
             popup: d.create_popup("menubar-menu")?,
@@ -95,7 +106,17 @@ impl MenubarUi {
         watch_clock(config.clock_format.clone(), tx.clone());
         status::watch_sound(tx.clone());
         status::watch_battery(tx.clone());
-        status::watch_dnd(tx);
+        status::watch_dnd(tx.clone());
+        let tray_tx = tx;
+        ui.tray = match shell_dbus::tray::start(move |u| {
+            let _ = tray_tx.send(Msg::Tray(u));
+        }) {
+            Ok(tray) => Some(tray),
+            Err(e) => {
+                eprintln!("Трей не запущен (его держит другая программа?): {e}");
+                None
+            }
+        };
         ui.place(d)?;
         ui.window.show(d)?;
         Ok(ui)
@@ -224,6 +245,16 @@ impl MenubarUi {
                         self.layouts, self.group
                     );
                 }
+                // Значок трея: правая кнопка — меню, средняя — второе
+                // действие, колёсико — прокрутка.
+                if let Some((Part::Tray(i), px)) = part
+                    && button != 1
+                {
+                    if self.popup_open() {
+                        self.close_popup(d)?;
+                    }
+                    return self.tray_click(i, px, button);
+                }
                 // Колёсико и средняя кнопка над динамиком — громкость и «без звука».
                 if let Some((Part::Volume, _)) = part
                     && let Some(sound) = &self.sound
@@ -256,6 +287,7 @@ impl MenubarUi {
                     Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,
                     Some((Part::Bell, px)) => self.open_bell(d, fonts, px)?,
                     Some((Part::Volume, px)) => self.open_sound(d, px)?,
+                    Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
                     Some((Part::Layout, _)) if was.is_none() => self.next_layout(d)?,
                     _ => {}
                 }
@@ -323,6 +355,11 @@ impl MenubarUi {
             MenuResult::Redraw => self.popup_dirty = true,
             MenuResult::Close => self.close_popup(d)?,
             MenuResult::Run(cmd) => {
+                let key = self
+                    .menu
+                    .as_ref()
+                    .map(|m| m.key.clone())
+                    .unwrap_or_default();
                 self.close_popup(d)?;
                 match cmd {
                     Cmd::Apple(i) => {
@@ -338,6 +375,11 @@ impl MenubarUi {
                         std::thread::spawn(move || status::set_dnd(on));
                     }
                     Cmd::NotifySettings => run(&["xfce4-notifyd-config".to_string()]),
+                    Cmd::Tray(id) => {
+                        if let Some(tray) = &self.tray {
+                            tray.send(TrayCmd::MenuClicked(key, id));
+                        }
+                    }
                 }
             }
         }
@@ -360,13 +402,14 @@ impl MenubarUi {
         d: &Display,
         fonts: &mut Fonts,
         part: Part,
+        key: String,
         x: f32,
         entries: Vec<MenuEntry<Cmd>>,
     ) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
-        let mut menu = Menu::new(format!("{part:?}"), entries);
+        let mut menu = Menu::new(key, entries);
         let size = menu.measure(fonts);
         self.menu = Some(menu);
         self.show_popup(d, part, x, size)
@@ -381,7 +424,7 @@ impl MenubarUi {
             .enumerate()
             .map(|(i, item)| entry(&item.label, Cmd::Apple(i), false, item.separator_before))
             .collect();
-        self.open_menu(d, fonts, Part::Apple, x, entries)
+        self.open_menu(d, fonts, Part::Apple, "apple".into(), x, entries)
     }
 
     fn open_battery(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
@@ -403,7 +446,7 @@ impl MenubarUi {
                 true,
             ),
         ];
-        self.open_menu(d, fonts, Part::Battery, x, entries)
+        self.open_menu(d, fonts, Part::Battery, "battery".into(), x, entries)
     }
 
     fn open_bell(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
@@ -411,7 +454,7 @@ impl MenubarUi {
             entry("Не беспокоить", Cmd::ToggleDnd, self.dnd, false),
             entry("Настройки уведомлений…", Cmd::NotifySettings, false, true),
         ];
-        self.open_menu(d, fonts, Part::Bell, x, entries)
+        self.open_menu(d, fonts, Part::Bell, "bell".into(), x, entries)
     }
 
     fn open_sound(&mut self, d: &Display, x: f32) -> Result<()> {
@@ -423,6 +466,87 @@ impl MenubarUi {
         let size = panel.size();
         self.sound_panel = Some(panel);
         self.show_popup(d, Part::Volume, x, size)
+    }
+
+    /// Щелчок по значку трея `i` (левый край — `x`) кнопкой `button`.
+    fn tray_click(&mut self, i: usize, x: f32, button: u8) -> Result<()> {
+        let (Some(tray), Some(item)) = (&self.tray, self.tray_items.get(i)) else {
+            return Ok(());
+        };
+        let key = item.key.clone();
+        // Программе — точка экрана под значком (там она может показать своё окно).
+        let (sx, sy) = ((x + 17.0) as i32, self.bar.height as i32);
+        let wants_menu = match button {
+            1 => item.item_is_menu && item.has_menu,
+            3 => item.has_menu,
+            _ => false,
+        };
+        if wants_menu {
+            // Меню придёт ответом от программы (TrayUpdate::Menu).
+            tray.send(TrayCmd::Menu(key.clone()));
+            self.tray_menu_wait = Some((key, x));
+            self.bar.open = Some(Part::Tray(i));
+            self.dirty = true;
+            return Ok(());
+        }
+        match button {
+            1 => {
+                // Нет у значка действия — трей пришлёт его меню.
+                if item.has_menu {
+                    self.tray_menu_wait = Some((key.clone(), x));
+                }
+                tray.send(TrayCmd::Activate(key, sx, sy));
+            }
+            2 => tray.send(TrayCmd::SecondaryActivate(key, sx, sy)),
+            4 => tray.send(TrayCmd::Scroll(key, -1)),
+            5 => tray.send(TrayCmd::Scroll(key, 1)),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Пришли значки трея или меню значка.
+    pub fn tray_update(
+        &mut self,
+        d: &Display,
+        fonts: &mut Fonts,
+        icons: &mut Icons,
+        update: TrayUpdate,
+    ) -> Result<()> {
+        match update {
+            TrayUpdate::Items(items) => {
+                // «Passive» — программа просит значок не показывать.
+                self.tray_items = items
+                    .into_iter()
+                    .filter(|i| i.status != "Passive")
+                    .collect();
+                self.bar.tray = self
+                    .tray_items
+                    .iter()
+                    .map(|i| tray_icon(i, icons))
+                    .collect();
+                self.dirty = true;
+            }
+            TrayUpdate::Menu { key, items } => {
+                let Some((wait, x)) = self.tray_menu_wait.take() else {
+                    return Ok(());
+                };
+                if wait != key {
+                    return Ok(());
+                }
+                let index = self.tray_items.iter().position(|i| i.key == key);
+                let part = Part::Tray(index.unwrap_or(0));
+                self.bar.open = None;
+                let mut entries = Vec::new();
+                flatten(&items, false, &mut entries);
+                if entries.is_empty() {
+                    self.dirty = true;
+                    return Ok(());
+                }
+                self.open_menu(d, fonts, part, key, x, entries)?;
+            }
+        }
+        Ok(())
     }
 
     /// Закрыть меню или окошко громкости (если открыто): например, перед
@@ -516,12 +640,66 @@ impl MenubarUi {
     }
 }
 
+/// Пункты меню DBusMenu → пункты нашего меню. Подменю показываем внутри:
+/// его название — серым заголовком, пункты — с отступом.
+fn flatten(items: &[MenuItem], indent: bool, out: &mut Vec<MenuEntry<Cmd>>) {
+    let mut separator = false;
+    for item in items.iter().filter(|i| i.visible) {
+        if item.separator {
+            separator = !out.is_empty();
+            continue;
+        }
+        let submenu = !item.children.is_empty();
+        out.push(MenuEntry {
+            label: item.label.clone(),
+            command: Cmd::Tray(item.id),
+            checked: item.toggle == Some(true),
+            separator_before: separator,
+            enabled: item.enabled && !submenu,
+            indent,
+        });
+        separator = false;
+        if submenu {
+            flatten(&item.children, true, out);
+        }
+    }
+}
+
+/// Картинка значка трея: иконка из темы по имени или готовая картинка
+/// программы (ARGB, «старший байт первым» → RGBA с умножением на прозрачность).
+fn tray_icon(item: &TrayItem, icons: &mut Icons) -> tiny_skia::Pixmap {
+    if !item.icon_name.is_empty()
+        && let Some(icon) = icons.get(&item.icon_name, 16)
+    {
+        return icon.clone();
+    }
+    if let Some((w, h, argb)) = &item.pixmap {
+        let mut rgba = Vec::with_capacity(argb.len());
+        for px in argb.as_chunks::<4>().0 {
+            let [a, r, g, b] = *px;
+            let m = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
+            rgba.extend_from_slice(&[m(r), m(g), m(b), a]);
+        }
+        if let Some(size) = tiny_skia::IntSize::from_wh(*w, *h)
+            && let Some(pm) = tiny_skia::Pixmap::from_vec(rgba, size)
+        {
+            return pm;
+        }
+    }
+    icons
+        .get("image-missing", 16)
+        .cloned()
+        .unwrap_or_else(|| tiny_skia::Pixmap::new(16, 16).expect("размер не нулевой"))
+}
+
 fn entry(label: &str, command: Cmd, checked: bool, separator_before: bool) -> MenuEntry<Cmd> {
     MenuEntry {
         label: label.to_string(),
         command,
         checked,
         separator_before,
+        enabled: true,
+        indent: false,
     }
 }
 

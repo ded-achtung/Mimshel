@@ -20,6 +20,8 @@ use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Rect, Transform};
 pub enum Part {
     Apple,
     App,
+    /// Значок трея (номер в [`Bar::tray`]).
+    Tray(usize),
     Layout,
     Volume,
     Battery,
@@ -44,6 +46,8 @@ pub struct Bar {
     pub battery: Option<(String, String)>,
     /// Иконка колокольчика (обычный или «Не беспокоить»).
     pub bell: Option<String>,
+    /// Значки трея — готовые картинки (размер любой, рисуются 16×16).
+    pub tray: Vec<Pixmap>,
     pub clock: String,
     /// Подсвеченная часть — та, чьё меню открыто.
     pub open: Option<Part>,
@@ -83,6 +87,7 @@ impl Bar {
             volume: None,
             battery: None,
             bell: None,
+            tray: Vec::new(),
             clock: String::new(),
             open: None,
         }
@@ -121,6 +126,10 @@ impl Bar {
             let w = fonts.measure(layout, &BOLD) + 2.0 * ITEM_PAD;
             right -= w;
             out.push((Part::Layout, right, w));
+        }
+        for i in (0..self.tray.len()).rev() {
+            right -= icon_w;
+            out.push((Part::Tray(i), right, icon_w));
         }
         out
     }
@@ -168,6 +177,18 @@ impl Bar {
             };
             match part {
                 Part::Apple => icon(&mut pm, &self.icon),
+                Part::Tray(i) => {
+                    if let Some(img) = self.tray.get(i) {
+                        let k = ICON as f32 / img.width().max(img.height()) as f32;
+                        let iy = ((hf - img.height() as f32 * k) / 2.0).round();
+                        let t = Transform::from_scale(k, k).post_translate(tx, iy);
+                        let quality = PixmapPaint {
+                            quality: FilterQuality::Bicubic,
+                            ..PixmapPaint::default()
+                        };
+                        pm.draw_pixmap(0, 0, img.as_ref(), &quality, t, None);
+                    }
+                }
                 Part::Volume => {
                     if let Some(name) = &self.volume {
                         icon(&mut pm, name);
@@ -234,6 +255,12 @@ mod tests {
                 Part::Clock
             ]
         );
+        // Трей — левее раскладки, по порядку.
+        b.tray = vec![Pixmap::new(22, 22).unwrap(), Pixmap::new(16, 16).unwrap()];
+        let parts = b.parts(&mut fonts);
+        let x = |p: Part| parts.iter().find(|q| q.0 == p).unwrap().1;
+        assert!(x(Part::Tray(0)) < x(Part::Tray(1)));
+        assert!(x(Part::Tray(1)) < x(Part::Layout));
     }
 
     #[test]
