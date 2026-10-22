@@ -257,7 +257,7 @@ impl Dock {
         sliding || bouncing
     }
 
-    /// Закончить завершившиеся движения (вызывать после перерисовки).
+    /// Закончить завершившиеся движения.
     pub fn settle(&mut self, now: Instant) {
         if let Some((_, to, start)) = self.slide
             && now.saturating_duration_since(start) >= SLIDE

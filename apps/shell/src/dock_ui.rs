@@ -27,6 +27,8 @@ pub struct DockUi {
     watched: HashSet<u32>,
     /// Идёт ли таймер анимации.
     ticking: Arc<AtomicBool>,
+    /// Нужно перерисовать (рисуем в [`DockUi::flush`], один раз на пачку событий).
+    dirty: bool,
     tx: Sender<Msg>,
     terminal: Vec<String>,
     screen: (u32, u32),
@@ -46,6 +48,7 @@ impl DockUi {
             hide: config.dock_hide,
             watched: HashSet::new(),
             ticking: Arc::new(AtomicBool::new(false)),
+            dirty: true,
             tx,
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
@@ -70,6 +73,7 @@ impl DockUi {
     pub fn set_apps(&mut self, d: &Display, apps: Vec<App>) {
         self.dock.set_apps(apps);
         self.refresh_windows(d);
+        self.dirty = true;
     }
 
     /// Программа запущена (из Spotlight или Launchpad) — пусть значок прыгает.
@@ -94,13 +98,8 @@ impl DockUi {
         }
     }
 
-    pub fn event(
-        &mut self,
-        d: &Display,
-        fonts: &mut Fonts,
-        icons: &mut Icons,
-        ev: Event,
-    ) -> Result<()> {
+    /// Обработать событие. Рисует потом [`DockUi::flush`].
+    pub fn event(&mut self, d: &Display, ev: Event) -> Result<()> {
         let now = Instant::now();
         if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
             eprintln!("док: {ev:?}");
@@ -162,20 +161,28 @@ impl DockUi {
             },
             _ => return Ok(()),
         }
-        self.redraw(d, fonts, icons)
+        self.dirty = true;
+        Ok(())
     }
 
-    /// Кадр анимации.
-    pub fn tick(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
-        self.redraw(d, fonts, icons)?;
+    /// Кадр анимации. Сам кадр рисует [`DockUi::flush`]; если анимация
+    /// закончилась, это будет последний кадр — в конечном положении.
+    pub fn tick(&mut self) {
         let now = Instant::now();
         self.dock.settle(now);
         if !self.dock.animating(now) {
             self.ticking.store(false, Ordering::SeqCst);
-            // Последний кадр — в конечном положении.
-            self.redraw(d, fonts, icons)?;
         }
-        Ok(())
+        self.dirty = true;
+    }
+
+    /// Перерисовать, если что-то изменилось.
+    pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+        self.dirty = false;
+        self.redraw(d, fonts, icons)
     }
 
     fn start_ticking(&self) {
@@ -269,10 +276,5 @@ impl DockUi {
         self.window
             .set_input(d, &self.dock.input_rects(self.dock.hidden_at(now)))?;
         Ok(())
-    }
-
-    /// Первая отрисовка.
-    pub fn draw(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
-        self.redraw(d, fonts, icons)
     }
 }

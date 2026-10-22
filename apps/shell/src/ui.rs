@@ -167,7 +167,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         dock,
     };
     if let Some(dock) = &mut ui.dock {
-        dock.draw(ui.display, &mut ui.fonts, &mut ui.icons)?;
+        dock.flush(ui.display, &mut ui.fonts, &mut ui.icons)?;
     }
     match once {
         None => eprintln!("Служба готова за {:?}", start.elapsed()),
@@ -177,21 +177,16 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         }
     }
 
-    for msg in rx {
-        match msg {
-            Msg::Toggle(panel) => ui.toggle(panel)?,
-            Msg::Apps(apps) => ui.set_apps(apps)?,
-            Msg::X(ev) => {
-                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
-                    eprintln!("X: {ev:?}");
-                }
-                ui.event(ev)?
-            }
-            Msg::Tick => {
-                if let Some(dock) = &mut ui.dock {
-                    dock.tick(ui.display, &mut ui.fonts, &mut ui.icons)?;
-                }
-            }
+    while let Ok(msg) = rx.recv() {
+        ui.message(msg)?;
+        // Всё, что накопилось, пока шёл прошлый кадр, — разом, а док
+        // рисуем один раз по итогу. Иначе при быстром движении мыши кадры
+        // отстают от событий и док ещё секунды «доигрывает» старые движения.
+        while let Ok(msg) = rx.try_recv() {
+            ui.message(msg)?;
+        }
+        if let Some(dock) = &mut ui.dock {
+            dock.flush(ui.display, &mut ui.fonts, &mut ui.icons)?;
         }
         if !daemon && ui.shown.is_none() {
             break;
@@ -346,11 +341,30 @@ impl Ui<'_> {
         Ok(())
     }
 
+    fn message(&mut self, msg: Msg) -> Result<()> {
+        match msg {
+            Msg::Toggle(panel) => self.toggle(panel),
+            Msg::Apps(apps) => self.set_apps(apps),
+            Msg::X(ev) => {
+                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+                    eprintln!("X: {ev:?}");
+                }
+                self.event(ev)
+            }
+            Msg::Tick => {
+                if let Some(dock) = &mut self.dock {
+                    dock.tick();
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn event(&mut self, ev: Event) -> Result<()> {
         if let Some(dock) = &mut self.dock
             && dock.wants(self.display, &ev)
         {
-            return dock.event(self.display, &mut self.fonts, &mut self.icons, ev);
+            return dock.event(self.display, ev);
         }
         let Some(panel) = self.shown else {
             return Ok(());
