@@ -202,7 +202,23 @@ impl Dock {
     pub fn menu(&self, index: usize) -> Option<Menu> {
         let item = self.items.get(index)?;
         let running = !item.windows.is_empty();
-        let mut entries = Vec::new();
+        // Сверху — окна программы в порядке появления, как на Mac.
+        let mut windows = item.windows.clone();
+        windows.sort_unstable();
+        let mut entries: Vec<MenuEntry> = windows
+            .iter()
+            .filter_map(|&w| self.window(w))
+            .map(|w| MenuEntry {
+                label: if w.title.is_empty() {
+                    item.name.clone()
+                } else {
+                    w.title.clone()
+                },
+                command: MenuCommand::Activate(w.id),
+                checked: Some(w.id) == self.active,
+                separator_before: false,
+            })
+            .collect();
         // У окна без ярлыка нечего запускать и закреплять — только завершить.
         if item.app.is_some() {
             entries.push(MenuEntry {
@@ -210,13 +226,14 @@ impl Dock {
                     "Новое окно"
                 } else {
                     "Открыть"
-                },
+                }
+                .into(),
                 command: MenuCommand::Launch,
                 checked: false,
-                separator_before: false,
+                separator_before: running,
             });
             entries.push(MenuEntry {
-                label: "Оставить в Dock",
+                label: "Оставить в Dock".into(),
                 command: MenuCommand::TogglePin,
                 checked: item.pinned,
                 separator_before: true,
@@ -224,7 +241,7 @@ impl Dock {
         }
         if running {
             entries.push(MenuEntry {
-                label: "Завершить",
+                label: "Завершить".into(),
                 command: MenuCommand::Quit,
                 checked: false,
                 separator_before: true,
@@ -248,6 +265,7 @@ impl Dock {
                 None => Action::Nothing,
             },
             MenuCommand::Quit => Action::Close(item.windows.clone()),
+            MenuCommand::Activate(w) => Action::Activate(w),
             MenuCommand::TogglePin => {
                 if item.app.is_none() {
                     return Action::Nothing;
@@ -460,19 +478,29 @@ pub(crate) mod tests {
             (window(10, "xfce4-terminal", "Xfce4-terminal"), None),
             (window(12, "xeyes", "XEyes"), None),
         ]);
-        let labels = |m: &Menu| -> Vec<(&str, bool)> {
-            m.entries.iter().map(|e| (e.label, e.checked)).collect()
-        };
+        d.set_active(Some(10));
+        fn labels(m: &Menu) -> Vec<(&str, bool)> {
+            m.entries
+                .iter()
+                .map(|e| (e.label.as_str(), e.checked))
+                .collect()
+        }
 
         // Запущенный, не закреплённый Терминал: закрепить.
         let m = d.menu(3).unwrap();
         assert_eq!(
             labels(&m),
             [
+                ("окно 10", true),
                 ("Новое окно", false),
                 ("Оставить в Dock", false),
                 ("Завершить", false)
             ]
+        );
+        assert!(m.entries[1].separator_before, "окна отделены чертой");
+        assert_eq!(
+            d.command(&m.key, MenuCommand::Activate(10), now),
+            Action::Activate(10)
         );
         let a = d.command(&m.key, MenuCommand::TogglePin, now);
         assert_eq!(
@@ -504,9 +532,9 @@ pub(crate) mod tests {
             ]
         );
 
-        // Окно без ярлыка: только «Завершить».
+        // Окно без ярлыка: само окно и «Завершить».
         let m = d.menu(3).unwrap();
-        assert_eq!(labels(&m), [("Завершить", false)]);
+        assert_eq!(labels(&m), [("окно 12", false), ("Завершить", false)]);
         assert_eq!(
             d.command(&m.key, MenuCommand::Quit, now),
             Action::Close(vec![12])

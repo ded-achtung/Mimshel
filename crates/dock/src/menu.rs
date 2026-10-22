@@ -1,5 +1,6 @@
-//! Меню значка по правому клику, как на Mac: «Открыть» (или «Новое окно»),
-//! «Оставить в Dock» с галочкой, «Завершить». Здесь только состояние,
+//! Меню значка по правому клику, как на Mac: окна программы (галочка —
+//! у активного), «Открыть» (или «Новое окно»), «Оставить в Dock» с галочкой,
+//! «Завершить». Здесь только состояние,
 //! наведение, клавиши и рисование в картинку; окно для меню — у службы.
 
 use shell_core::input::Key;
@@ -17,11 +18,13 @@ pub enum MenuCommand {
     TogglePin,
     /// Закрыть все окна программы.
     Quit,
+    /// Переключиться на окно.
+    Activate(u32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MenuEntry {
-    pub label: &'static str,
+    pub label: String,
     pub command: MenuCommand,
     /// Галочка слева (у «Оставить в Dock», когда значок закреплён).
     pub checked: bool,
@@ -58,6 +61,8 @@ const SEPARATOR: f32 = 11.0;
 const LEFT: f32 = 26.0;
 const RIGHT: f32 = 20.0;
 const MIN_WIDTH: f32 = 170.0;
+/// Длинные заголовки окон обрезаются «…».
+const MAX_WIDTH: f32 = 380.0;
 /// Подсветка пункта отступает от краёв меню.
 const INSET: f32 = 5.0;
 const RADIUS: f32 = 8.0;
@@ -89,9 +94,9 @@ impl Menu {
         let text = self
             .entries
             .iter()
-            .map(|e| fonts.measure(e.label, &TEXT))
+            .map(|e| fonts.measure(&e.label, &TEXT))
             .fold(0.0, f32::max);
-        self.width = (LEFT + text + RIGHT).max(MIN_WIDTH).ceil();
+        self.width = (LEFT + text + RIGHT).clamp(MIN_WIDTH, MAX_WIDTH).ceil();
         (self.width as u32, self.height() as u32)
     }
 
@@ -216,7 +221,7 @@ impl Menu {
                 check(&mut pm, 11.0, top + ROW / 2.0);
             }
             let ty = top + ((ROW - TEXT.line_height()) / 2.0).round();
-            fonts.draw(&mut pm, e.label, &TEXT, LEFT, ty, Some(w - LEFT - 8.0));
+            fonts.draw(&mut pm, &e.label, &TEXT, LEFT, ty, Some(w - LEFT - 8.0));
         }
         pm
     }
@@ -251,8 +256,8 @@ mod tests {
     use super::*;
 
     fn menu() -> Menu {
-        let entry = |label, command, separator_before| MenuEntry {
-            label,
+        let entry = |label: &str, command, separator_before| MenuEntry {
+            label: label.into(),
             command,
             checked: command == MenuCommand::TogglePin,
             separator_before,
