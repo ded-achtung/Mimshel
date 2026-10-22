@@ -20,6 +20,10 @@ pub(crate) const PAD_BOTTOM: f32 = 12.0;
 pub(crate) const MARGIN: f32 = 4.0;
 /// Место над увеличенными значками для подписи.
 pub(crate) const TOOLTIP_ROOM: f32 = 44.0;
+/// Высота полоски у нижнего края, где спрятанный док выезжает. На настоящем
+/// экране мышь упирается в край и хватило бы 1 пикселя; в окне виртуальной
+/// машины мышь край не держит — уходит из окна, не дойдя до нижней строки.
+pub const REVEAL: u32 = 8;
 /// На сколько значков в стороны распространяется увеличение.
 const REACH: f32 = 3.0;
 
@@ -159,13 +163,13 @@ impl Dock {
         Some((s.center(), bottom - PAD_BOTTOM - s.size))
     }
 
-    /// Где окно принимает клики (в координатах окна). Спрятан — тонкая полоска
+    /// Где окно принимает клики (в координатах окна). Спрятан — полоска [`REVEAL`]
     /// у края экрана, чтобы док выехал, когда к ней подведут указатель.
     pub fn input_rects(&self, hidden: f32) -> Vec<(i32, i32, u32, u32)> {
         let h = self.window_height() as f32;
         let (slots, x, w) = self.slots_at(self.pointer);
         if hidden >= 1.0 {
-            return vec![(x as i32, (h - 1.0) as i32, w as u32, 1)];
+            return vec![(x as i32, h as i32 - REVEAL as i32, w as u32, REVEAL)];
         }
         let bottom = self.bar_bottom(h, hidden);
         let tallest = slots.iter().map(|s| s.size).fold(self.icon(), f32::max);
@@ -214,6 +218,6 @@ mod tests {
             "при наведении — выше, под увеличенные значки"
         );
         let hidden = d.input_rects(1.0);
-        assert_eq!(hidden[0].3, 1);
+        assert_eq!(hidden[0].3, super::REVEAL);
     }
 }
