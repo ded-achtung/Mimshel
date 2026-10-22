@@ -1,10 +1,10 @@
 //! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
 
 mod dock_ui;
-mod doctor;
 mod guard;
 mod menubar_ui;
 mod notify_ui;
+mod setup;
 mod status;
 mod ui;
 
@@ -24,7 +24,12 @@ const HELP: &str = "\
   shell launchpad       открыть или закрыть Launchpad (через службу, без неё — сам)
   shell snapshot spotlight|launchpad ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
-  shell doctor [--fix]  проверить, что всё на месте; --fix — починить (через macos-look)";
+  shell doctor [--fix]  проверить, что всё на месте; --fix — починить
+  shell config          где файл настроек и что в нём можно менять
+  shell set КЛЮЧ ЗНАЧЕНИЕ
+                        поменять настройку и применить (например: shell set dock.icon_size 56,
+                        shell set parts.dock plank — вернуть Plank)
+  shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers service (без частей — все)";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -41,8 +46,13 @@ fn main() {
         }
         Some("daemon") => guard::run(),
         Some("doctor") if args.len() == 1 || (args.len() == 2 && args[1] == "--fix") => {
-            std::process::exit(doctor::run(args.len() == 2))
+            std::process::exit(setup::doctor(args.len() == 2))
         }
+        Some("set") if args.len() >= 3 => {
+            std::process::exit(setup::set(&args[1], &args[2..].join(" ")))
+        }
+        Some("apply") => std::process::exit(setup::apply_cmd(&args[1..])),
+        Some("config") => std::process::exit(setup::show_config()),
         Some(cmd) if ui::Panel::parse(cmd).is_some() => {
             let panel = ui::Panel::parse(cmd).expect("проверено выше");
             if !ui::ask_daemon(panel) {

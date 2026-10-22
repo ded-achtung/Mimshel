@@ -225,3 +225,132 @@ pub fn which(program: &str) -> Option<PathBuf> {
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
+
+/// Запустить команду и дождаться; ошибку только печатаем — так же поступал
+/// macos-look: одна несработавшая настройка не должна обрывать остальные.
+pub fn run(args: &[&str]) -> bool {
+    let Some((program, rest)) = args.split_first() else {
+        return false;
+    };
+    match command(program).args(rest).stdout(Stdio::null()).status() {
+        Ok(s) if s.success() => true,
+        Ok(s) => {
+            eprintln!("  {} — ошибка ({s})", args.join(" "));
+            false
+        }
+        Err(e) => {
+            eprintln!("  {program}: {e}");
+            false
+        }
+    }
+}
+
+/// Запустить фоновую программу, отвязанную от терминала.
+pub fn spawn(args: &[&str]) {
+    let _ = command("setsid")
+        .arg("-f")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Остановить свои процессы с этим именем и дождаться, пока они выйдут (до 3 с).
+pub fn kill(name: &str) {
+    let pattern = format!(r"^(\S*/)?{name}(\s|$)");
+    let _ = command("pkill")
+        .args(["-u", &uid().to_string(), "-f", &pattern])
+        .status();
+    for _ in 0..30 {
+        if !running(name) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Записать настройку Xfce (`-n` — создать, если её нет).
+pub fn xset(channel: &str, prop: &str, kind: &str, value: &str) -> bool {
+    run(&[
+        "xfconf-query",
+        "-c",
+        channel,
+        "-p",
+        prop,
+        "-n",
+        "-t",
+        kind,
+        "-s",
+        value,
+    ])
+}
+
+/// Записать массив в настройки Xfce.
+pub fn xset_array(channel: &str, prop: &str, kind: &str, values: &[&str]) -> bool {
+    let mut args = vec!["xfconf-query", "-c", channel, "-p", prop, "-n", "-a"];
+    for v in values {
+        args.extend(["-t", kind, "-s", v]);
+    }
+    run(&args)
+}
+
+/// Сбросить настройку Xfce (со всем, что под ней).
+pub fn xreset(channel: &str, prop: &str) {
+    let _ = command("xfconf-query")
+        .args(["-c", channel, "-p", prop, "-r", "-R"])
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Записать файл, только если текст поменялся, и сразу целиком (через
+/// временный файл): панель Xfce следит за файлами и успевала прочитать пустой.
+pub fn write_if_changed(path: &Path, text: &str) -> std::io::Result<bool> {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(text) {
+        return Ok(false);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.tmp"));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(true)
+}
+
+/// Удалить файл, если он есть.
+pub fn remove(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("  не удалось удалить {}: {e}", path.display());
+    }
+}
+
+/// Все раскладки из настроек загружены в X (после выхода панели Xfce её модуль
+/// раскладки иногда оставляет одну — урок 15).
+pub fn keyboard_ok() -> bool {
+    let want = xkb_query("layout");
+    let display = std::env::var("DISPLAY")
+        .ok()
+        .or_else(|| session_env().remove("DISPLAY"))
+        .unwrap_or_else(|| ":0".into());
+    let symbols = output_any(&["xkbcomp", "-xkb", &display, "-"]);
+    let line = symbols
+        .lines()
+        .find(|l| l.contains("xkb_symbols"))
+        .unwrap_or("");
+    want.split(',')
+        .filter(|c| !c.is_empty())
+        .all(|c| line.contains(c))
+}
+
+/// Строка из `setxkbmap -query` (rules, model, layout, options).
+pub fn xkb_query(key: &str) -> String {
+    output_any(&["setxkbmap", "-query"])
+        .lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}

@@ -85,8 +85,7 @@ pub(crate) enum Msg {
 }
 
 /// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
-/// Файла ещё нет — он создаётся из нынешних настроек macos-look. Какие
-/// части включены, пока решает macos-look: эти переключатели — из его файла.
+/// Файла ещё нет — он создаётся из нынешних настроек macos-look.
 pub fn load_config() -> Config {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let look = home
@@ -108,7 +107,17 @@ pub fn load_config() -> Config {
                 );
                 good_copy()
                     .and_then(|p| std::fs::read_to_string(p).ok())
-                    .map(|text| Config::from_toml(&text))
+                    .map(|text| {
+                        let mut c = Config::from_toml(&text);
+                        if !shell_core::config::has_parts(&text)
+                            && let Some(look) = &look
+                        {
+                            for (name, ..) in shell_core::config::PARTS {
+                                c.set_part(name, look.part(name) == Some(true));
+                            }
+                        }
+                        c
+                    })
                     .or_else(|| look.clone())
                     .unwrap_or_default()
             }
@@ -127,10 +136,26 @@ pub fn load_config() -> Config {
         }
         None => Config::default(),
     };
-    if let Some(look) = look {
-        config.dock = look.dock;
-        config.menubar = look.menubar;
-        config.notify = look.notify;
+    // Файл создан до раздела `[parts]` — какие части включены, берём у
+    // macos-look и дописываем в файл.
+    if let (Some(path), Some(look)) = (config_path(), look)
+        && let Ok(text) = std::fs::read_to_string(&path)
+        && shell_core::config::toml_error(&text).is_none()
+        && !shell_core::config::has_parts(&text)
+    {
+        let mut text = Some(text);
+        for (name, old, _) in shell_core::config::PARTS {
+            let shell = look.part(name) == Some(true);
+            config.set_part(name, shell);
+            let value = if shell { "shell" } else { old };
+            text = text
+                .and_then(|t| shell_core::config::set_value(&t, "parts", name, (*value).into()));
+        }
+        if let Some(text) = text
+            && let Err(e) = write_file(&path, &text)
+        {
+            eprintln!("Не удалось дописать [parts] в {}: {e}", path.display());
+        }
     }
     config
 }

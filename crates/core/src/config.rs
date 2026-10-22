@@ -41,18 +41,29 @@ pub struct Config {
     /// Увеличение под мышью в процентах (`None` — выключено).
     pub dock_zoom: Option<u32>,
     pub dock_hide: DockHide,
-    /// Показывать свой док (`[dock] engine = shell`); иначе док — Plank.
+    /// Какие части делает shell, а какие — прежние программы (`[parts]`,
+    /// см. [`PARTS`]): док (иначе Plank), строка меню (иначе панель Xfce),
+    /// уведомления (иначе xfce4-notifyd), Spotlight и Launchpad (иначе rofi).
     pub dock: bool,
-    /// Своя строка меню (`[menubar] engine = shell`); иначе — панель Xfce.
     pub menubar: bool,
+    pub notify: bool,
+    pub spotlight: bool,
+    pub launchpad: bool,
     /// Высота строки меню, иконка меню яблока и формат часов (как у `date`) —
     /// из `[panel]`, как у нынешней панели Xfce.
     pub menubar_height: u32,
     pub menu_icon: String,
     pub clock_format: String,
-    /// Свои уведомления (`[notify] engine = shell`); иначе — xfce4-notifyd.
-    pub notify: bool,
 }
+
+/// Части, которые может делать shell: (имя, прежняя программа, что это).
+pub const PARTS: &[(&str, &str, &str)] = &[
+    ("dock", "plank", "док"),
+    ("menubar", "xfce", "строка меню (прежняя — панель Xfce)"),
+    ("notify", "xfce", "уведомления (прежние — xfce4-notifyd)"),
+    ("spotlight", "rofi", "Spotlight"),
+    ("launchpad", "rofi", "Launchpad"),
+];
 
 impl Default for Config {
     fn default() -> Config {
@@ -78,6 +89,8 @@ impl Default for Config {
             dock_hide: DockHide::Smart,
             dock: false,
             menubar: false,
+            spotlight: false,
+            launchpad: false,
             menubar_height: 28,
             menu_icon: "start-here".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
@@ -134,6 +147,8 @@ impl Config {
         c.dock = get("dock", "engine").is_some_and(|e| e == "shell");
         c.menubar = get("menubar", "engine").is_some_and(|e| e == "shell");
         c.notify = get("notify", "engine").is_some_and(|e| e == "shell");
+        c.spotlight = get("spotlight", "engine").is_some_and(|e| e == "shell");
+        c.launchpad = get("launchpad", "engine").is_some_and(|e| e == "shell");
         if let Some(v) = num("panel", "height").filter(|&v| v >= 16) {
             c.menubar_height = v;
         }
@@ -178,6 +193,34 @@ impl DockHide {
 }
 
 impl Config {
+    /// Делает ли часть shell (`None` — нет такой части).
+    pub fn part(&self, name: &str) -> Option<bool> {
+        Some(match name {
+            "dock" => self.dock,
+            "menubar" => self.menubar,
+            "notify" => self.notify,
+            "spotlight" => self.spotlight,
+            "launchpad" => self.launchpad,
+            _ => return None,
+        })
+    }
+
+    pub fn set_part(&mut self, name: &str, shell: bool) {
+        match name {
+            "dock" => self.dock = shell,
+            "menubar" => self.menubar = shell,
+            "notify" => self.notify = shell,
+            "spotlight" => self.spotlight = shell,
+            "launchpad" => self.launchpad = shell,
+            _ => {}
+        }
+    }
+
+    /// Нужна ли служба shell вообще.
+    pub fn shell_needed(&self) -> bool {
+        PARTS.iter().any(|(name, ..)| self.part(name) == Some(true))
+    }
+
     /// Настройки из своего файла поверх значений по умолчанию. Непонятные
     /// значения и сломанный файл не мешают запуску: берётся значение по
     /// умолчанию.
@@ -256,11 +299,15 @@ impl Config {
         if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
             c.launchpad_icon = v;
         }
+        for (name, ..) in PARTS {
+            if let Some(v) = get("parts", name).and_then(|v| v.as_str()) {
+                c.set_part(name, v == "shell");
+            }
+        }
         c
     }
 
     /// Текст своего файла настроек с пояснениями — для первого создания.
-    /// Переключатели частей (`dock`, `menubar`, `notify`) сюда не пишутся.
     pub fn to_toml(&self) -> String {
         let s = |v: &str| Value::from(v).to_string();
         let list = |v: &[String]| {
@@ -270,11 +317,29 @@ impl Config {
         let zoom = self
             .dock_zoom
             .map_or("false".to_string(), |p| p.to_string());
+        let part = |name: &str| {
+            let old = PARTS.iter().find(|p| p.0 == name).map_or("", |p| p.1);
+            s(if self.part(name) == Some(true) {
+                "shell"
+            } else {
+                old
+            })
+        };
         format!(
             "\
-# Настройки оболочки shell. После правки перезапустите службу: macos-look apply menu
-# Какие части включены (док, строка меню, уведомления), пока задаёт macos-look:
-#   macos-look set dock.engine shell   (или plank; menubar.engine, notify.engine)
+# Настройки оболочки shell. Менять удобнее командой, она сразу применяет:
+#   shell set dock.icon_size 56
+# После правки руками: shell apply
+
+[parts]
+# Что делает shell, а что — прежние программы:
+# dock — \"shell\" или \"plank\"; menubar — \"shell\" или \"xfce\" (панель Xfce);
+# notify — \"shell\" или \"xfce\" (xfce4-notifyd); spotlight и launchpad — \"shell\" или \"rofi\".
+dock = {p_dock}
+menubar = {p_menubar}
+notify = {p_notify}
+spotlight = {p_spotlight}
+launchpad = {p_launchpad}
 
 [look]
 # Шрифт и тема иконок.
@@ -320,29 +385,117 @@ terminal = {terminal}
             rows = self.launchpad_rows,
             lp_icon = self.launchpad_icon,
             terminal = list(&self.terminal),
+            p_dock = part("dock"),
+            p_menubar = part("menubar"),
+            p_notify = part("notify"),
+            p_spotlight = part("spotlight"),
+            p_launchpad = part("launchpad"),
         )
     }
 }
 
-/// Текст файла настроек, в котором `[dock] apps` заменён на `apps`.
-/// Пояснения и остальные строки не меняются. Сломанный файл — `None`
-/// (не затираем то, что человек, может быть, правит прямо сейчас).
-pub fn set_dock_apps(text: &str, apps: &[String]) -> Option<String> {
+/// Текст файла настроек, в котором `[раздел] ключ` заменён на `value` (или
+/// добавлен). Пояснения и остальные строки не меняются. Сломанный файл —
+/// `None` (не затираем то, что человек, может быть, правит прямо сейчас).
+pub fn set_value(text: &str, section: &str, key: &str, value: Value) -> Option<String> {
     let mut doc = text.parse::<DocumentMut>().ok()?;
-    if !doc.contains_table("dock") {
-        doc["dock"] = toml_edit::table();
+    if !doc.contains_table(section) {
+        doc[section] = toml_edit::table();
     }
-    let new: Array = apps.iter().map(String::as_str).collect();
-    match doc["dock"].get_mut("apps").and_then(|v| v.as_value_mut()) {
+    match doc[section].get_mut(key).and_then(|v| v.as_value_mut()) {
         // Пробелы и пояснение после значения остаются прежними.
         Some(old) => {
             let decor = old.decor().clone();
-            *old = Value::Array(new);
+            *old = value;
             *old.decor_mut() = decor;
         }
-        None => doc["dock"]["apps"] = toml_edit::value(new),
+        None => doc[section][key] = toml_edit::value(value),
     }
     Some(doc.to_string())
+}
+
+/// [`set_value`] для `[dock] apps`.
+pub fn set_dock_apps(text: &str, apps: &[String]) -> Option<String> {
+    let new: Array = apps.iter().map(String::as_str).collect();
+    set_value(text, "dock", "apps", Value::Array(new))
+}
+
+/// Есть ли в файле раздел `[parts]` (в файлах, созданных до него, нет).
+pub fn has_parts(text: &str) -> bool {
+    text.parse::<DocumentMut>()
+        .is_ok_and(|d| d.contains_table("parts"))
+}
+
+/// Настройки, которые меняет `shell set`: (раздел.ключ, что это).
+pub const SETTINGS: &[(&str, &str)] = &[
+    ("parts.dock", "\"shell\" или \"plank\""),
+    ("parts.menubar", "\"shell\" или \"xfce\""),
+    ("parts.notify", "\"shell\" или \"xfce\""),
+    ("parts.spotlight", "\"shell\" или \"rofi\""),
+    ("parts.launchpad", "\"shell\" или \"rofi\""),
+    ("look.font", "название шрифта"),
+    ("look.icon_theme", "тема иконок"),
+    ("menubar.height", "высота строки меню, от 16"),
+    ("menubar.menu_icon", "иконка меню яблока"),
+    ("menubar.clock_format", "формат часов, как у date"),
+    ("dock.apps", "программы через запятую"),
+    ("dock.icon_size", "размер значков, от 16"),
+    ("dock.zoom", "увеличение в процентах (от 100) или false"),
+    ("dock.hide", "never, smart, auto или maximized"),
+    ("launchpad.columns", "столбцов, от 1"),
+    ("launchpad.rows", "строк, от 1"),
+    ("launchpad.icon_size", "размер значков, от 16"),
+    ("apps.terminal", "команда терминала через пробел"),
+];
+
+/// Значение для файла из того, что набрали в `shell set` (`раздел.ключ`).
+pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
+    let input = input.trim();
+    let number = |min: i64| match input.parse::<i64>() {
+        Ok(n) if n >= min => Ok(Value::from(n)),
+        _ => Err(format!("нужно число от {min}")),
+    };
+    let words = |list: &[&str]| {
+        if list.contains(&input) {
+            Ok(Value::from(input))
+        } else {
+            Err(format!("можно: {}", list.join(", ")))
+        }
+    };
+    match key {
+        _ if key.starts_with("parts.") => {
+            let name = &key["parts.".len()..];
+            let (_, old, _) = PARTS
+                .iter()
+                .find(|p| p.0 == name)
+                .ok_or_else(|| format!("нет части {name}"))?;
+            words(&["shell", old])
+        }
+        "look.font" | "look.icon_theme" | "menubar.menu_icon" | "menubar.clock_format" => {
+            if input.is_empty() {
+                Err("пустое значение".into())
+            } else {
+                Ok(Value::from(input))
+            }
+        }
+        "menubar.height" | "dock.icon_size" | "launchpad.icon_size" => number(16),
+        "launchpad.columns" | "launchpad.rows" => number(1),
+        "dock.zoom" if input == "false" || input == "no" => Ok(Value::from(false)),
+        "dock.zoom" => number(100),
+        "dock.hide" => words(&["never", "smart", "auto", "maximized"]),
+        "dock.apps" => Ok(Value::Array(
+            input
+                .split(',')
+                .map(|a| a.trim().trim_end_matches(".desktop"))
+                .filter(|a| !a.is_empty())
+                .collect(),
+        )),
+        "apps.terminal" if !input.is_empty() => {
+            Ok(Value::Array(input.split_whitespace().collect()))
+        }
+        _ if SETTINGS.iter().any(|s| s.0 == key) => Err("пустое значение".into()),
+        _ => Err(format!("нет настройки {key}")),
+    }
 }
 
 /// Ошибка в тексте своего файла настроек (`None` — файл разбирается).
@@ -413,8 +566,7 @@ mod tests {
             "[dock]\napps = thunar, firefox\nzoom = no\nhide_mode = 2\n\
              [panel]\nclock_format = %H:%M \"x\"\n",
         );
-        // Переключатели частей в свой файл не пишутся.
-        c.dock = false;
+        c.notify = true;
         let text = c.to_toml();
         assert_eq!(Config::from_toml(&text), c, "{text}");
         assert_eq!(Config::from_toml(&text).clock_format, "%H:%M \"x\"");
@@ -422,6 +574,34 @@ mod tests {
             Config::from_toml(&Config::default().to_toml()),
             Config::default()
         );
+    }
+
+    #[test]
+    fn settings_from_command() {
+        let text = Config::default().to_toml();
+        assert!(has_parts(&text));
+        assert!(!has_parts("[dock]\n"));
+        let set = |text: &str, key: &str, input: &str| {
+            let (section, k) = key.split_once('.').unwrap();
+            set_value(text, section, k, setting_value(key, input).unwrap()).unwrap()
+        };
+        let text = set(&text, "parts.dock", "shell");
+        let text = set(&text, "dock.zoom", "false");
+        let text = set(&text, "dock.apps", "thunar, firefox.desktop");
+        let text = set(&text, "apps.terminal", "kitty -e");
+        let c = Config::from_toml(&text);
+        assert!(c.dock && !c.menubar);
+        assert_eq!(c.dock_zoom, None);
+        assert_eq!(c.dock_apps, ["thunar", "firefox"]);
+        assert_eq!(c.terminal, ["kitty", "-e"]);
+        assert!(
+            text.contains("# Увеличение под мышью"),
+            "пояснения остались"
+        );
+        assert!(setting_value("parts.dock", "xfce").is_err());
+        assert!(setting_value("parts.menubar", "xfce").is_ok());
+        assert!(setting_value("dock.icon_size", "8").is_err());
+        assert!(setting_value("dock.size", "48").is_err());
     }
 
     #[test]

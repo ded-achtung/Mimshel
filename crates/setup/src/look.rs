@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use shell_core::config::parse_ini;
 
-use crate::sys::home;
+use crate::sys::{home, write_if_changed};
 
 /// Значения по умолчанию: (раздел, ключ, значение).
 const DEFAULTS: &[(&str, &str, &str)] = &[
@@ -16,17 +16,12 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ("look", "font", "Inter 10"),
     ("wallpaper", "dark", "Sonoma-dark"),
     ("wallpaper", "light", "Sonoma-light"),
-    ("dock", "engine", "plank"),
-    ("launchpad", "engine", "rofi"),
     (
         "launchpad",
         "hide",
         "rofi, rofi-theme-selector, qv4l2, qvidcap, xterm, uxterm, yad-settings, plank, \
          reflector-simple",
     ),
-    ("spotlight", "engine", "rofi"),
-    ("menubar", "engine", "xfce"),
-    ("notify", "engine", "xfce"),
 ];
 
 /// Меню яблока: (имя ярлыка, подпись).
@@ -85,6 +80,67 @@ pub struct Names {
     pub wallpaper: String,
 }
 
+/// Записать, кто делает часть, и в конфиг macos-look: пока он применяет
+/// оформление, он должен видеть то же, что и shell, иначе вернёт прежнюю
+/// программу.
+pub fn set_macos_look_engine(part: &str, value: &str) -> std::io::Result<()> {
+    let path = home().join(".config/macos-look/config.ini");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        // Нет macos-look — и согласовывать не с кем.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    write_if_changed(&path, &set_ini_value(&text, part, "engine", value)).map(|_| ())
+}
+
+/// Текст ini, в котором `ключ = значение` в `[раздел]` заменено (или добавлено).
+/// Остальные строки, комментарии и порядок не меняются.
+pub fn set_ini_value(text: &str, section: &str, key: &str, value: &str) -> String {
+    let new_line = format!("{key} = {value}");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut current = String::new();
+    // Последняя непустая строка нужного раздела — после неё допишем ключ.
+    let mut section_end = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with(';') {
+            continue;
+        }
+        if let Some(s) = t.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            current = s.trim().to_string();
+            if current == section {
+                section_end = Some(i);
+            }
+        } else if current == section {
+            section_end = Some(i);
+            if t.split_once('=').is_some_and(|(k, _)| k.trim() == key) {
+                lines[i] = new_line;
+                return join_lines(lines, text);
+            }
+        }
+    }
+    match section_end {
+        Some(i) => lines.insert(i + 1, new_line),
+        None => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{section}]"));
+            lines.push(new_line);
+        }
+    }
+    join_lines(lines, text)
+}
+
+fn join_lines(lines: Vec<String>, original: &str) -> String {
+    let mut out = lines.join("\n");
+    if original.is_empty() || original.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 pub struct Look {
     ini: HashMap<(String, String), String>,
 }
@@ -114,19 +170,6 @@ impl Look {
             })
             .unwrap_or("")
             .trim()
-    }
-
-    /// Делает ли эту часть (dock, menubar, notify, spotlight, launchpad)
-    /// своя программа shell.
-    pub fn shell(&self, part: &str) -> bool {
-        self.get(part, "engine") == "shell"
-    }
-
-    /// Нужна ли служба shell вообще.
-    pub fn shell_needed(&self) -> bool {
-        ["dock", "menubar", "notify", "spotlight", "launchpad"]
-            .iter()
-            .any(|p| self.shell(p))
     }
 
     pub fn dark(&self) -> bool {
@@ -161,13 +204,11 @@ impl Look {
             .collect()
     }
 
-    /// Команда для сочетания клавиш и значка Launchpad.
-    pub fn shortcut_command(&self, paths: &Paths, action: &str) -> String {
-        let program = if self.shell(action) {
-            &paths.shell_bin
-        } else {
-            &paths.tool
-        };
+    /// Команда для сочетания клавиш и значка Launchpad: своя программа
+    /// напрямую (запуск Python добавил бы к открытию ~0,1 с) или rofi через
+    /// macos-look.
+    pub fn shortcut_command(paths: &Paths, action: &str, shell: bool) -> String {
+        let program = if shell { &paths.shell_bin } else { &paths.tool };
         format!("{} {action}", program.display())
     }
 }
@@ -178,10 +219,7 @@ mod tests {
 
     #[test]
     fn defaults_and_names() {
-        let look = Look::from_text("[look]\nvariant = light\n[dock]\nengine = shell\n");
-        assert!(look.shell("dock"));
-        assert!(!look.shell("menubar"));
-        assert!(look.shell_needed());
+        let look = Look::from_text("[look]\nvariant = light\n");
         let n = look.names();
         assert_eq!(n.theme, "WhiteSur-Light");
         assert_eq!(n.icons, "WhiteSur-light-mac");
@@ -192,5 +230,24 @@ mod tests {
                 .hidden_apps()
                 .contains(&"xterm".to_string())
         );
+    }
+
+    #[test]
+    fn set_value_keeps_the_rest() {
+        let text = "# шапка\n[dock]\nengine = shell\napps = a, b\n\n[lock]\napps = x\n";
+        let out = set_ini_value(text, "dock", "apps", "a, b, c");
+        assert_eq!(
+            out,
+            "# шапка\n[dock]\nengine = shell\napps = a, b, c\n\n[lock]\napps = x\n"
+        );
+
+        // Ключа нет — дописывается в конец своего раздела.
+        let out = set_ini_value("[dock]\nengine = shell\n\n[lock]\n", "dock", "apps", "a");
+        assert_eq!(out, "[dock]\nengine = shell\napps = a\n\n[lock]\n");
+
+        // Раздела нет — появляется в конце.
+        let out = set_ini_value("[look]\nfont = Inter", "dock", "apps", "a");
+        assert_eq!(out, "[look]\nfont = Inter\n\n[dock]\napps = a");
+        assert_eq!(set_ini_value("", "dock", "apps", "a"), "[dock]\napps = a\n");
     }
 }

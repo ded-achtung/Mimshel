@@ -7,10 +7,12 @@
 
 use std::path::Path;
 
+use shell_core::config::Config;
+
 use crate::look::{APPLE_MENU, Look, Paths};
 use crate::sys::{
-    bus_owner, home, in_desktop_session, output, output_any, parent, pgrep, read, running,
-    succeeds, which, xget, xget_list,
+    bus_owner, home, in_desktop_session, keyboard_ok, output, output_any, parent, pgrep, read,
+    running, succeeds, which, xget, xget_list,
 };
 
 /// Пакеты из репозитория и из AUR (их ставит `macos-look install`).
@@ -65,8 +67,8 @@ pub struct Check {
     pub hint: String,
 }
 
-/// Все проверки. `config` — свой файл настроек службы.
-pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
+/// Все проверки. `cfg` — настройки shell, `config` — их файл.
+pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     let mut out = Vec::new();
     let mut add = |part: &'static str, what: &str, ok: bool, hint: &str| {
         out.push(Check {
@@ -243,7 +245,7 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
     );
 
     // Строка меню: своя или панель Xfce.
-    if look.shell("menubar") {
+    if cfg.menubar {
         add(
             "panel",
             "строка меню — shell: панель Xfce не запускается при входе",
@@ -285,7 +287,7 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
 
     let masked = output_any(&["systemctl", "--user", "is-enabled", "xfce4-notifyd.service"]).trim()
         == "masked";
-    if look.shell("notify") {
+    if cfg.notify {
         add(
             "notify",
             "уведомления показывает shell",
@@ -361,7 +363,7 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
         );
     }
     for (keys, action) in SHORTCUTS {
-        let want = look.shortcut_command(&paths, action);
+        let want = Look::shortcut_command(&paths, action, cfg.part(action) == Some(true));
         add(
             "menu",
             &format!("сочетание {keys} → {want}"),
@@ -374,16 +376,12 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
             "",
         );
     }
-    let launchpad_cmd = look.shortcut_command(&paths, "launchpad");
+    let launchpad_cmd = Look::shortcut_command(&paths, "launchpad", cfg.launchpad);
     add(
         "menu",
         &format!(
             "значок Launchpad → {}",
-            if look.shell("launchpad") {
-                "shell"
-            } else {
-                "rofi"
-            }
+            if cfg.launchpad { "shell" } else { "rofi" }
         ),
         read(&launchpad).contains(&format!("Exec={launchpad_cmd}\n")),
         "",
@@ -457,7 +455,7 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
     }
 
     // Служба shell.
-    if look.shell_needed() {
+    if cfg.shell_needed() {
         add(
             "shell",
             "программа shell установлена",
@@ -492,7 +490,7 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
                 &hint,
             );
         }
-        if look.shell("menubar") {
+        if cfg.menubar {
             for (name, what) in [
                 ("org.kde.StatusNotifierWatcher", "значки трея"),
                 ("com.canonical.AppMenu.Registrar", "глобальное меню"),
@@ -520,7 +518,7 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
     }
 
     // Док.
-    if look.shell("dock") {
+    if cfg.dock {
         add(
             "dock",
             "док — shell, Plank не запущен",
@@ -574,8 +572,9 @@ pub fn checks(look: &Look, config: Option<&Path>) -> Vec<Check> {
     out
 }
 
-/// Что применить macos-look, чтобы починить найденное (`install` — сначала
-/// поставить пакеты). `None` — чинить нечего или нельзя (нет сеанса).
+/// Что применить, чтобы починить найденное: части оформления (macos-look;
+/// `install` — сначала поставить пакеты) и части shell ([`crate::parts`]).
+/// `None` — чинить нечего или нельзя (нет сеанса).
 pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
     let mut parts: Vec<&'static str> = Vec::new();
     for c in checks.iter().filter(|c| !c.ok) {
@@ -585,8 +584,11 @@ pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
             "config" => continue,
             _ => {}
         }
-        // Службу shell перезапускает применение меню.
-        let part = if c.part == "shell" { "menu" } else { c.part };
+        let part = match c.part {
+            "panel" => "menubar",
+            "shell" => "service",
+            p => p,
+        };
         if !parts.contains(&part) {
             parts.push(part);
         }
@@ -623,27 +625,6 @@ fn panel_session_slot(command: &[&str]) -> bool {
         .unwrap_or(0);
     (0..count)
         .any(|i| xget_list("xfce4-session", &format!("{SESSION}/Client{i}_Command")) == command)
-}
-
-/// Все раскладки из настроек загружены в X (после выхода панели Xfce её модуль
-/// раскладки иногда оставляет одну — урок 15).
-fn keyboard_ok() -> bool {
-    let query = output_any(&["setxkbmap", "-query"]);
-    let want = query
-        .lines()
-        .find_map(|l| l.strip_prefix("layout:"))
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
-    let symbols = output_any(&["xkbcomp", "-xkb", &display, "-"]);
-    let line = symbols
-        .lines()
-        .find(|l| l.contains("xkb_symbols"))
-        .unwrap_or("");
-    want.split(',')
-        .filter(|c| !c.is_empty())
-        .all(|c| line.contains(c))
 }
 
 /// Размер экрана из xrandr.
@@ -686,7 +667,7 @@ mod tests {
                 check("look", true),
                 check("config", false),
             ]),
-            Some(vec!["menu", "dock"])
+            Some(vec!["service", "dock", "menu"])
         );
         assert_eq!(fix_parts(&[check("config", false)]), None);
         assert_eq!(

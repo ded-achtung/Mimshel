@@ -140,7 +140,18 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      глобальное меню у shell, нет брошенных наблюдателей, файл настроек без ошибок. Окружение
      сеанса для команд берётся само (можно запускать по SSH). `--fix` пока вызывает
      `macos-look apply ЧАСТИ` (`install`, если не хватает пакетов); ошибку в файле настроек не чинит.
-   - дальше: включение частей (`apply`/`set`), сторож блокировки и действия меню яблока
+   - 5в **сделано** (22.10.2026): включение частей — `crates/setup/src/parts.rs`. Какие части делает
+     shell — раздел `[parts]` своего файла (dock/menubar/notify/spotlight/launchpad = "shell" или
+     прежняя программа: plank, xfce, xfce, rofi, rofi); старый файл без раздела служба дополняет
+     из macos-look. `shell set раздел.ключ значение` — проверяет, пишет (пояснения в файле остаются)
+     и применяет; `shell apply [menubar dock notify launchers service]`; `shell config` — что
+     можно менять. Переключатели `shell set` пишет и в `config.ini` macos-look, а
+     `macos-look set dock.engine …` (и menubar, notify, spotlight, launchpad) передаёт в `shell set`
+     — иначе `macos-look apply` вернул бы прежнее. Проверено туда и обратно: Plank, панель Xfce
+     (раскладки целы), xfce4-notifyd, rofi. `doctor --fix` чинит эти части сам, остальное — macos-look.
+     **Для окна настроек (шаг 7):** `apply` перезапускает службу — из самой службы так нельзя,
+     понадобится перечитывание настроек на лету.
+   - дальше: сторож блокировки и действия меню яблока
      (модуль `lock`), `backup`/`restore`, оформление (тема, курсор, обои), `install` и сборки.
 6. **Свои иконки и оформление вместо маковских** (после переноса настроек) — чтобы не было
    проблем с авторскими правами: значки Apple, тема WhiteSur и обои Sonoma заменить своими.
@@ -192,7 +203,7 @@ icon_size, zoom, zoom_percent, hide_mode); служба читает конфи�
 окружения процесса (GIO_LAUNCHED_DESKTOP_FILE + _PID, наш запуск ставит оба через `sh -c`),
 StartupWMClass, имя ярлыка, имя команды (урок 6). Журнал событий дока: `SHELL_DEBUG_DOCK=1`.
 Помощники: `examples/windows` (окна, как их видит док), `examples/attrs 0x…` (маски событий окна).
-После пересборки: `install -m 755 target/release/shell ~/.local/bin/shell` и `macos-look apply menu`
+После пересборки: `install -m 755 target/release/shell ~/.local/bin/shell` и `shell apply service`
 — перезапустит службу с окружением сеанса (старую останавливать не нужно).
 
 ## Замеры (22.10.2026, экран 1278×798, ВМ)
