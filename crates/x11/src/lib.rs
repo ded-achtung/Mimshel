@@ -31,6 +31,21 @@ use xkeysym::{Keysym, key};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Отдельное тихое соединение с X-сервером, чтобы узнать, когда он закроется
+/// (выход из сеанса). Событий не просит — только ждёт обрыва.
+pub struct ServerWatch(RustConnection);
+
+impl ServerWatch {
+    pub fn connect() -> Result<ServerWatch> {
+        Ok(ServerWatch(RustConnection::connect(None)?.0))
+    }
+
+    /// Вернётся, когда соединение оборвётся.
+    pub fn wait_closed(self) {
+        while self.0.wait_for_event().is_ok() {}
+    }
+}
+
 x11rb::atom_manager! {
     /// Имена свойств EWMH/ICCCM, которые нужны оболочке.
     pub(crate) Atoms: AtomsCookie {
