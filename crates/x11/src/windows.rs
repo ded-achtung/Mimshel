@@ -162,7 +162,11 @@ impl Display {
         Some(out)
     }
 
-    /// Положение и размер окна вместе с рамкой, в координатах экрана.
+    /// Положение и размер окна вместе с рамкой, в координатах экрана — то,
+    /// что видно на экране. Рамку рисует xfwm4 (`_NET_FRAME_EXTENTS`) или сама
+    /// программа: тогда вокруг окна ещё и невидимая тень (`_GTK_FRAME_EXTENTS`,
+    /// у Firefox около 25 пикселей) — её не считаем, иначе «умное» скрытие
+    /// думало бы, что окно заходит на док.
     pub fn frame_geometry(&self, w: Window) -> Option<(i32, i32, u32, u32)> {
         let g = self.conn.get_geometry(w).ok()?.reply().ok()?;
         let t = self
@@ -171,17 +175,21 @@ impl Display {
             .ok()?
             .reply()
             .ok()?;
-        let e = self.cardinals(w, self.atoms._NET_FRAME_EXTENTS, AtomEnum::CARDINAL);
-        let (l, r, top, b) = match e.as_slice() {
+        let (l, r, top, b) = self.extents(w, self.atoms._NET_FRAME_EXTENTS);
+        let (sl, sr, st, sb) = self.extents(w, self.atoms._GTK_FRAME_EXTENTS);
+        let x = i32::from(t.dst_x) - l as i32 + sl as i32;
+        let y = i32::from(t.dst_y) - top as i32 + st as i32;
+        let width = (u32::from(g.width) + l + r).saturating_sub(sl + sr);
+        let height = (u32::from(g.height) + top + b).saturating_sub(st + sb);
+        Some((x, y, width.max(1), height.max(1)))
+    }
+
+    /// Поля окна (слева, справа, сверху, снизу) из свойства `atom`.
+    fn extents(&self, w: Window, atom: u32) -> (u32, u32, u32, u32) {
+        match self.cardinals(w, atom, AtomEnum::CARDINAL).as_slice() {
             [l, r, t, b, ..] => (*l, *r, *t, *b),
             _ => (0, 0, 0, 0),
-        };
-        Some((
-            i32::from(t.dst_x) - l as i32,
-            i32::from(t.dst_y) - top as i32,
-            u32::from(g.width) + l + r,
-            u32::from(g.height) + top + b,
-        ))
+        }
     }
 
     /// Снимок содержимого окна программы (без рамки). С композитором
@@ -209,10 +217,22 @@ impl Display {
             px.swap(0, 2);
             px[3] = 255;
         }
-        Pixmap::from_vec(
+        let full = Pixmap::from_vec(
             data,
             IntSize::from_wh(u32::from(g.width), u32::from(g.height))?,
-        )
+        )?;
+        // Невидимую тень вокруг окна (рамку рисует программа) обрезаем — иначе
+        // без прозрачности она стала бы чёрной каймой.
+        let (l, r, t, b) = self.extents(w, self.atoms._GTK_FRAME_EXTENTS);
+        if l + r + t + b == 0 {
+            return Some(full);
+        }
+        let (cw, ch) = (
+            full.width().checked_sub(l + r)?,
+            full.height().checked_sub(t + b)?,
+        );
+        let rect = tiny_skia::IntRect::from_xywh(l as i32, t as i32, cw, ch)?;
+        full.clone_rect(rect)
     }
 
     /// Где указатель мыши на экране.
