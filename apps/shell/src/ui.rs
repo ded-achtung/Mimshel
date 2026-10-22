@@ -94,7 +94,25 @@ pub fn load_config() -> Config {
         .and_then(|h| std::fs::read_to_string(h.join(".config/macos-look/config.ini")).ok())
         .map(|text| Config::from_macos_look(&text));
     let mut config = match config_path().map(|p| (std::fs::read_to_string(&p), p)) {
-        Some((Ok(text), _)) => Config::from_toml(&text),
+        Some((Ok(text), path)) => match shell_core::config::toml_error(&text) {
+            None => {
+                remember_good(&text);
+                Config::from_toml(&text)
+            }
+            // Опечатка в файле не должна сбрасывать док и остальное к
+            // значениям по умолчанию: берём последние рабочие настройки.
+            Some(e) => {
+                eprintln!(
+                    "Ошибка в файле настроек {} — беру последние рабочие настройки:\n{e}",
+                    path.display()
+                );
+                good_copy()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .map(|text| Config::from_toml(&text))
+                    .or_else(|| look.clone())
+                    .unwrap_or_default()
+            }
+        },
         Some((Err(e), path)) if e.kind() == std::io::ErrorKind::NotFound => {
             let config = look.clone().unwrap_or_default();
             match write_file(&path, &config.to_toml()) {
@@ -115,6 +133,26 @@ pub fn load_config() -> Config {
         config.notify = look.notify;
     }
     config
+}
+
+/// Копия последнего исправного файла настроек — на случай опечатки в нём.
+fn good_copy() -> Option<PathBuf> {
+    if std::env::var_os("SHELL_CONFIG").is_some() {
+        return None;
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/shell/config.good.toml"))
+}
+
+fn remember_good(text: &str) {
+    if let Some(path) = good_copy()
+        && std::fs::read_to_string(&path).ok().as_deref() != Some(text)
+        && let Err(e) = write_file(&path, text)
+    {
+        eprintln!(
+            "Не удалось сохранить копию настроек {}: {e}",
+            path.display()
+        );
+    }
 }
 
 /// Файл настроек: из `SHELL_CONFIG` или `~/.config/shell/config.toml`.

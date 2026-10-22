@@ -16,6 +16,7 @@ shell-dock = { path = "../../crates/dock" }
 shell-menubar = { path = "../../crates/menubar" }
 shell-notify = { path = "../../crates/notify" }
 shell-widgets = { path = "../../crates/widgets" }
+shell-setup = { path = "../../crates/setup" }
 tiny-skia = "0.12.0"
 
 [lints]

@@ -996,6 +996,7 @@ dependencies = [
  "shell-launcher",
  "shell-menubar",
  "shell-notify",
+ "shell-setup",
  "shell-text",
  "shell-widgets",
  "shell-x11",
@@ -1074,6 +1075,13 @@ dependencies = [
  "shell-text",
  "shell-widgets",
  "tiny-skia",
+]
+
+[[package]]
+name = "shell-setup"
+version = "0.1.0"
+dependencies = [
+ "shell-core",
 ]
 
 [[package]]

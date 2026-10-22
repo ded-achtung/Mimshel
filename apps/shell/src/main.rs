@@ -1,6 +1,7 @@
 //! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
 
 mod dock_ui;
+mod doctor;
 mod guard;
 mod menubar_ui;
 mod notify_ui;
@@ -22,7 +23,8 @@ const HELP: &str = "\
   shell spotlight       открыть или закрыть Spotlight (через службу, без неё — сам)
   shell launchpad       открыть или закрыть Launchpad (через службу, без неё — сам)
   shell snapshot spotlight|launchpad ТЕКСТ ФАЙЛ.png
-                        нарисовать окно с этим текстом в картинку";
+                        нарисовать окно с этим текстом в картинку
+  shell doctor [--fix]  проверить, что всё на месте; --fix — починить (через macos-look)";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,6 +40,9 @@ fn main() {
             exit_on_error(ui::run(None))
         }
         Some("daemon") => guard::run(),
+        Some("doctor") if args.len() == 1 || (args.len() == 2 && args[1] == "--fix") => {
+            std::process::exit(doctor::run(args.len() == 2))
+        }
         Some(cmd) if ui::Panel::parse(cmd).is_some() => {
             let panel = ui::Panel::parse(cmd).expect("проверено выше");
             if !ui::ask_daemon(panel) {

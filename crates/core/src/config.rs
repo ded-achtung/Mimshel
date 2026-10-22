@@ -345,8 +345,15 @@ pub fn set_dock_apps(text: &str, apps: &[String]) -> Option<String> {
     Some(doc.to_string())
 }
 
+/// Ошибка в тексте своего файла настроек (`None` — файл разбирается).
+pub fn toml_error(text: &str) -> Option<String> {
+    text.parse::<DocumentMut>()
+        .err()
+        .map(|e| e.to_string().trim().to_string())
+}
+
 /// `[раздел]` и `ключ = значение`; строки с `#` и `;` — комментарии.
-fn parse_ini(text: &str) -> HashMap<(String, String), String> {
+pub fn parse_ini(text: &str) -> HashMap<(String, String), String> {
     let mut out = HashMap::new();
     let mut section = String::new();
     for line in text.lines().map(str::trim) {
