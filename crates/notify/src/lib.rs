@@ -27,6 +27,8 @@ const RADIUS: f32 = 14.0;
 const TEXT_X: f32 = PAD + ICON + 10.0;
 const LINE: f32 = 18.0;
 const BUTTON_H: f32 = 26.0;
+/// Промежуток между кнопками (и между их рядами).
+const BUTTON_GAP: f32 = 6.0;
 /// Крестик «закрыть» в левом верхнем углу (при наведении).
 const CLOSE_R: f32 = 9.0;
 const CLOSE_C: (f32, f32) = (4.0 + CLOSE_R, 4.0 + CLOSE_R);
@@ -179,10 +181,15 @@ impl Banners {
     fn banner_height(fonts: &mut Fonts, b: &Banner) -> f32 {
         let lines = Self::body_lines(fonts, b).len() as f32;
         let text = PAD + 16.0 + LINE + lines * LINE + PAD;
-        let buttons = if b.buttons().is_empty() {
+        let rows = Self::button_slots(fonts, b)
+            .iter()
+            .map(|&(_, row, _)| row + 1)
+            .max()
+            .unwrap_or(0) as f32;
+        let buttons = if rows == 0.0 {
             0.0
         } else {
-            BUTTON_H + 8.0
+            rows * BUTTON_H + (rows - 1.0) * BUTTON_GAP + 8.0
         };
         (text + buttons).max(ICON + 2.0 * PAD).ceil()
     }
@@ -207,17 +214,44 @@ impl Banners {
         (WIDTH as u32, h.ceil() as u32)
     }
 
-    /// Кнопки баннера: левый край и ширина (в координатах баннера).
-    fn button_rects(fonts: &mut Fonts, b: &Banner, h: f32) -> Vec<(f32, f32, f32)> {
-        let mut x = TEXT_X;
-        let y = h - PAD - BUTTON_H + 4.0;
-        b.buttons()
+    /// Где стоят кнопки: левый край, ряд и ширина. Влезают в ряд под текстом —
+    /// стоят в ряд; нет — каждая в своём ряду на всю ширину текста (длинные
+    /// подписи вроде «Переход в ждущий режим» иначе вылезали за край).
+    fn button_slots(fonts: &mut Fonts, b: &Banner) -> Vec<(f32, usize, f32)> {
+        let room = WIDTH - TEXT_X - PAD;
+        let widths: Vec<f32> = b
+            .buttons()
             .iter()
-            .map(|(_, label)| {
-                let w = fonts.measure(label, &BUTTON_TEXT) + 24.0;
-                let r = (x, y, w);
-                x += w + 6.0;
-                r
+            .map(|(_, label)| fonts.measure(label, &BUTTON_TEXT) + 24.0)
+            .collect();
+        let row: f32 =
+            widths.iter().sum::<f32>() + BUTTON_GAP * widths.len().saturating_sub(1) as f32;
+        if row <= room {
+            let mut x = TEXT_X;
+            widths
+                .iter()
+                .map(|&w| {
+                    let slot = (x, 0, w);
+                    x += w + BUTTON_GAP;
+                    slot
+                })
+                .collect()
+        } else {
+            (0..widths.len()).map(|i| (TEXT_X, i, room)).collect()
+        }
+    }
+
+    /// Кнопки баннера высотой `h`: левый край, верх и ширина (в координатах
+    /// баннера). Ряды прижаты к низу баннера.
+    fn button_rects(fonts: &mut Fonts, b: &Banner, h: f32) -> Vec<(f32, f32, f32)> {
+        let slots = Self::button_slots(fonts, b);
+        let rows = slots.iter().map(|&(_, row, _)| row + 1).max().unwrap_or(0);
+        let bottom = h - PAD - BUTTON_H + 4.0;
+        slots
+            .into_iter()
+            .map(|(x, row, w)| {
+                let up = (rows - 1 - row) as f32 * (BUTTON_H + BUTTON_GAP);
+                (x, bottom - up, w)
             })
             .collect()
     }
@@ -339,9 +373,18 @@ impl Banners {
             };
             fill(pm, rounded(bx, top + by, bw, BUTTON_H, 7.0), c);
             let label = &b.buttons()[k].1;
-            let tw = fonts.measure(label, &BUTTON_TEXT);
+            // Не влезает даже в целый ряд — обрезается «…».
+            let room = bw - 16.0;
+            let tw = fonts.measure(label, &BUTTON_TEXT).min(room);
             let ty = top + by + ((BUTTON_H - BUTTON_TEXT.line_height()) / 2.0).round();
-            fonts.draw(pm, label, &BUTTON_TEXT, bx + (bw - tw) / 2.0, ty, None);
+            fonts.draw(
+                pm,
+                label,
+                &BUTTON_TEXT,
+                bx + (bw - tw) / 2.0,
+                ty,
+                Some(room),
+            );
         }
         if hover {
             let (cx, cy) = CLOSE_C;
@@ -658,5 +701,39 @@ mod tests {
         );
         let pm = b.render(&mut fonts);
         assert_eq!((pm.width(), pm.height()), b.size(&mut fonts));
+    }
+
+    #[test]
+    fn long_buttons_get_own_rows_inside_banner() {
+        let mut fonts = Fonts::new("Inter");
+        let now = Instant::now();
+        let mut b = Banners::default();
+        let mut n = note(9, "Ваша батарея практически разряжена.");
+        n.actions = vec![
+            ("sleep".into(), "Переход в ждущий режим".into()),
+            ("off".into(), "Выключить систему".into()),
+        ];
+        b.show(n.clone(), None, now);
+        let (top, h) = b.layout(&mut fonts)[0];
+        let rects = Banners::button_rects(&mut fonts, &b.items[0], h);
+        assert_eq!(rects.len(), 2);
+        for &(x, _, w) in &rects {
+            assert!(x + w <= WIDTH - PAD + 0.5, "кнопка внутри баннера: {x}+{w}");
+        }
+        assert!(rects[0].1 < rects[1].1, "вторая — ниже первой");
+        assert!(rects[1].1 + BUTTON_H <= h, "и внутри по высоте");
+        let y = top + rects[1].1 + 5.0;
+        assert_eq!(
+            b.hit(&mut fonts, TEXT_X + 5.0, y),
+            Some(Hit::Action(9, "off".into()))
+        );
+
+        // Короткие — по-прежнему в один ряд.
+        n.id = 10;
+        n.actions = vec![("a".into(), "Да".into()), ("b".into(), "Нет".into())];
+        b.show(n, None, now);
+        let h = b.layout(&mut fonts)[0].1;
+        let rects = Banners::button_rects(&mut fonts, &b.items[0], h);
+        assert_eq!(rects[0].1, rects[1].1);
     }
 }
