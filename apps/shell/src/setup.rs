@@ -12,7 +12,15 @@ use shell_setup::parts::{APPLY_PARTS, apply};
 use crate::ui::{config_path, load_config, write_file};
 
 /// Части, которые чинит shell; остальные — macos-look.
-const OWN: &[&str] = &["menubar", "dock", "notify", "launchers", "service"];
+const OWN: &[&str] = &[
+    "menubar",
+    "dock",
+    "notify",
+    "launchers",
+    "lock",
+    "power",
+    "service",
+];
 
 /// `shell doctor`. Код выхода: 0 — всё в порядке, 1 — есть проблемы.
 pub fn doctor(fix: bool) -> i32 {

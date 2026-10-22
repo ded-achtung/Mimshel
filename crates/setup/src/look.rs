@@ -16,6 +16,10 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ("look", "font", "Inter 10"),
     ("wallpaper", "dark", "Sonoma-dark"),
     ("wallpaper", "light", "Sonoma-light"),
+    ("lock", "idle_minutes", "10"),
+    ("lock", "screen_off_minutes", "15"),
+    ("lock", "date_locale", "ru_RU.UTF-8"),
+    ("lock", "placeholder", "Введите пароль"),
     (
         "launchpad",
         "hide",
@@ -24,16 +28,16 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Меню яблока: (имя ярлыка, подпись).
-pub const APPLE_MENU: &[(&str, &str)] = &[
-    ("about", "Об этом компьютере"),
-    ("settings", "Системные настройки…"),
-    ("forcequit", "Принудительно завершить…"),
-    ("sleep", "Режим сна"),
-    ("restart", "Перезагрузить…"),
-    ("shutdown", "Выключить…"),
-    ("lock", "Заблокировать экран"),
-    ("logout", "Завершить сеанс…"),
+/// Меню яблока: (действие и имя ярлыка, подпись, разделитель перед пунктом).
+pub const APPLE_MENU: &[(&str, &str, bool)] = &[
+    ("about", "Об этом компьютере", false),
+    ("settings", "Системные настройки…", true),
+    ("forcequit", "Принудительно завершить…", true),
+    ("sleep", "Режим сна", true),
+    ("restart", "Перезагрузить…", false),
+    ("shutdown", "Выключить…", false),
+    ("lock", "Заблокировать экран", true),
+    ("logout", "Завершить сеанс…", false),
 ];
 
 /// Пути, которыми пользуется macos-look.

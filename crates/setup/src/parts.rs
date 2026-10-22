@@ -19,7 +19,15 @@ use crate::sys::{
 };
 
 /// Части, которые умеет применять `shell apply`.
-pub const APPLY_PARTS: &[&str] = &["menubar", "dock", "notify", "launchers", "service"];
+pub const APPLY_PARTS: &[&str] = &[
+    "menubar",
+    "dock",
+    "notify",
+    "launchers",
+    "lock",
+    "power",
+    "service",
+];
 
 /// Метка ярлыков, которые создали мы (как у macos-look — он их тоже узнаёт).
 const MANAGED_MARK: &str = "X-Macos-Look=true";
@@ -78,6 +86,12 @@ pub fn apply(config: &Config, look: &Look, parts: &[&str]) -> Result<(), String>
     }
     if want("launchers") {
         plan.launchers();
+    }
+    if want("lock") {
+        plan.lock();
+    }
+    if want("power") {
+        power();
     }
     Ok(())
 }
@@ -351,8 +365,74 @@ impl Plan<'_> {
         spawn(&[&bin, "daemon"]);
     }
 
-    /// Сочетания Super+Пробел и Super+A и значок Launchpad в доке.
+    /// Экран блокировки: `shell lock` по команде Xfce (меню, перед сном) и
+    /// по бездействию — через xss-lock, которому сигнал даёт заставка X.
+    fn lock(&mut self) {
+        println!("▶ Экран блокировки");
+        if crate::sys::which("i3lock").is_none() || crate::sys::which("xss-lock").is_none() {
+            println!("✘ Нет i3lock-color или xss-lock — запустите: macos-look install");
+            return;
+        }
+        let bin = self.paths.shell_bin.display().to_string();
+        xset(
+            "xfce4-session",
+            "/general/LockCommand",
+            "string",
+            &format!("{bin} lock"),
+        );
+        // xfce4-power-manager гасит экран через заставку X, а xss-lock на её
+        // включение (и перед сном системы) запускает блокировку.
+        let idle = self.look.get("lock", "idle_minutes");
+        let off = self.look.get("lock", "screen_off_minutes");
+        let pm = "/xfce4-power-manager";
+        for k in ["blank-on-ac", "blank-on-battery"] {
+            xset("xfce4-power-manager", &format!("{pm}/{k}"), "int", idle);
+        }
+        for k in [
+            "dpms-on-ac-off",
+            "dpms-on-battery-off",
+            "dpms-on-ac-sleep",
+            "dpms-on-battery-sleep",
+        ] {
+            xset("xfce4-power-manager", &format!("{pm}/{k}"), "uint", off);
+        }
+        xset(
+            "xfce4-power-manager",
+            &format!("{pm}/dpms-enabled"),
+            "bool",
+            "true",
+        );
+        let xss = format!("xss-lock --transfer-sleep-lock -- {bin} lock --nofork");
+        write(
+            &self.paths.autostart.join("macos-look-lock.desktop"),
+            &desktop_entry(
+                "Блокировка экрана",
+                &xss,
+                "",
+                &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
+            ),
+        );
+        // Штатная заставка Xfce не нужна: она рисовала старое окно пароля.
+        write(
+            &self.paths.autostart.join("xfce4-screensaver.desktop"),
+            &format!(
+                "[Desktop Entry]\nType=Application\nName=xfce4-screensaver\nHidden=true\n\
+                 {MANAGED_MARK}\n"
+            ),
+        );
+        kill("xfce4-screensaver");
+        // Работающий xss-lock не перезапускаем: запущенный не из сеанса (по
+        // SSH), он не получит «заблокировать сеанс» рабочего стола (урок 3).
+        // Новая команда заработает со следующего входа.
+        if !running("xss-lock") {
+            let args: Vec<&str> = xss.split(' ').collect();
+            spawn(&args);
+        }
+    }
+
+    /// Сочетания Super+Пробел и Super+A, значок Launchpad в доке и меню яблока.
     fn launchers(&mut self) {
+        self.apple_menu();
         let c = self.config;
         let engine = |shell: bool| if shell { "shell" } else { "rofi" };
         println!(
@@ -384,6 +464,65 @@ impl Plan<'_> {
                 if shell { "false" } else { "true" },
             );
         }
+    }
+}
+
+/// В ВМ — без автоматического сна: из него ВМ не просыпается.
+fn power() {
+    if !crate::actions::in_vm() {
+        return;
+    }
+    println!("▶ ВМ: без автоматического сна");
+    for key in ["inactivity-on-ac", "inactivity-on-battery"] {
+        // 14 у «бездействия» значит «никогда».
+        xset(
+            "xfce4-power-manager",
+            &format!("/xfce4-power-manager/{key}"),
+            "uint",
+            "14",
+        );
+    }
+}
+
+impl Plan<'_> {
+    /// Меню яблока: ярлыки `shell action …` и файл меню freedesktop с их
+    /// порядком и разделителями (его читают и своя строка меню, и панель Xfce).
+    fn apple_menu(&self) {
+        let dir = self.paths.app_dir.join("menu");
+        let bin = self.paths.shell_bin.display();
+        let mut wanted = Vec::new();
+        let mut layout = Vec::new();
+        for (id, label, separator) in crate::look::APPLE_MENU {
+            if *separator {
+                layout.push("    <Separator/>".to_string());
+            }
+            let file = format!("macos-{id}.desktop");
+            write(
+                &dir.join(&file),
+                &desktop_entry(label, &format!("{bin} action {id}"), "", ""),
+            );
+            layout.push(format!("    <Filename>{file}</Filename>"));
+            wanted.push(file);
+        }
+        // Папку не пересоздаём: панель Xfce следит за ней. Лишнее — убрать.
+        for old in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if !wanted
+                .iter()
+                .any(|w| *w == old.file_name().to_string_lossy())
+            {
+                remove(&old.path());
+            }
+        }
+        write(
+            &self.paths.app_dir.join("apple.menu"),
+            &format!(
+                "<!DOCTYPE Menu PUBLIC \"-//freedesktop//DTD Menu 1.0//EN\"\n \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n\
+                 <Menu>\n  <Name>Apple</Name>\n  <AppDir>{}</AppDir>\n  \
+                 <Include><All/></Include>\n  <Layout>\n{}\n  </Layout>\n</Menu>\n",
+                dir.display(),
+                layout.join("\n")
+            ),
+        );
     }
 }
 

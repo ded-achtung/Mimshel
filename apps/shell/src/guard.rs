@@ -124,7 +124,7 @@ fn describe(status: &ExitStatus) -> String {
 
 /// Путь к своей программе. Если её файл заменили новой сборкой (`install`),
 /// ядро добавляет к пути « (deleted)» — тогда берём новый файл по тому же пути.
-fn own_exe() -> PathBuf {
+pub fn own_exe() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shell"));
     match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
         Some(path) => PathBuf::from(path),

@@ -29,7 +29,10 @@ const HELP: &str = "\
   shell set КЛЮЧ ЗНАЧЕНИЕ
                         поменять настройку и применить (например: shell set dock.icon_size 56,
                         shell set parts.dock plank — вернуть Plank)
-  shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers service (без частей — все)";
+  shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
+                        (без частей — все)
+  shell lock            заблокировать экран (i3lock-color; упадёт без пароля — запустится снова)
+  shell action ДЕЙСТВИЕ пункт меню яблока: about settings forcequit sleep restart shutdown lock logout";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -53,6 +56,24 @@ fn main() {
         }
         Some("apply") => std::process::exit(setup::apply_cmd(&args[1..])),
         Some("config") => std::process::exit(setup::show_config()),
+        Some("lock") if args.len() == 1 => {
+            // Меню и xflock4 ждут, пока команда вернётся: сторож уходит в фон.
+            let exe = guard::own_exe();
+            let exe = exe.to_string_lossy();
+            let _ = std::process::Command::new("setsid")
+                .args(["-f", &exe, "lock", "--nofork"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        Some("lock") if args.len() == 2 && args[1] == "--nofork" => {
+            let look = shell_setup::look::Look::load();
+            std::process::exit(shell_setup::lock::supervise(&look))
+        }
+        Some("action") if args.len() == 2 => {
+            std::process::exit(shell_setup::actions::action(&args[1], &guard::own_exe()))
+        }
         Some(cmd) if ui::Panel::parse(cmd).is_some() => {
             let panel = ui::Panel::parse(cmd).expect("проверено выше");
             if !ui::ask_daemon(panel) {

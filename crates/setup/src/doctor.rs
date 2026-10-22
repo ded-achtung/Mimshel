@@ -331,12 +331,13 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         paths.app_dir.join("apple.menu").exists(),
         "",
     );
-    for (id, label) in APPLE_MENU {
+    for (id, label, _) in APPLE_MENU {
         add(
             "menu",
-            &format!("пункт «{label}»"),
-            menu_dir.join(format!("macos-{id}.desktop")).exists(),
-            "",
+            &format!("пункт «{label}» → shell action {id}"),
+            read(&menu_dir.join(format!("macos-{id}.desktop")))
+                .contains(&format!("Exec={} action {id}\n", paths.shell_bin.display())),
+            "shell apply launchers",
         );
     }
     let launchpad = paths.applications.join("macos-launchpad.desktop");
@@ -390,10 +391,10 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     // Блокировка экрана и питание.
     add(
         "lock",
-        "команда блокировки → macos-look",
+        "команда блокировки → shell lock",
         xget("xfce4-session", "/general/LockCommand").as_deref()
-            == Some(&*format!("{} lock", paths.tool.display())),
-        "",
+            == Some(&*format!("{} lock", paths.shell_bin.display())),
+        "shell apply lock",
     );
     add(
         "lock",
@@ -416,11 +417,23 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         xss.first().is_some_and(|&p| in_desktop_session(p)),
         "выйдите из системы и войдите снова (или перезагрузите ВМ)",
     );
+    // Запущенный xss-lock не перезапускают (урок 3) — новая команда
+    // заработает со следующего входа.
     add(
         "lock",
-        "автозапуск xss-lock",
-        paths.autostart.join("macos-look-lock.desktop").exists(),
-        "",
+        "xss-lock вызывает shell lock",
+        xss.first().is_some_and(|p| {
+            std::fs::read(format!("/proc/{p}/cmdline"))
+                .is_ok_and(|c| String::from_utf8_lossy(&c).contains("shell\0lock"))
+        }),
+        "выйдите из системы и войдите снова",
+    );
+    add(
+        "lock",
+        "автозапуск xss-lock → shell lock",
+        read(&paths.autostart.join("macos-look-lock.desktop"))
+            .contains(&format!("-- {} lock --nofork", paths.shell_bin.display())),
+        "shell apply lock",
     );
     add(
         "lock",
