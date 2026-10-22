@@ -1,0 +1,293 @@
+//! Резервные копии настроек и откат (`shell backup`, `shell backups`,
+//! `shell restore`) — как в macos-look и в той же папке, чтобы первая копия
+//! «как было до всего» (её сделал macos-look) осталась доступна.
+//!
+//! В копии: настройки Xfce (xfconf), настройки и значки Plank, свой файл
+//! настроек shell и отметки, были ли автозапуск Plank и тема GTK4. Откат
+//! возвращает их, убирает ярлыки и автозапуски с меткой macos-look и
+//! перезапускает части Xfce.
+
+use std::path::{Path, PathBuf};
+
+use crate::look::Paths;
+use crate::sys::{home, kill, output_any, read, run, running, spawn, xget, xreset};
+
+/// Метка ярлыков, которые создали macos-look и shell.
+const MANAGED_MARK: &str = "X-Macos-Look=true";
+const SHORTCUTS: &[&str] = &["<Super>space", "<Super>a"];
+
+pub fn backup_dir() -> PathBuf {
+    home().join(".local/share/macos-look/backups")
+}
+
+fn xfconf_dir() -> PathBuf {
+    home().join(".config/xfce4/xfconf/xfce-perchannel-xml")
+}
+
+/// Копии по порядку (самая первая — «как было»).
+pub fn list() -> Vec<PathBuf> {
+    let mut all: Vec<PathBuf> = std::fs::read_dir(backup_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    all.sort();
+    all
+}
+
+/// Сохранить копию; `label` — пометка в имени папки.
+pub fn make(label: &str) -> std::io::Result<PathBuf> {
+    let stamp = output_any(&["date", "+%Y%m%d-%H%M%S"]);
+    let dest = backup_dir().join(format!("{}-{label}", stamp.trim()));
+    std::fs::create_dir_all(&dest)?;
+    copy_tree(&xfconf_dir(), &dest.join("xfconf"))?;
+    let plank = output_any(&["dconf", "dump", "/net/launchpad/plank/"]);
+    std::fs::write(dest.join("plank.dconf"), plank)?;
+    copy_tree(&home().join(".config/plank"), &dest.join("plank-config"))?;
+    let shell_config = home().join(".config/shell/config.toml");
+    if shell_config.exists() {
+        std::fs::copy(&shell_config, dest.join("shell-config.toml"))?;
+    }
+    std::fs::create_dir_all(dest.join("had"))?;
+    for f in [
+        Paths::new().autostart.join("plank.desktop"),
+        home().join(".config/gtk-4.0"),
+    ] {
+        let had = f.exists() || f.is_symlink();
+        let name = f.file_name().unwrap_or_default();
+        std::fs::write(dest.join("had").join(name), if had { "yes" } else { "no" })?;
+    }
+    Ok(dest)
+}
+
+/// Копия по началу имени (`None` — самая первая).
+pub fn find(prefix: Option<&str>) -> Option<PathBuf> {
+    let all = list();
+    match prefix {
+        None => all.into_iter().next(),
+        Some(p) => all.into_iter().find(|b| {
+            b.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(p))
+        }),
+    }
+}
+
+/// Вернуть настройки из копии `src`. `dry` — только рассказать, что будет
+/// сделано. Перед откатом сохраняется копия «before-restore».
+pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
+    let step = |what: &str| println!("{}{what}", if dry { "  будет: " } else { "▶ " });
+    let name = src.file_name().unwrap_or_default().to_string_lossy();
+    step(&format!(
+        "копия текущих настроек «before-restore», затем откат к {name}"
+    ));
+    if !dry {
+        make("before-restore")?;
+    }
+    step("остановить панель Xfce, Plank и xfconfd");
+    if !dry {
+        run(&["xfce4-panel", "--quit"]);
+        kill("plank");
+        kill("xfconfd");
+    }
+    if src.join("xfconf").is_dir() {
+        step("вернуть настройки Xfce (xfconf)");
+        if !dry {
+            replace_tree(&src.join("xfconf"), &xfconf_dir())?;
+        }
+    }
+    step("вернуть настройки Plank (dconf и значки)");
+    if !dry {
+        run(&["dconf", "reset", "-f", "/net/launchpad/plank/"]);
+        let dump = read(&src.join("plank.dconf"));
+        if !dump.trim().is_empty() {
+            load_dconf(&dump);
+        }
+        let plank = home().join(".config/plank");
+        if src.join("plank-config").is_dir() {
+            replace_tree(&src.join("plank-config"), &plank)?;
+        } else {
+            remove_tree(&plank)?;
+        }
+    }
+    let had = |name: &str| read(&src.join("had").join(name)).trim() != "no";
+    let paths = Paths::new();
+    if !had("plank.desktop") {
+        step("убрать автозапуск Plank (его не было)");
+        if !dry {
+            remove_file(&paths.autostart.join("plank.desktop"))?;
+        }
+    }
+    if !had("gtk-4.0") {
+        step("убрать тему GTK4 (её не было)");
+        if !dry {
+            remove_tree(&home().join(".config/gtk-4.0"))?;
+        }
+    }
+    for f in managed(&[&paths.applications, &paths.autostart]) {
+        step(&format!("удалить созданный ярлык {}", f.display()));
+        if !dry {
+            remove_file(&f)?;
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(src.join("shell-config.toml")) {
+        step("вернуть файл настроек shell");
+        if !dry {
+            let path = home().join(".config/shell/config.toml");
+            crate::sys::write_if_changed(&path, &text)?;
+        }
+    }
+    step("остановить xss-lock и службу shell, вернуть xfce4-notifyd и заставку Xfce");
+    if !dry {
+        kill("xss-lock");
+        kill("shell daemon");
+        run(&["systemctl", "--user", "unmask", "xfce4-notifyd.service"]);
+        spawn(&["xfce4-screensaver"]);
+    }
+    let ours = [
+        paths.tool.display().to_string(),
+        paths.shell_bin.display().to_string(),
+    ];
+    for key in SHORTCUTS {
+        let prop = format!("/commands/custom/{key}");
+        if xget("xfce4-keyboard-shortcuts", &prop)
+            .is_some_and(|c| ours.iter().any(|o| c.starts_with(o.as_str())))
+        {
+            step(&format!("сбросить сочетание {key}"));
+            if !dry {
+                xreset("xfce4-keyboard-shortcuts", &prop);
+            }
+        }
+    }
+    step("перезапустить настройки, окна, рабочий стол и панель Xfce");
+    if !dry {
+        spawn(&["xfsettingsd", "--replace"]);
+        spawn(&["xfwm4", "--replace"]);
+        spawn(&["xfdesktop", "--reload"]);
+        spawn(&["xfce4-panel"]);
+        if paths.autostart.join("plank.desktop").exists() && !running("plank") {
+            spawn(&["plank"]);
+        }
+    }
+    Ok(())
+}
+
+/// Ярлыки с меткой macos-look в этих папках.
+fn managed(dirs: &[&Path]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = dirs
+        .iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "desktop"))
+        .filter(|p| read(p).contains(MANAGED_MARK))
+        .collect();
+    out.sort();
+    out
+}
+
+fn load_dconf(dump: &str) {
+    use std::io::Write;
+    if let Ok(mut child) = crate::sys::command("dconf")
+        .args(["load", "/net/launchpad/plank/"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(dump.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+/// Скопировать папку целиком (ссылки — ссылками). Нет папки — нечего копировать.
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let (from, to) = (entry.path(), dst.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)?;
+        } else if kind.is_dir() {
+            copy_tree(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Заменить папку `dst` копией `src`.
+fn replace_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    remove_tree(dst)?;
+    copy_tree(src, dst)
+}
+
+fn remove_tree(path: &Path) -> std::io::Result<()> {
+    if path.is_symlink() || path.is_file() {
+        return remove_file(path);
+    }
+    match std::fs::remove_dir_all(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+fn remove_file(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Temp(PathBuf);
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn copy_replace_and_managed() {
+        let t = Temp(std::env::temp_dir().join(format!("shell-backup-{}", std::process::id())));
+        let src = t.0.join("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("a.xml"), "A").unwrap();
+        std::fs::write(src.join("sub/b.xml"), "B").unwrap();
+        std::os::unix::fs::symlink("a.xml", src.join("link")).unwrap();
+        let dst = t.0.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("old.xml"), "лишний").unwrap();
+        replace_tree(&src, &dst).unwrap();
+        assert_eq!(std::fs::read_to_string(dst.join("sub/b.xml")).unwrap(), "B");
+        assert!(!dst.join("old.xml").exists(), "лишнее убрано");
+        assert_eq!(
+            std::fs::read_link(dst.join("link")).unwrap(),
+            Path::new("a.xml")
+        );
+        // Нет исходной папки — копировать нечего, ошибки нет.
+        copy_tree(&t.0.join("нет"), &t.0.join("x")).unwrap();
+        assert!(!t.0.join("x").exists());
+
+        let apps = t.0.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(
+            apps.join("ours.desktop"),
+            "[Desktop Entry]\nX-Macos-Look=true\n",
+        )
+        .unwrap();
+        std::fs::write(apps.join("user.desktop"), "[Desktop Entry]\n").unwrap();
+        std::fs::write(apps.join("note.txt"), "X-Macos-Look=true").unwrap();
+        assert_eq!(managed(&[&apps]), [apps.join("ours.desktop")]);
+        remove_tree(&t.0.join("нет")).unwrap();
+        remove_file(&t.0.join("нет")).unwrap();
+    }
+}

@@ -5,6 +5,7 @@
 //! переименование программ пока делает macos-look.
 
 pub mod actions;
+pub mod backup;
 pub mod doctor;
 pub mod lock;
 pub mod look;

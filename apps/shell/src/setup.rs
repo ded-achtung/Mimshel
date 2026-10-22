@@ -209,3 +209,53 @@ fn print_settings() {
         println!("  {key:<22} {what}");
     }
 }
+
+/// `shell backup [ПОМЕТКА]`.
+pub fn backup(label: Option<&str>) -> i32 {
+    match shell_setup::backup::make(label.unwrap_or("manual")) {
+        Ok(dest) => {
+            println!("✔ Копия сохранена: {}", dest.display());
+            0
+        }
+        Err(e) => {
+            println!("✘ Не удалось сохранить копию: {e}");
+            1
+        }
+    }
+}
+
+/// `shell backups`.
+pub fn backups() -> i32 {
+    let all = shell_setup::backup::list();
+    if all.is_empty() {
+        println!("Резервных копий нет");
+    }
+    for b in all {
+        println!("  {}", b.file_name().unwrap_or_default().to_string_lossy());
+    }
+    0
+}
+
+/// `shell restore [--dry-run] [ИМЯ]` — по умолчанию самая первая копия.
+pub fn restore(args: &[String]) -> i32 {
+    let dry = args.iter().any(|a| a == "--dry-run");
+    let name = args.iter().find(|a| *a != "--dry-run").map(String::as_str);
+    let Some(src) = shell_setup::backup::find(name) else {
+        println!("✘ Нет такой копии. Список: shell backups");
+        return 1;
+    };
+    if dry {
+        println!("Откат к {} (ничего не меняется):", src.display());
+    }
+    match shell_setup::backup::restore(&src, dry) {
+        Ok(()) if dry => 0,
+        Ok(()) => {
+            println!("✔ Готово. Если что-то выглядит странно — выйдите из системы и зайдите снова");
+            0
+        }
+        Err(e) => {
+            println!("✘ Откат прерван: {e}");
+            1
+        }
+    }
+}

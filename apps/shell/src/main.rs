@@ -34,7 +34,12 @@ const HELP: &str = "\
   shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
                         (без частей — все)
   shell lock            заблокировать экран (i3lock-color; упадёт без пароля — запустится снова)
-  shell action ДЕЙСТВИЕ пункт меню яблока: about settings forcequit sleep restart shutdown lock logout";
+  shell action ДЕЙСТВИЕ пункт меню яблока: about settings forcequit sleep restart shutdown lock logout
+  shell backup [ПОМЕТКА] сохранить настройки Xfce, Plank и shell
+  shell backups         список копий
+  shell restore [--dry-run] [ИМЯ]
+                        вернуть настройки из копии (по умолчанию — самой первой, «как было»);
+                        --dry-run — только показать, что будет сделано";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -73,6 +78,11 @@ fn main() {
             let look = shell_setup::look::Look::load();
             std::process::exit(shell_setup::lock::supervise(&look))
         }
+        Some("backup") if args.len() <= 2 => {
+            std::process::exit(setup::backup(args.get(1).map(String::as_str)))
+        }
+        Some("backups") => std::process::exit(setup::backups()),
+        Some("restore") => std::process::exit(setup::restore(&args[1..])),
         Some("action") if args.len() == 2 => {
             std::process::exit(shell_setup::actions::action(&args[1], &guard::own_exe()))
         }
