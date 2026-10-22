@@ -22,7 +22,10 @@ impl Display {
     /// Создаёт окно-док (пока скрытое).
     pub fn create_dock(&self, name: &str) -> Result<DockWindow> {
         let window = self.conn.generate_id()?;
+        // Отпускание кнопки и движение — для перетаскивания значков: пока
+        // кнопка нажата, X присылает их доку, даже когда мышь ушла с него.
         let events = EventMask::BUTTON_PRESS
+            | EventMask::BUTTON_RELEASE
             | EventMask::POINTER_MOTION
             | EventMask::ENTER_WINDOW
             | EventMask::LEAVE_WINDOW

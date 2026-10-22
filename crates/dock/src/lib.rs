@@ -2,6 +2,7 @@
 //! запущенной; увеличение под мышью; подпись над значком; прыжок при запуске;
 //! «умное» скрытие. Здесь нет X11: состояние, решения и рисование в картинку.
 
+mod drag;
 mod draw;
 mod hide;
 mod items;
@@ -68,6 +69,8 @@ pub struct Dock {
     bounces: Vec<(String, Instant)>,
     /// Открыто меню значка — подпись над значком не нужна.
     menu_open: bool,
+    /// Перетаскиваемый значок.
+    drag: Option<drag::Drag>,
 }
 
 impl Dock {
@@ -86,6 +89,7 @@ impl Dock {
             slide: None,
             bounces: Vec::new(),
             menu_open: false,
+            drag: None,
         };
         d.rebuild();
         d
@@ -156,7 +160,22 @@ impl Dock {
     }
 
     fn rebuild(&mut self) {
+        let dragged = self
+            .drag
+            .and_then(|d| self.items.get(d.index))
+            .map(|i| i.key.clone());
         self.items = items::build(&self.apps, &self.pinned, &self.windows);
+        // Значки перестроились посреди перетаскивания — найти свой заново.
+        if let Some(key) = dragged {
+            match self.items.iter().position(|i| i.key == key) {
+                Some(index) => {
+                    if let Some(d) = &mut self.drag {
+                        d.index = index;
+                    }
+                }
+                None => self.drag = None,
+            }
+        }
         // Окно появилось — прыгать незачем.
         let items = &self.items;
         self.bounces

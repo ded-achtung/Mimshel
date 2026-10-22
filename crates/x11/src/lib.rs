@@ -86,6 +86,13 @@ pub enum Event {
         y: i16,
         button: u8,
     },
+    /// Кнопку мыши отпустили.
+    Release {
+        window: u32,
+        x: i16,
+        y: i16,
+        button: u8,
+    },
     Motion {
         window: u32,
         x: i16,
@@ -281,6 +288,12 @@ impl Display {
                 y: e.event_y,
                 button: e.detail,
             },
+            XEvent::ButtonRelease(e) => Event::Release {
+                window: e.event,
+                x: e.event_x,
+                y: e.event_y,
+                button: e.detail,
+            },
             XEvent::MotionNotify(e) => Event::Motion {
                 window: e.event,
                 x: e.event_x,
@@ -380,6 +393,26 @@ impl Popup {
                 CURRENT_TIME,
             )?
             .reply()?;
+        Ok(())
+    }
+
+    /// Показывает окно поверх остальных, не забирая клавиатуру и мышь
+    /// (например, значок, который тащат из дока).
+    pub fn show_passive(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        self.set_geometry(d, x, y, w, h)?;
+        d.conn.map_window(self.window)?;
+        d.conn.configure_window(
+            self.window,
+            &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+        )?;
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// Прячет окно, не трогая захват клавиатуры и мыши.
+    pub fn hide_passive(&self, d: &Display) -> Result<()> {
+        d.conn.unmap_window(self.window)?;
+        d.conn.flush()?;
         Ok(())
     }
 

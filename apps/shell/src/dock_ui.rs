@@ -20,6 +20,8 @@ use crate::ui::{Msg, Result};
 
 /// Шаг анимации (~60 кадров в секунду).
 const FRAME: Duration = Duration::from_millis(16);
+/// Насколько сдвинуть мышь с нажатой кнопкой, чтобы клик стал перетаскиванием.
+const DRAG_START: f32 = 6.0;
 
 pub struct DockUi {
     window: DockWindow,
@@ -35,6 +37,13 @@ pub struct DockUi {
     menu: Option<Menu>,
     menu_popup: Popup,
     menu_dirty: bool,
+    /// Левая кнопка нажата на значке: какой и где (координаты окна дока).
+    /// Отпустили на месте — клик, повели — перетаскивание.
+    press: Option<(usize, f32, f32)>,
+    /// Окно со значком, который едет за мышью, и где мышь (координаты окна дока).
+    drag_popup: Popup,
+    drag_at: (f32, f32),
+    drag_dirty: bool,
     tx: Sender<Msg>,
     terminal: Vec<String>,
     screen: (u32, u32),
@@ -58,6 +67,10 @@ impl DockUi {
             menu: None,
             menu_popup: d.create_popup("dock-menu")?,
             menu_dirty: false,
+            press: None,
+            drag_popup: d.create_popup("dock-drag")?,
+            drag_at: (0.0, 0.0),
+            drag_dirty: false,
             tx,
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
@@ -96,6 +109,7 @@ impl DockUi {
         let own = self.window.id();
         match *ev {
             Event::Button { window, .. }
+            | Event::Release { window, .. }
             | Event::Motion { window, .. }
             | Event::Enter { window, .. }
             | Event::Leave { window }
@@ -129,22 +143,50 @@ impl DockUi {
             return Ok(());
         }
         match ev {
+            // Кнопка нажата на значке — может, это начало перетаскивания.
+            Event::Motion { x, y, .. } if self.press.is_some() => {
+                self.press_motion(d, f32::from(x), f32::from(y));
+            }
             Event::Motion { x, .. } | Event::Enter { x, .. } => {
                 self.dock.set_pointer(Some(f32::from(x)));
                 self.update_hide(d);
             }
+            // Пока кнопка нажата, мышь может уйти с дока — это не «ушла».
+            Event::Leave { .. } if self.press.is_some() => return Ok(()),
             Event::Leave { .. } => {
                 self.dock.set_pointer(None);
                 self.update_hide(d);
             }
             Event::Button { x, y, button, .. } => {
-                let Some(i) = self.dock.item_at(f32::from(x), f32::from(y)) else {
+                let (x, y) = (f32::from(x), f32::from(y));
+                let Some(i) = self.dock.item_at(x, y) else {
                     return Ok(());
                 };
-                if button == 3 {
-                    self.open_menu(d, fonts, i)?;
-                } else {
-                    let action = self.dock.click(i, button, now);
+                match button {
+                    // Левая — решим при отпускании: клик или перетаскивание.
+                    1 => self.press = Some((i, x, y)),
+                    3 => self.open_menu(d, fonts, i)?,
+                    _ => {
+                        let action = self.dock.click(i, button, now);
+                        self.perform(d, action)?;
+                    }
+                }
+            }
+            Event::Release {
+                x, y, button: 1, ..
+            } => {
+                let (x, y) = (f32::from(x), f32::from(y));
+                let press = self.press.take();
+                if self.dock.dragging() {
+                    self.dock.drag_to(x, y);
+                    self.drag_popup.hide_passive(d)?;
+                    let action = self.dock.drop_drag();
+                    self.perform(d, action)?;
+                    self.sync_pointer(d);
+                } else if let Some((i, ..)) = press
+                    && self.dock.item_at(x, y) == Some(i)
+                {
+                    let action = self.dock.click(i, 1, now);
                     self.perform(d, action)?;
                 }
             }
@@ -178,6 +220,26 @@ impl DockUi {
         }
         self.dirty = true;
         Ok(())
+    }
+
+    /// Мышь движется с нажатой на значке кнопкой.
+    fn press_motion(&mut self, d: &Display, x: f32, y: f32) {
+        let Some((i, px, py)) = self.press else {
+            return;
+        };
+        if !self.dock.dragging() {
+            if (x - px).abs() + (y - py).abs() < DRAG_START {
+                self.dock.set_pointer(Some(x));
+                return;
+            }
+            self.dock.start_drag(i, x, y);
+        }
+        self.dock.drag_to(x, y);
+        // Утащили прочь — увеличение под мышью ни к чему.
+        self.dock.set_pointer((!self.dock.drag_out()).then_some(x));
+        self.update_hide(d);
+        self.drag_at = (x, y);
+        self.drag_dirty = true;
     }
 
     /// События, пока открыто меню значка.
@@ -262,7 +324,13 @@ impl DockUi {
         }
         self.menu_popup.hide(d)?;
         self.dock.set_menu_open(false);
-        // Пока меню было открыто, док не следил за мышью — где она теперь?
+        self.sync_pointer(d);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Док какое-то время не следил за мышью (меню, перетаскивание) — где она теперь?
+    fn sync_pointer(&mut self, d: &Display) {
         let bar = self.dock.bar_rect(self.screen.1);
         let over = d.pointer_position().filter(|&(x, y)| {
             let x = i32::from(x);
@@ -270,8 +338,6 @@ impl DockUi {
         });
         self.dock.set_pointer(over.map(|(x, _)| f32::from(x)));
         self.update_hide(d);
-        self.dirty = true;
-        Ok(())
     }
 
     fn run_command(&mut self, d: &Display, key: &str, command: MenuCommand) -> Result<()> {
@@ -329,6 +395,21 @@ impl DockUi {
         if self.dirty {
             self.dirty = false;
             self.redraw(d, fonts, icons)?;
+        }
+        if self.drag_dirty {
+            self.drag_dirty = false;
+            if let Some((image, (cx, cy))) = self.dock.drag_image(fonts, icons) {
+                let top = self.screen.1 as f32 - self.dock.window_height() as f32;
+                let (x, y) = self.drag_at;
+                self.drag_popup.show_passive(
+                    d,
+                    (x - cx).round() as i16,
+                    (top + y - cy).round() as i16,
+                    image.width() as u16,
+                    image.height() as u16,
+                )?;
+                self.drag_popup.present(d, &image)?;
+            }
         }
         if self.menu_dirty {
             self.menu_dirty = false;
@@ -397,7 +478,9 @@ impl DockUi {
             let (x, y, ww, hh) = d.frame_geometry(w)?;
             Some((Rect { x, y, w: ww, h: hh }, info.maximized))
         });
-        let hide = should_hide(self.hide, bar, active, self.dock.pointer().is_some());
+        // Пока тащат значок или открыто меню, док не прячется.
+        let busy = self.dock.pointer().is_some() || self.dock.dragging() || self.menu.is_some();
+        let hide = should_hide(self.hide, bar, active, busy);
         let now = Instant::now();
         self.dock.slide_to(hide, now);
         if self.dock.animating(now) {

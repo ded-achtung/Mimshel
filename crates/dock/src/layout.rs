@@ -32,6 +32,8 @@ pub struct Slot {
     pub w: f32,
     /// Размер иконки.
     pub size: f32,
+    /// Перед значком — разделитель (между закреплёнными и остальными).
+    pub separator_before: bool,
 }
 
 impl Slot {
@@ -63,8 +65,9 @@ impl Dock {
     /// Места значков и полоса дока `(x, ширина)` при указателе `pointer`.
     pub(crate) fn slots_at(&self, pointer: Option<f32>) -> (Vec<Slot>, f32, f32) {
         let base = self.icon() + GAP;
+        let (order, _) = self.arrangement();
         // Сначала без увеличения: где центры значков.
-        let plain = self.lay_out(&vec![1.0; self.items.len()]);
+        let plain = self.lay_out(&order, &vec![1.0; order.len()]);
         let scales: Vec<f32> = match pointer {
             Some(px) if self.look.zoom > 1.0 => plain
                 .0
@@ -79,25 +82,25 @@ impl Dock {
                     }
                 })
                 .collect(),
-            _ => vec![1.0; self.items.len()],
+            _ => vec![1.0; order.len()],
         };
-        self.lay_out(&scales)
+        self.lay_out(&order, &scales)
     }
 
-    fn lay_out(&self, scales: &[f32]) -> (Vec<Slot>, f32, f32) {
+    /// Значки `order` (номер и разделитель перед ним) с увеличениями `scales`.
+    pub(crate) fn lay_out(&self, order: &[(usize, bool)], scales: &[f32]) -> (Vec<Slot>, f32, f32) {
         let base = self.icon() + GAP;
-        let width: f32 = self
-            .items
+        let width: f32 = order
             .iter()
             .zip(scales)
-            .map(|(it, s)| base * s + if it.separator_before { SEPARATOR } else { 0.0 })
+            .map(|(&(_, sep), s)| base * s + if sep { SEPARATOR } else { 0.0 })
             .sum::<f32>()
             + PAD_X * 2.0;
         let bar_x = ((self.screen_w - width) / 2.0).round();
         let mut x = bar_x + PAD_X;
-        let mut slots = Vec::with_capacity(self.items.len());
-        for (i, (it, s)) in self.items.iter().zip(scales).enumerate() {
-            if it.separator_before {
+        let mut slots = Vec::with_capacity(order.len());
+        for (&(i, sep), s) in order.iter().zip(scales) {
+            if sep {
                 x += SEPARATOR;
             }
             slots.push(Slot {
@@ -105,6 +108,7 @@ impl Dock {
                 x,
                 w: base * s,
                 size: self.icon() * s,
+                separator_before: sep,
             });
             x += base * s;
         }

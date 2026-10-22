@@ -71,9 +71,10 @@ impl Dock {
             ..PixmapPaint::default()
         };
         let mut hovered = None;
+        let dragged = self.drag.map(|d| d.index);
         for s in &slots {
             let item = &self.items[s.item];
-            if item.separator_before {
+            if s.separator_before {
                 let x = (s.x - SEPARATOR / 2.0).round();
                 fill_rect(
                     &mut pm,
@@ -83,6 +84,10 @@ impl Dock {
                     self.bar_height() - 20.0,
                     SEPARATOR_LINE,
                 );
+            }
+            // Перетаскиваемый значок едет за мышью в своём окне, здесь — пустое место.
+            if Some(s.item) == dragged {
+                continue;
             }
             let jump = self.bounce(&item.key, now) * self.look.icon as f32;
             let ix = s.center() - s.size / 2.0;
@@ -118,41 +123,75 @@ impl Dock {
         }
 
         // Подпись над значком под указателем (не при открытом меню).
-        if let Some((s, icon_top)) = hovered.filter(|_| !self.menu_open) {
+        if let Some((s, icon_top)) = hovered.filter(|_| !self.menu_open && dragged.is_none()) {
             let name = &self.items[s.item].name;
-            let tw = fonts.measure(name, &TIP_TEXT).min(400.0);
-            let (bw, bh) = (tw + 20.0, TIP_TEXT.line_height() + 8.0);
+            let (bw, bh) = tip_size(fonts, name);
             let bx = (s.center() - bw / 2.0)
                 .clamp(4.0, self.screen_w - bw - 4.0)
                 .round();
             let by = (icon_top - bh - 10.0).max(0.0).round();
-            if let Some(r) = rounded(bx, by, bw, bh, 7.0) {
-                pm.fill_path(
-                    &r,
-                    &paint(TIP),
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
-            }
-            if let Some(r) = rounded(bx + 0.5, by + 0.5, bw - 1.0, bh - 1.0, 6.5) {
-                let stroke = Stroke {
-                    width: 1.0,
-                    ..Stroke::default()
-                };
-                pm.stroke_path(&r, &paint(BAR_EDGE), &stroke, Transform::identity(), None);
-            }
-            fonts.draw(
-                &mut pm,
-                name,
-                &TIP_TEXT,
-                bx + 10.0,
-                by + 4.0,
-                Some(tw + 1.0),
-            );
+            tip(&mut pm, fonts, name, bx, by);
         }
         pm
     }
+
+    /// Картинка перетаскиваемого значка (для окна, которое едет за мышью) и
+    /// где в ней середина иконки. Утащен прочь закреплённый — над ним «Удалить».
+    pub fn drag_image(&self, fonts: &mut Fonts, icons: &mut Icons) -> Option<(Pixmap, (f32, f32))> {
+        let item = self.items.get(self.drag?.index)?;
+        let size = self.max_icon() as f32;
+        let label = self.drag_removes().then_some("Удалить");
+        let (tw, th) = label.map_or((0.0, 0.0), |t| tip_size(fonts, t));
+        let top = if label.is_some() { th + 8.0 } else { 0.0 };
+        let w = size.max(tw).ceil();
+        let mut pm = Pixmap::new(w as u32, (top + size).ceil() as u32)?;
+        let icon = match (&item.app, item.windows.first()) {
+            (Some(app), _) => app.icon.as_deref().and_then(|n| icons.get(n, size as u32)),
+            (None, Some(&win)) => self.window_icon(win),
+            (None, None) => None,
+        };
+        if let Some(icon) = icon {
+            let k = size / icon.width() as f32;
+            let t = Transform::from_scale(k, k).post_translate((w - size) / 2.0, top);
+            let quality = PixmapPaint {
+                quality: FilterQuality::Bicubic,
+                ..PixmapPaint::default()
+            };
+            pm.draw_pixmap(0, 0, icon.as_ref(), &quality, t, None);
+        }
+        if let Some(text) = label {
+            tip(&mut pm, fonts, text, ((w - tw) / 2.0).round(), 0.0);
+        }
+        Some((pm, (w / 2.0, top + size / 2.0)))
+    }
+}
+
+/// Размер подписи (тёмной плашки с текстом).
+fn tip_size(fonts: &mut Fonts, text: &str) -> (f32, f32) {
+    let tw = fonts.measure(text, &TIP_TEXT).min(400.0);
+    (tw + 20.0, TIP_TEXT.line_height() + 8.0)
+}
+
+/// Подпись с левым верхним углом в `(x, y)`.
+fn tip(pm: &mut Pixmap, fonts: &mut Fonts, text: &str, x: f32, y: f32) {
+    let (bw, bh) = tip_size(fonts, text);
+    if let Some(r) = rounded(x, y, bw, bh, 7.0) {
+        pm.fill_path(
+            &r,
+            &paint(TIP),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    if let Some(r) = rounded(x + 0.5, y + 0.5, bw - 1.0, bh - 1.0, 6.5) {
+        let stroke = Stroke {
+            width: 1.0,
+            ..Stroke::default()
+        };
+        pm.stroke_path(&r, &paint(BAR_EDGE), &stroke, Transform::identity(), None);
+    }
+    fonts.draw(pm, text, &TIP_TEXT, x + 10.0, y + 4.0, Some(bw - 19.0));
 }
 
 pub(crate) fn paint(c: [u8; 4]) -> Paint<'static> {
