@@ -335,14 +335,35 @@ pub fn keyboard_ok() -> bool {
         .ok()
         .or_else(|| session_env().remove("DISPLAY"))
         .unwrap_or_else(|| ":0".into());
-    let symbols = output_any(&["xkbcomp", "-xkb", &display, "-"]);
-    let line = symbols
-        .lines()
-        .find(|l| l.contains("xkb_symbols"))
-        .unwrap_or("");
-    want.split(',')
-        .filter(|c| !c.is_empty())
-        .all(|c| line.contains(c))
+    let has_all = |args: &[&str]| {
+        let symbols = output_any(args);
+        let line = symbols
+            .lines()
+            .find(|l| l.contains("xkb_symbols"))
+            .unwrap_or("");
+        want.split(',')
+            .filter(|c| !c.is_empty())
+            .all(|c| line.contains(c))
+    };
+    // Общая раскладка X повторяет клавиатуру последнего нажатия, а у
+    // виртуальной клавиатуры XTEST (нажатия от программ, xdotool) после
+    // входа раскладка по умолчанию. Поэтому смотрим настоящие клавиатуры.
+    let ids = real_keyboards(&output_any(&["xinput", "list", "--short"]));
+    if ids.is_empty() {
+        return has_all(&["xkbcomp", "-xkb", &display, "-"]);
+    }
+    ids.iter()
+        .all(|id| has_all(&["xkbcomp", "-i", id, "-xkb", &display, "-"]))
+}
+
+/// Номера настоящих клавиатур из `xinput list --short`: подчинённые
+/// клавиатуры, кроме виртуальной XTEST.
+fn real_keyboards(list: &str) -> Vec<String> {
+    list.lines()
+        .filter(|l| l.contains("slave  keyboard") && !l.contains("XTEST"))
+        .filter_map(|l| l.split("id=").nth(1)?.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Строка из `setxkbmap -query` (rules, model, layout, options).
@@ -353,4 +374,19 @@ pub fn xkb_query(key: &str) -> String {
         .unwrap_or("")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn real_keyboards_skip_xtest() {
+        let list = "⎣ Virtual core keyboard                   \tid=3\t[master keyboard (2)]\n\
+            \x20   ↳ Virtual core XTEST keyboard             \tid=5\t[slave  keyboard (3)]\n\
+            \x20   ↳ Power Button                            \tid=9\t[slave  keyboard (3)]\n\
+            \x20   ↳ AT Translated Set 2 keyboard            \tid=11\t[slave  keyboard (3)]\n\
+            ⎡ Virtual core pointer                    \tid=2\t[master pointer  (3)]\n";
+        assert_eq!(real_keyboards(list), ["9", "11"]);
+    }
 }

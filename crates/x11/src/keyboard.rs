@@ -6,8 +6,9 @@
 //! [`Event::KeyboardLayouts`]: crate::Event::KeyboardLayouts
 
 use x11rb::protocol::xkb::{
-    ConnectionExt as _, EventType, Group, ID, MapPart, NameDetail, SelectEventsAux,
-    SelectEventsAuxNamesNotify, SelectEventsAuxStateNotify, StatePart,
+    ConnectionExt as _, EventType, Group, ID, MapPart, NKNDetail, NameDetail, SelectEventsAux,
+    SelectEventsAuxNamesNotify, SelectEventsAuxNewKeyboardNotify, SelectEventsAuxStateNotify,
+    StatePart,
 };
 use x11rb::protocol::xproto::ConnectionExt as _;
 
@@ -20,6 +21,7 @@ impl Display {
     pub fn watch_keyboard(&self) -> Result<()> {
         debug_assert_eq!(u16::from(ID::USE_CORE_KBD), CORE);
         let names = NameDetail::SYMBOLS | NameDetail::GROUP_NAMES;
+        let nkn = NKNDetail::KEYCODES | NKNDetail::DEVICE_ID;
         let details = SelectEventsAux::new()
             .state_notify(SelectEventsAuxStateNotify {
                 affect_state: StatePart::GROUP_STATE,
@@ -28,6 +30,12 @@ impl Display {
             .names_notify(SelectEventsAuxNamesNotify {
                 affect_names: names,
                 names_details: names,
+            })
+            // Клавиатура сменилась целиком: нажали на другом устройстве (у
+            // виртуальной XTEST своя раскладка) или выполнили setxkbmap.
+            .new_keyboard_notify(SelectEventsAuxNewKeyboardNotify {
+                affect_new_keyboard: nkn,
+                new_keyboard_details: nkn,
             });
         self.conn
             .xkb_select_events(
