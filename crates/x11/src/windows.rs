@@ -243,6 +243,23 @@ impl Display {
         full.clone_rect(rect)
     }
 
+    /// Текстовое свойство окна по имени (UTF-8), например `_GTK_UNIQUE_BUS_NAME`.
+    pub fn window_text(&self, w: Window, name: &str) -> Option<String> {
+        let atom = self
+            .conn
+            .intern_atom(true, name.as_bytes())
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        if atom == 0 {
+            return None;
+        }
+        self.text(w, atom, self.atoms.UTF8_STRING)
+            .map(|t| String::from_utf8_lossy(&t).into_owned())
+            .filter(|t| !t.is_empty())
+    }
+
     /// Где указатель мыши на экране.
     pub fn pointer_position(&self) -> Option<(i16, i16)> {
         let r = self.conn.query_pointer(self.root).ok()?.reply().ok()?;

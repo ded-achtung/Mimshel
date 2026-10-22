@@ -75,6 +75,8 @@ pub(crate) enum Msg {
     Dnd(bool),
     /// Значки трея или меню значка.
     Tray(shell_dbus::TrayUpdate),
+    /// Глобальное меню активного окна.
+    AppMenu(shell_dbus::AppMenuUpdate),
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -437,6 +439,10 @@ impl Ui<'_> {
                 }
                 Ok(())
             }
+            Msg::AppMenu(update) => match &mut self.menubar {
+                Some(menubar) => menubar.app_menu_update(self.display, &mut self.fonts, update),
+                None => Ok(()),
+            },
             Msg::Tray(update) => match &mut self.menubar {
                 Some(menubar) => {
                     menubar.tray_update(self.display, &mut self.fonts, &mut self.icons, update)

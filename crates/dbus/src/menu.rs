@@ -72,7 +72,7 @@ fn node((id, props, children): Layout) -> MenuItem {
 }
 
 /// «_Файл» → «Файл», «a__b» → «a_b» (подчёркивание — клавиша-подсказка).
-fn strip_mnemonic(s: &str) -> String {
+pub(crate) fn strip_mnemonic(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {

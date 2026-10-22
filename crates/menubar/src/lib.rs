@@ -1,5 +1,6 @@
 //! Строка меню, как в macOS: сверху во всю ширину экрана, полупрозрачная.
-//! Слева — яблоко (меню яблока) и жирное название активной программы,
+//! Слева — яблоко (меню яблока), жирное название активной программы и её
+//! меню («Файл», «Правка»… — глобальное меню),
 //! справа — раскладка, громкость, батарея, колокольчик уведомлений и часы. Здесь нет X11: состояние, где что
 //! стоит, и рисование в картинку.
 
@@ -22,6 +23,8 @@ pub enum Part {
     App,
     /// Значок трея (номер в [`Bar::tray`]).
     Tray(usize),
+    /// Меню программы (номер в [`Bar::menus`]).
+    Menu(usize),
     Layout,
     Volume,
     Battery,
@@ -38,6 +41,8 @@ pub struct Bar {
     pub icon: String,
     /// Название активной программы.
     pub app_name: String,
+    /// Её меню: «Файл», «Правка»…
+    pub menus: Vec<String>,
     /// Подпись раскладки («en», «ru»); `None` — раскладка одна, не показываем.
     pub layout: Option<String>,
     /// Иконка громкости; `None` — звука нет.
@@ -83,6 +88,7 @@ impl Bar {
             height,
             icon: icon.to_string(),
             app_name: String::new(),
+            menus: Vec::new(),
             layout: None,
             volume: None,
             battery: None,
@@ -98,9 +104,17 @@ impl Bar {
         let mut out = Vec::new();
         let apple_w = ICON as f32 + 2.0 * ITEM_PAD;
         out.push((Part::Apple, EDGE, apple_w));
+        let mut left = EDGE + apple_w;
         if !self.app_name.is_empty() {
             let w = fonts.measure(&self.app_name, &BOLD).min(400.0) + 2.0 * ITEM_PAD;
-            out.push((Part::App, EDGE + apple_w, w));
+            out.push((Part::App, left, w));
+            left += w;
+        }
+        let menus_from = out.len();
+        for (i, title) in self.menus.iter().enumerate() {
+            let w = fonts.measure(title, &TEXT) + 2.0 * ITEM_PAD;
+            out.push((Part::Menu(i), left, w));
+            left += w;
         }
         let mut right = self.width as f32 - EDGE;
         if !self.clock.is_empty() {
@@ -130,6 +144,15 @@ impl Bar {
         for i in (0..self.tray.len()).rev() {
             right -= icon_w;
             out.push((Part::Tray(i), right, icon_w));
+        }
+        // Меню программы, которые не влезли до значков справа, не показываем.
+        let mut i = menus_from;
+        while i < out.len() {
+            if matches!(out[i].0, Part::Menu(_)) && out[i].1 + out[i].2 > right - 8.0 {
+                out.remove(i);
+            } else {
+                i += 1;
+            }
         }
         out
     }
@@ -216,6 +239,11 @@ impl Bar {
                     }
                 }
                 Part::Clock => fonts.draw(&mut pm, &self.clock, &TEXT, tx, text_y, None),
+                Part::Menu(i) => {
+                    if let Some(title) = self.menus.get(i) {
+                        fonts.draw(&mut pm, title, &TEXT, tx, text_y, None);
+                    }
+                }
             }
         }
         pm
@@ -232,6 +260,32 @@ mod tests {
         b.layout = Some("en".into());
         b.clock = "Чт 22 окт  11:49".into();
         b
+    }
+
+    #[test]
+    fn app_menus_after_name_and_cut_before_right_side() {
+        let mut fonts = Fonts::new("Inter");
+        let mut b = bar();
+        b.menus = vec!["Файл".into(), "Правка".into(), "Вид".into()];
+        let parts = b.parts(&mut fonts);
+        let x = |p: Part| parts.iter().find(|q| q.0 == p).map(|q| q.1);
+        assert!(x(Part::App).unwrap() < x(Part::Menu(0)).unwrap());
+        assert!(x(Part::Menu(0)).unwrap() < x(Part::Menu(2)).unwrap());
+        // Узкий экран — меню, что не влезли, пропадают, а не налезают на часы.
+        b.width = 420;
+        b.menus = (0..10).map(|i| format!("Меню {i}")).collect();
+        let parts = b.parts(&mut fonts);
+        let menus = parts
+            .iter()
+            .filter(|p| matches!(p.0, Part::Menu(_)))
+            .count();
+        assert!(menus < 10);
+        let clock = parts.iter().find(|p| p.0 == Part::Clock).unwrap().1;
+        assert!(
+            parts
+                .iter()
+                .all(|p| !matches!(p.0, Part::Menu(_)) || p.1 + p.2 <= clock)
+        );
     }
 
     #[test]

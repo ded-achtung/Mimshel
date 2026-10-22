@@ -1,7 +1,8 @@
 //! Строка меню на экране: окно-полоса во всю ширину у верхнего края (с
 //! резервом места), меню яблока, название активной программы, раскладка
 //! (щелчок — следующая), громкость (окошко с ползунком, колёсико), батарея,
-//! колокольчик («Не беспокоить»), трей (StatusNotifierItem) и часы.
+//! колокольчик («Не беспокоить»), трей (StatusNotifierItem), часы и
+//! глобальное меню активной программы («Файл», «Правка»…).
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -11,12 +12,16 @@ use std::time::{Duration, Instant};
 use shell_apps::App;
 use shell_core::config::Config;
 use shell_core::keyboard::layout_label;
-use shell_dbus::{MenuItem, Tray, TrayCmd, TrayItem, TrayUpdate};
+use shell_dbus::{
+    AppMenu, AppMenuCmd, AppMenuUpdate, GtkPaths, MenuItem, Source, Tray, TrayCmd, TrayItem,
+    TrayUpdate,
+};
 use shell_icons::Icons;
 use shell_menubar::status::{Battery, Sound};
 use shell_menubar::{AppleItem, Bar, Part, SoundAction, SoundPanel, apple_menu};
 use shell_text::Fonts;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
+use shell_x11::Key;
 use shell_x11::{Display, DockWindow, Event, Popup, Property};
 
 use crate::status::{self, Audio};
@@ -34,6 +39,11 @@ enum Cmd {
     NotifySettings,
     /// Пункт меню значка трея (id пункта в DBusMenu).
     Tray(i32),
+    /// Пункт глобального меню программы.
+    Global(i32),
+    /// Меню названия программы: свернуть или закрыть активное окно.
+    Minimize,
+    CloseWindow,
 }
 
 /// Шаг громкости колёсиком мыши над значком.
@@ -62,6 +72,12 @@ pub struct MenubarUi {
     tray: Option<Tray>,
     tray_items: Vec<TrayItem>,
     tray_menu_wait: Option<(String, f32)>,
+    /// Глобальное меню: служба чтения, меню какого окна показаны, сами меню и
+    /// какое из них ждём, чтобы открыть (номер и левый край).
+    appmenu: Option<AppMenu>,
+    app_window: Option<u32>,
+    app_menus: Vec<(String, Vec<MenuItem>)>,
+    app_menu_wait: Option<(usize, f32)>,
     /// Открытое меню (яблока, батареи, колокольчика) или окошко громкости —
     /// в одном всплывающем окне; `popup_dirty` — перерисовать его.
     menu: Option<Menu<Cmd>>,
@@ -89,6 +105,10 @@ impl MenubarUi {
             tray: None,
             tray_items: Vec::new(),
             tray_menu_wait: None,
+            appmenu: None,
+            app_window: None,
+            app_menus: Vec::new(),
+            app_menu_wait: None,
             menu: None,
             sound_panel: None,
             popup: d.create_popup("menubar-menu")?,
@@ -107,7 +127,18 @@ impl MenubarUi {
         status::watch_sound(tx.clone());
         status::watch_battery(tx.clone());
         status::watch_dnd(tx.clone());
-        let tray_tx = tx;
+        let tray_tx = tx.clone();
+        let menu_tx = tx;
+        ui.appmenu = match shell_dbus::appmenu::start(move |u| {
+            let _ = menu_tx.send(Msg::AppMenu(u));
+        }) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                eprintln!("Глобальное меню не запущено: {e}");
+                None
+            }
+        };
+        ui.load_app_menu(d, None);
         ui.tray = match shell_dbus::tray::start(move |u| {
             let _ = tray_tx.send(Msg::Tray(u));
         }) {
@@ -228,6 +259,29 @@ impl MenubarUi {
                 }
             }
             Event::Key(k) => {
+                // ← / → — соседнее меню программы.
+                if let Some(Part::Menu(i)) = self.bar.open
+                    && matches!(k.key, Key::Left | Key::Right)
+                    && !self.app_menus.is_empty()
+                {
+                    let n = self.app_menus.len();
+                    let j = if k.key == Key::Right {
+                        (i + 1) % n
+                    } else {
+                        (i + n - 1) % n
+                    };
+                    if let Some((_, px)) = self
+                        .bar
+                        .parts(fonts)
+                        .into_iter()
+                        .find(|p| p.0 == Part::Menu(j))
+                        .map(|p| (p.0, p.1))
+                    {
+                        self.close_popup(d)?;
+                        self.open_global(d, fonts, j, px)?;
+                    }
+                    return Ok(());
+                }
                 if let Some(menu) = &mut self.menu {
                     let result = menu.key(k.key);
                     self.menu_result(d, result)?;
@@ -288,6 +342,14 @@ impl MenubarUi {
                     Some((Part::Bell, px)) => self.open_bell(d, fonts, px)?,
                     Some((Part::Volume, px)) => self.open_sound(d, px)?,
                     Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
+                    Some((Part::Menu(i), px)) => {
+                        // Читаем меню заново: доступность пунктов могла поменяться.
+                        self.app_menu_wait = Some((i, px));
+                        self.bar.open = Some(Part::Menu(i));
+                        self.dirty = true;
+                        self.load_app_menu(d, Some(i));
+                    }
+                    Some((Part::App, px)) => self.open_app(d, fonts, px)?,
                     Some((Part::Layout, _)) if was.is_none() => self.next_layout(d)?,
                     _ => {}
                 }
@@ -298,6 +360,21 @@ impl MenubarUi {
                 if name != self.bar.app_name {
                     self.bar.app_name = name;
                     self.dirty = true;
+                }
+                if d.active_window() != self.app_window {
+                    self.load_app_menu(d, None);
+                }
+            }
+            // Меню открыто, мышь ведут по строке: другое меню программы —
+            // сразу оно, как на Mac.
+            Event::Motion { x, .. } => {
+                if let Some(Part::Menu(open)) = self.bar.open
+                    && let Some((Part::Menu(j), px)) = self.bar.part_at(fonts, f32::from(x))
+                    && j != open
+                    && self.menu.is_some()
+                {
+                    self.close_popup(d)?;
+                    self.open_global(d, fonts, j, px)?;
                 }
             }
             Event::Configure { .. } => self.place(d)?,
@@ -378,6 +455,21 @@ impl MenubarUi {
                     Cmd::Tray(id) => {
                         if let Some(tray) = &self.tray {
                             tray.send(TrayCmd::MenuClicked(key, id));
+                        }
+                    }
+                    Cmd::Global(id) => {
+                        if let Some(appmenu) = &self.appmenu {
+                            appmenu.send(AppMenuCmd::Activate(id));
+                        }
+                    }
+                    Cmd::Minimize => {
+                        if let Some(w) = d.active_window() {
+                            d.minimize(w)?;
+                        }
+                    }
+                    Cmd::CloseWindow => {
+                        if let Some(w) = d.active_window() {
+                            d.close(w)?;
                         }
                     }
                 }
@@ -505,6 +597,100 @@ impl MenubarUi {
         Ok(())
     }
 
+    /// Прочитать меню активного окна (`open` — какое из них затем открыть).
+    fn load_app_menu(&mut self, d: &Display, open: Option<usize>) {
+        let active = d.active_window();
+        if active != self.app_window {
+            // Меню прежнего окна сразу убираем: новое придёт чуть позже.
+            self.app_window = active;
+            self.app_menus.clear();
+            self.bar.menus.clear();
+            self.dirty = true;
+        }
+        let (Some(appmenu), Some(w)) = (&self.appmenu, active) else {
+            return;
+        };
+        // Рабочий стол без меню.
+        if d.window_info(w)
+            .is_some_and(|i| i.class.eq_ignore_ascii_case("xfdesktop"))
+        {
+            return;
+        }
+        let text = |name: &str| d.window_text(w, name);
+        let source = match (
+            text("_GTK_UNIQUE_BUS_NAME"),
+            text("_GTK_MENUBAR_OBJECT_PATH"),
+        ) {
+            (Some(bus), Some(menubar)) => Source::Gtk(GtkPaths {
+                bus,
+                menubar,
+                app: text("_GTK_APPLICATION_OBJECT_PATH"),
+                window: text("_GTK_WINDOW_OBJECT_PATH"),
+                unity: text("_UNITY_OBJECT_PATH"),
+            }),
+            _ => Source::Registrar,
+        };
+        appmenu.send(AppMenuCmd::Load {
+            window: w,
+            source,
+            open,
+        });
+    }
+
+    /// Пришло меню окна (и, может быть, его нужно открыть).
+    pub fn app_menu_update(
+        &mut self,
+        d: &Display,
+        fonts: &mut Fonts,
+        update: AppMenuUpdate,
+    ) -> Result<()> {
+        let AppMenuUpdate::Menu {
+            window,
+            menus,
+            open,
+        } = update;
+        if Some(window) != self.app_window {
+            return Ok(());
+        }
+        self.bar.menus = menus.iter().map(|(t, _)| t.clone()).collect();
+        self.app_menus = menus;
+        self.dirty = true;
+        if let (Some(i), Some((wait, x))) = (open, self.app_menu_wait)
+            && i == wait
+        {
+            self.app_menu_wait = None;
+            self.bar.open = None;
+            self.open_global(d, fonts, i, x)?;
+        }
+        Ok(())
+    }
+
+    /// Открыть меню программы `i` (из прочитанного) под его названием.
+    fn open_global(&mut self, d: &Display, fonts: &mut Fonts, i: usize, x: f32) -> Result<()> {
+        let Some((_, items)) = self.app_menus.get(i) else {
+            return Ok(());
+        };
+        let mut entries = Vec::new();
+        flatten(items, false, Cmd::Global, &mut entries);
+        if entries.is_empty() {
+            self.dirty = true;
+            return Ok(());
+        }
+        self.open_menu(d, fonts, Part::Menu(i), "global".into(), x, entries)
+    }
+
+    /// Меню названия программы.
+    fn open_app(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
+        if self.app_window.is_none() {
+            return Ok(());
+        }
+        let entries = vec![
+            entry("Свернуть", Cmd::Minimize, false, false),
+            entry("Закрыть окно", Cmd::CloseWindow, false, false),
+        ];
+        self.open_menu(d, fonts, Part::App, "app".into(), x, entries)
+    }
+
     /// Пришли значки трея или меню значка.
     pub fn tray_update(
         &mut self,
@@ -538,7 +724,7 @@ impl MenubarUi {
                 let part = Part::Tray(index.unwrap_or(0));
                 self.bar.open = None;
                 let mut entries = Vec::new();
-                flatten(&items, false, &mut entries);
+                flatten(&items, false, Cmd::Tray, &mut entries);
                 if entries.is_empty() {
                     self.dirty = true;
                     return Ok(());
@@ -640,9 +826,10 @@ impl MenubarUi {
     }
 }
 
-/// Пункты меню DBusMenu → пункты нашего меню. Подменю показываем внутри:
-/// его название — серым заголовком, пункты — с отступом.
-fn flatten(items: &[MenuItem], indent: bool, out: &mut Vec<MenuEntry<Cmd>>) {
+/// Пункты меню DBusMenu → пункты нашего меню (`cmd` — что делает пункт с
+/// таким id). Подменю показываем внутри: его название — серым
+/// заголовком, пункты — с отступом.
+fn flatten(items: &[MenuItem], indent: bool, cmd: fn(i32) -> Cmd, out: &mut Vec<MenuEntry<Cmd>>) {
     let mut separator = false;
     for item in items.iter().filter(|i| i.visible) {
         if item.separator {
@@ -652,7 +839,7 @@ fn flatten(items: &[MenuItem], indent: bool, out: &mut Vec<MenuEntry<Cmd>>) {
         let submenu = !item.children.is_empty();
         out.push(MenuEntry {
             label: item.label.clone(),
-            command: Cmd::Tray(item.id),
+            command: cmd(item.id),
             checked: item.toggle == Some(true),
             separator_before: separator,
             enabled: item.enabled && !submenu,
@@ -660,7 +847,7 @@ fn flatten(items: &[MenuItem], indent: bool, out: &mut Vec<MenuEntry<Cmd>>) {
         });
         separator = false;
         if submenu {
-            flatten(&item.children, true, out);
+            flatten(&item.children, true, cmd, out);
         }
     }
 }

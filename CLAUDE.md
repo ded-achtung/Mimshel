@@ -87,7 +87,15 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      nm-applet переведён на `--indicator` копией ярлыка `~/.config/autostart/nm-applet.desktop`
      (удалить её — вернуть как было); blueman переходит сам. Проверка трея без службы:
      `cargo run -p shell-dbus --example tray`.
-   - 3г глобальное меню.
+   - 3г **сделано** (23.10.2026): глобальное меню — `crates/dbus/src/appmenu.rs`. Два способа:
+     GTK (`org.gtk.Menus` + `org.gtk.Actions`; адреса — в свойствах окна `_GTK_UNIQUE_BUS_NAME`,
+     `_GTK_MENUBAR_OBJECT_PATH`, `_GTK_APPLICATION/WINDOW_OBJECT_PATH`, `_UNITY_OBJECT_PATH`) и
+     DBusMenu через `com.canonical.AppMenu.Registrar` (его держит appmenu-registrar из vala-panel).
+     Названия меню — после жирного имени программы; щелчок перечитывает меню и открывает его;
+     при открытом меню — переход мышью по названиям и ←/→; лишние, что не влезли, не показываются.
+     Щелчок по имени программы — «Свернуть», «Закрыть окно». Проверка без службы:
+     `cargo run -p shell-dbus --example appmenu -- 0xОКНО ШИНА ПУТЬ_МЕНЮ app win unity`.
+     Блокнот рисует и свою строку меню в окне (его настройка «Показывать строку меню»).
    - **Трей — решение пользователя:** только современный StatusNotifierItem (D-Bus); старое
      встраивание (XEmbed) не делаем. nm-applet перевести на `--indicator`, blueman — на SNI.
 4. Пункт управления и уведомления
