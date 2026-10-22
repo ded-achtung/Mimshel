@@ -64,6 +64,8 @@ pub(crate) enum Msg {
     Apps(Vec<App>),
     /// Кадр анимации дока.
     Tick,
+    /// Корзина стала полной (`true`) или пустой.
+    Trash(bool),
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -366,6 +368,12 @@ impl Ui<'_> {
             Msg::Tick => {
                 if let Some(dock) = &mut self.dock {
                     dock.tick();
+                }
+                Ok(())
+            }
+            Msg::Trash(full) => {
+                if let Some(dock) = &mut self.dock {
+                    dock.set_trash(self.display, full)?;
                 }
                 Ok(())
             }

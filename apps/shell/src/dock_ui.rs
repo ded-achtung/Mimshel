@@ -3,7 +3,8 @@
 //! миниатюры окон, «умное» скрытие и анимация.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -12,8 +13,8 @@ use std::time::{Duration, Instant};
 use shell_apps::App;
 use shell_core::config::{Config, DockHide, set_ini_value};
 use shell_dock::{
-    Action, Dock, Look, Menu, MenuCommand, MenuResult, Preview, PreviewCard, Rect, THUMB_H,
-    THUMB_W, should_hide, thumbnail,
+    Action, Dock, Look, Menu, MenuCommand, MenuResult, POOF, Preview, PreviewCard, Rect, THUMB_H,
+    THUMB_W, poof_image, should_hide, thumbnail,
 };
 use shell_icons::Icons;
 use shell_text::Fonts;
@@ -63,6 +64,8 @@ pub struct DockUi {
     over_preview: bool,
     /// Когда мышь ушла с дока или миниатюр.
     left_at: Option<Instant>,
+    /// «Облачко» на месте убранного значка: где (координаты окна дока) и с какого момента.
+    poof: Option<(f32, f32, Instant)>,
     /// Столбцы окна дока, где что-то нарисовано (после прошлого кадра).
     painted: Option<(u32, u32)>,
     tx: Sender<Msg>,
@@ -99,11 +102,14 @@ impl DockUi {
             preview_blocked: false,
             over_preview: false,
             left_at: None,
+            poof: None,
             painted: None,
             tx,
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
         };
+        ui.dock.set_trash(trash_full());
+        watch_trash(ui.tx.clone());
         d.watch_root()?;
         ui.place(d)?;
         ui.window.show(d)?;
@@ -125,6 +131,14 @@ impl DockUi {
         self.dock.set_apps(apps);
         self.refresh_windows(d);
         self.dirty = true;
+    }
+
+    /// Корзина стала полной или пустой — другая иконка (и пункт «Очистить»).
+    pub fn set_trash(&mut self, d: &Display, full: bool) -> Result<()> {
+        self.dock.set_trash(full);
+        self.place(d)?;
+        self.dirty = true;
+        Ok(())
     }
 
     /// Программа запущена (из Spotlight или Launchpad) — пусть значок прыгает.
@@ -226,7 +240,13 @@ impl DockUi {
                 let press = self.press.take();
                 if self.dock.dragging() {
                     self.dock.drag_to(x, y);
-                    self.drag_popup.hide_passive(d)?;
+                    // Убрали из дока — на месте значка «облачко» (в том же окне).
+                    if self.dock.drag_removes() {
+                        self.poof = Some((x, y, now));
+                        self.start_ticking();
+                    } else {
+                        self.drag_popup.hide_passive(d)?;
+                    }
                     let action = self.dock.drop_drag();
                     self.perform(d, action)?;
                     self.sync_pointer(d);
@@ -606,6 +626,8 @@ impl DockUi {
                     d.close(w)?;
                 }
             }
+            Action::OpenTrash => trash_call("DisplayTrash"),
+            Action::EmptyTrash => trash_call("EmptyTrash"),
             Action::Pinned(list) => {
                 // Полоса стала шире или уже — обновить резерв места и скрытие.
                 self.place(d)?;
@@ -625,7 +647,7 @@ impl DockUi {
     pub fn tick(&mut self) {
         let now = Instant::now();
         self.dock.settle(now);
-        if !self.dock.animating(now) {
+        if !self.dock.animating(now) && self.poof.is_none() {
             self.ticking.store(false, Ordering::SeqCst);
         }
         self.dirty = true;
@@ -655,6 +677,26 @@ impl DockUi {
                     (top + y - cy).round() as i16,
                     image.width() as u16,
                     image.height() as u16,
+                )?;
+                self.drag_popup.present(d, &image)?;
+            }
+        }
+        if let Some((x, y, start)) = self.poof {
+            let t = start.elapsed().as_secs_f32() / POOF.as_secs_f32();
+            if t >= 1.0 {
+                self.poof = None;
+                self.drag_popup.hide_passive(d)?;
+            } else {
+                let size = (self.dock.max_icon() as f32 * 1.4) as u32;
+                let image = poof_image(size, t);
+                let top = self.screen.1 as f32 - self.dock.window_height() as f32;
+                let half = size as f32 / 2.0;
+                self.drag_popup.show_passive(
+                    d,
+                    (x - half).round() as i16,
+                    (top + y - half).round() as i16,
+                    size as u16,
+                    size as u16,
                 )?;
                 self.drag_popup.present(d, &image)?;
             }
@@ -789,6 +831,72 @@ impl DockUi {
         }
         Ok(())
     }
+}
+
+/// Папка с файлами корзины (стандарт freedesktop: `$XDG_DATA_HOME/Trash/files`).
+fn trash_dir() -> Option<PathBuf> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+    Some(data.join("Trash/files"))
+}
+
+fn trash_full() -> bool {
+    trash_dir()
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .is_some_and(|mut entries| entries.next().is_some())
+}
+
+/// Раз в 2 с проверяет корзину и сообщает, когда она стала полной или пустой.
+fn watch_trash(tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        let mut full = trash_full();
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let now = trash_full();
+            if now != full {
+                full = now;
+                if tx.send(Msg::Trash(full)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// Открыть или очистить корзину через Проводник (Thunar, D-Bus
+/// `org.xfce.Trash`). Очищая, он сам спрашивает подтверждение, поэтому без
+/// Проводника корзина не очищается. Открыть можно и без него (`gio open`).
+/// В отдельном потоке: Проводник может отвечать долго.
+fn trash_call(method: &'static str) {
+    std::thread::spawn(move || {
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let ok = Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--dest=org.xfce.FileManager",
+                "/org/xfce/FileManager",
+                &format!("org.xfce.Trash.{method}"),
+                &format!("string:{display}"),
+                "string:",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            return;
+        }
+        if method == "DisplayTrash" {
+            let _ = Command::new("gio")
+                .args(["open", "trash:///"])
+                .stdin(Stdio::null())
+                .status();
+        } else {
+            eprintln!("Проводник не ответил — корзину не очищаю (нужно его подтверждение)");
+        }
+    });
 }
 
 /// Столбцы `x0..x1`, в которых есть хоть одна непрозрачная точка.

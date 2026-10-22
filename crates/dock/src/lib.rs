@@ -10,8 +10,9 @@ mod layout;
 mod menu;
 mod preview;
 
+pub use draw::{POOF, poof_image};
 pub use hide::{Rect, should_hide};
-pub use items::{Item, match_window};
+pub use items::{Item, TRASH, match_window};
 pub use layout::Slot;
 pub use menu::{Menu, MenuCommand, MenuEntry, MenuResult};
 pub use preview::{Preview, PreviewCard, THUMB_H, THUMB_W, thumbnail};
@@ -40,6 +41,9 @@ pub enum Action {
     Close(Vec<u32>),
     /// Закреплённые значки поменялись — сохранить новый список в настройки.
     Pinned(Vec<String>),
+    OpenTrash,
+    /// Очистить корзину — только с подтверждением.
+    EmptyTrash,
 }
 
 /// Настройки внешнего вида.
@@ -73,6 +77,8 @@ pub struct Dock {
     popup_open: bool,
     /// Перетаскиваемый значок.
     drag: Option<drag::Drag>,
+    /// Корзина в конце дока: полна ли она (`None` — без корзины).
+    trash: Option<bool>,
 }
 
 impl Dock {
@@ -92,6 +98,7 @@ impl Dock {
             bounces: Vec::new(),
             popup_open: false,
             drag: None,
+            trash: None,
         };
         d.rebuild();
         d
@@ -166,7 +173,7 @@ impl Dock {
             .drag
             .and_then(|d| self.items.get(d.index))
             .map(|i| i.key.clone());
-        self.items = items::build(&self.apps, &self.pinned, &self.windows);
+        self.items = items::build(&self.apps, &self.pinned, &self.windows, self.trash);
         // Значки перестроились посреди перетаскивания — найти свой заново.
         if let Some(key) = dragged {
             match self.items.iter().position(|i| i.key == key) {
@@ -184,11 +191,25 @@ impl Dock {
             .retain(|(key, _)| items.iter().any(|i| &i.key == key && i.windows.is_empty()));
     }
 
+    /// Показать корзину в конце дока; `full` — есть ли в ней что-то.
+    pub fn set_trash(&mut self, full: bool) {
+        if self.trash != Some(full) {
+            self.trash = Some(full);
+            self.rebuild();
+        }
+    }
+
     /// Клик по значку `index` кнопкой `button`.
     pub fn click(&mut self, index: usize, button: u8, now: Instant) -> Action {
         let Some(item) = self.items.get(index) else {
             return Action::Nothing;
         };
+        if item.key == TRASH {
+            return match button {
+                1 | 2 => Action::OpenTrash,
+                _ => Action::Nothing,
+            };
+        }
         let launch = |item: &Item| match &item.app {
             Some(app) => Action::Launch(Box::new(app.clone())),
             None => Action::Nothing,
@@ -222,6 +243,23 @@ impl Dock {
     /// Меню значка `index` (правый клик). Пусто — меню нет.
     pub fn menu(&self, index: usize) -> Option<Menu> {
         let item = self.items.get(index)?;
+        if item.key == TRASH {
+            let mut entries = vec![MenuEntry {
+                label: "Открыть".into(),
+                command: MenuCommand::OpenTrash,
+                checked: false,
+                separator_before: false,
+            }];
+            if self.trash == Some(true) {
+                entries.push(MenuEntry {
+                    label: "Очистить Корзину…".into(),
+                    command: MenuCommand::EmptyTrash,
+                    checked: false,
+                    separator_before: true,
+                });
+            }
+            return Some(Menu::new(item.key.clone(), entries));
+        }
         let running = !item.windows.is_empty();
         // Сверху — окна программы в порядке появления, как на Mac.
         let mut windows = item.windows.clone();
@@ -287,6 +325,8 @@ impl Dock {
             },
             MenuCommand::Quit => Action::Close(item.windows.clone()),
             MenuCommand::Activate(w) => Action::Activate(w),
+            MenuCommand::OpenTrash => Action::OpenTrash,
+            MenuCommand::EmptyTrash => Action::EmptyTrash,
             MenuCommand::TogglePin => {
                 if item.app.is_none() {
                     return Action::Nothing;
@@ -489,6 +529,40 @@ pub(crate) mod tests {
         );
         assert_eq!(d.items[2].windows, [11]);
         assert_eq!(d.windows_without_icon(), [12]);
+    }
+
+    #[test]
+    fn trash_is_last_and_stays_put() {
+        let now = Instant::now();
+        let mut d = dock();
+        d.set_trash(false);
+        d.set_windows(vec![(window(10, "xfce4-terminal", "Xfce4-terminal"), None)]);
+        assert_eq!(keys(&d).last().map(String::as_str), Some(TRASH));
+        let n = d.items.len() - 1;
+        assert!(d.items[n].separator_before, "перед корзиной разделитель");
+        assert!(d.items[n - 1].separator_before, "и перед запущенными");
+        assert_eq!(
+            d.items[n].app.as_ref().unwrap().icon.as_deref(),
+            Some("user-trash")
+        );
+
+        assert_eq!(d.click(n, 1, now), Action::OpenTrash);
+        assert!(!d.animating(now), "корзина не прыгает");
+        // Пустую не очистить, полную — можно; закрепить нельзя.
+        let labels = |m: Menu| m.entries.into_iter().map(|e| e.command).collect::<Vec<_>>();
+        assert_eq!(labels(d.menu(n).unwrap()), [MenuCommand::OpenTrash]);
+        d.set_trash(true);
+        assert_eq!(
+            d.items[n].app.as_ref().unwrap().icon.as_deref(),
+            Some("user-trash-full")
+        );
+        assert_eq!(
+            labels(d.menu(n).unwrap()),
+            [MenuCommand::OpenTrash, MenuCommand::EmptyTrash]
+        );
+        // Тащить корзину нельзя.
+        d.start_drag(n, 100.0, 100.0);
+        assert!(!d.dragging());
     }
 
     #[test]

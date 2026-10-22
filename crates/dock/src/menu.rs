@@ -20,6 +20,10 @@ pub enum MenuCommand {
     Quit,
     /// Переключиться на окно.
     Activate(u32),
+    /// Открыть корзину.
+    OpenTrash,
+    /// Очистить корзину (Проводник сначала спросит подтверждение).
+    EmptyTrash,
 }
 
 #[derive(Debug, Clone, PartialEq)]

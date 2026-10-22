@@ -4,8 +4,41 @@
 //! ненадёжно — копия ярлыка в другой папке давала дубли. Здесь окно
 //! сопоставляется с программой по её идентификатору и признакам самого окна.
 
+use std::path::PathBuf;
+
 use shell_apps::App;
 use shell_core::windows::WindowInfo;
+
+/// Ключ значка корзины (в конце дока, за разделителем).
+pub const TRASH: &str = "trash:";
+
+/// Корзина как «программа»: имя и иконка (пустая или полная). Запускать её
+/// нечего — открывает и очищает её служба (через Проводник).
+pub(crate) fn trash_app(full: bool) -> App {
+    App {
+        id: TRASH.into(),
+        path: PathBuf::new(),
+        name: "Корзина".into(),
+        name_untranslated: "Trash".into(),
+        generic_name: None,
+        comment: None,
+        keywords: vec![],
+        categories: vec![],
+        icon: Some(
+            if full {
+                "user-trash-full"
+            } else {
+                "user-trash"
+            }
+            .into(),
+        ),
+        command: vec![],
+        working_dir: None,
+        terminal: false,
+        startup_wm_class: None,
+        no_display: false,
+    }
+}
 
 /// Значок в доке: программа (закреплённая или запущенная) либо окно без ярлыка.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,11 +100,13 @@ pub fn match_window(w: &WindowInfo, hint: Option<&str>, apps: &[App]) -> Option<
 }
 
 /// Значки: закреплённые по порядку настроек, затем остальные запущенные
-/// программы и окна без ярлыка — в порядке появления окон.
+/// программы и окна без ярлыка — в порядке появления окон; в конце корзина
+/// (`trash` — полна ли она; `None` — без корзины).
 pub(crate) fn build(
     apps: &[App],
     pinned: &[String],
     windows: &[(WindowInfo, Option<usize>)],
+    trash: Option<bool>,
 ) -> Vec<Item> {
     let mut items: Vec<Item> = pinned
         .iter()
@@ -122,10 +157,28 @@ pub(crate) fn build(
             item.windows.push(w.id);
         }
     }
+    if let Some(full) = trash {
+        let app = trash_app(full);
+        items.push(Item {
+            key: TRASH.into(),
+            name: app.name.clone(),
+            app: Some(app),
+            pinned: false,
+            windows: Vec::new(),
+            separator_before: false,
+        });
+    }
     if let Some(first) = items.iter().position(|it| !it.pinned)
         && first > 0
     {
         items[first].separator_before = true;
+    }
+    let n = items.len();
+    if n > 1
+        && let Some(last) = items.last_mut()
+        && last.key == TRASH
+    {
+        last.separator_before = true;
     }
     items
 }
@@ -197,7 +250,7 @@ mod tests {
             (window(10, "thunar", "Thunar"), Some(4)),
             (window(31, "meld", "Meld"), Some(2)),
         ];
-        let items = build(&apps, &["thunar".into(), "nope".into()], &windows);
+        let items = build(&apps, &["thunar".into(), "nope".into()], &windows, None);
         let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
         assert_eq!(keys, ["thunar.desktop", "org.gnome.Meld.desktop"]);
         assert!(items[1].separator_before && !items[0].separator_before);

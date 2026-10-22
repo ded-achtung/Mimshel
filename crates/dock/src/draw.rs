@@ -166,6 +166,42 @@ impl Dock {
     }
 }
 
+/// Сколько длится «облачко», когда значок убрали из дока.
+pub const POOF: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Кадр «облачка» размером `size`: `t` от 0 до 1 — ход анимации. Клубы
+/// разлетаются от середины, растут и тают.
+pub fn poof_image(size: u32, t: f32) -> Pixmap {
+    let s = size as f32;
+    let t = t.clamp(0.0, 1.0);
+    let mut pm = Pixmap::new(size.max(1), size.max(1)).expect("размер не нулевой");
+    let alpha = ((1.0 - t) * 230.0) as u8;
+    let spread = s * (0.10 + 0.22 * t);
+    let r = s * (0.13 + 0.10 * t);
+    let puffs = 7;
+    let mut draw = |x: f32, y: f32, r: f32| {
+        if let Some(c) = circle(x, y, r) {
+            pm.fill_path(
+                &c,
+                &paint([0xee, 0xee, 0xee, alpha]),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    };
+    for k in 0..puffs {
+        let a = k as f32 * std::f32::consts::TAU / puffs as f32 + t * 0.6;
+        draw(
+            s / 2.0 + spread * a.cos(),
+            s / 2.0 + 0.8 * spread * a.sin(),
+            r,
+        );
+    }
+    draw(s / 2.0, s / 2.0, r * 1.2);
+    pm
+}
+
 /// Размер подписи (тёмной плашки с текстом).
 fn tip_size(fonts: &mut Fonts, text: &str) -> (f32, f32) {
     let tw = fonts.measure(text, &TIP_TEXT).min(400.0);
@@ -236,6 +272,15 @@ pub(crate) fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
 mod tests {
     use super::*;
     use crate::tests::{dock, window};
+
+    #[test]
+    fn poof_fades_out() {
+        let lit = |pm: &Pixmap| pm.pixels().iter().filter(|p| p.alpha() > 20).count();
+        let start = poof_image(64, 0.0);
+        let mid = poof_image(64, 0.5);
+        assert!(lit(&start) > 500 && lit(&mid) > 500);
+        assert_eq!(lit(&poof_image(64, 1.0)), 0, "в конце не видно");
+    }
 
     #[test]
     fn renders_bar_dot_and_tooltip() {

@@ -5,7 +5,7 @@
 //! только закрепить.
 
 use crate::layout::SEPARATOR;
-use crate::{Action, Dock};
+use crate::{Action, Dock, TRASH};
 
 /// Значок, который тащат, и где сейчас указатель (координаты окна дока).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,7 +18,8 @@ pub(crate) struct Drag {
 impl Dock {
     /// Начать тащить значок `index` (указатель в `x`, `y`).
     pub fn start_drag(&mut self, index: usize, x: f32, y: f32) {
-        if index < self.items.len() {
+        // Корзина стоит на своём месте.
+        if self.items.get(index).is_some_and(|i| i.key != TRASH) {
             self.drag = Some(Drag { index, x, y });
         }
     }
@@ -73,7 +74,7 @@ impl Dock {
             let seq = order
                 .into_iter()
                 .enumerate()
-                .map(|(k, i)| (i, k == pinned && k > 0))
+                .map(|(k, i)| (i, k > 0 && (k == pinned || self.items[i].key == TRASH)))
                 .collect();
             (seq, pinned)
         };
