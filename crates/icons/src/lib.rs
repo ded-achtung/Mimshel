@@ -259,25 +259,105 @@ fn read_theme(bases: &[PathBuf], name: &str) -> Option<(Vec<Dir>, Vec<String>)> 
 
 /// Рисует файл иконки в квадрат `size`×`size`, сохраняя пропорции.
 fn render(path: &Path, size: u32) -> Option<Pixmap> {
+    render_file(path, size, size, Fit::Contain)
+}
+
+/// Как уложить картинку в рамку.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fit {
+    /// Целиком, с пустыми полями по краям (иконки).
+    Contain,
+    /// Заполнить всю рамку, лишнее по краям обрезать (обои, аватар).
+    Cover,
+}
+
+/// Картинка из файла (SVG, PNG или JPEG — по содержимому, не по имени:
+/// у `~/.face` расширения нет) в рамке `w`×`h`.
+pub fn render_file(path: &Path, w: u32, h: u32, fit: Fit) -> Option<Pixmap> {
     let data = std::fs::read(path).ok()?;
-    let mut out = Pixmap::new(size, size)?;
-    let s = size as f32;
-    if path.extension().is_some_and(|e| e == "svg") {
-        let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
-        let (w, h) = (tree.size().width(), tree.size().height());
-        let k = s / w.max(h);
-        let t = Transform::from_scale(k, k).post_translate((s - w * k) / 2.0, (s - h * k) / 2.0);
-        resvg::render(&tree, t, &mut out.as_mut());
-    } else {
-        let img = Pixmap::decode_png(&data).ok()?;
-        let (w, h) = (img.width() as f32, img.height() as f32);
-        let k = s / w.max(h);
+    let mut out = Pixmap::new(w, h)?;
+    let (fw, fh) = (w as f32, h as f32);
+    let scale = |iw: f32, ih: f32| match fit {
+        Fit::Contain => (fw / iw).min(fh / ih),
+        Fit::Cover => (fw / iw).max(fh / ih),
+    };
+    if let Some(img) = decode_raster(&data) {
+        // Сильное уменьшение одной интерполяцией даёт рябь — сначала
+        // усредняем квадратиками в целое число раз.
+        let k = scale(img.width() as f32, img.height() as f32);
+        let img = match (1.0 / k).floor() as u32 {
+            n if n >= 2 => shrink(&img, n)?,
+            _ => img,
+        };
+        let (iw, ih) = (img.width() as f32, img.height() as f32);
+        let k = scale(iw, ih);
         let paint = PixmapPaint {
             quality: FilterQuality::Bicubic,
             ..PixmapPaint::default()
         };
-        let t = Transform::from_scale(k, k).post_translate((s - w * k) / 2.0, (s - h * k) / 2.0);
+        let t =
+            Transform::from_scale(k, k).post_translate((fw - iw * k) / 2.0, (fh - ih * k) / 2.0);
         out.draw_pixmap(0, 0, img.as_ref(), &paint, t, None);
+    } else {
+        let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
+        let (iw, ih) = (tree.size().width(), tree.size().height());
+        let k = scale(iw, ih);
+        let t =
+            Transform::from_scale(k, k).post_translate((fw - iw * k) / 2.0, (fh - ih * k) / 2.0);
+        resvg::render(&tree, t, &mut out.as_mut());
+    }
+    Some(out)
+}
+
+/// PNG или JPEG (по первым байтам файла).
+fn decode_raster(data: &[u8]) -> Option<Pixmap> {
+    if data.starts_with(b"\x89PNG") {
+        return Pixmap::decode_png(data).ok();
+    }
+    if !data.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    use zune_jpeg::zune_core::bytestream::ZCursor;
+    use zune_jpeg::zune_core::colorspace::ColorSpace;
+    use zune_jpeg::zune_core::options::DecoderOptions;
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    decoder.decode_headers().ok()?;
+    if decoder.output_colorspace()? != ColorSpace::RGBA {
+        return None;
+    }
+    let rgba = decoder.decode().ok()?;
+    let info = decoder.info()?;
+    // В JPEG нет прозрачности — умножать на неё не нужно.
+    Pixmap::from_vec(
+        rgba,
+        tiny_skia::IntSize::from_wh(u32::from(info.width), u32::from(info.height))?,
+    )
+}
+
+/// Уменьшить в `n` раз: каждая точка — среднее квадрата `n`×`n`.
+fn shrink(src: &Pixmap, n: u32) -> Option<Pixmap> {
+    let (w, h) = (src.width() / n, src.height() / n);
+    let mut out = Pixmap::new(w.max(1), h.max(1))?;
+    let (sw, data) = (src.width() as usize, src.data());
+    let n = n as usize;
+    let dst = out.data_mut();
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let mut sum = [0u32; 4];
+            for yy in y * n..(y + 1) * n {
+                let row = (yy * sw + x * n) * 4;
+                for px in data[row..row + n * 4].as_chunks::<4>().0 {
+                    for c in 0..4 {
+                        sum[c] += u32::from(px[c]);
+                    }
+                }
+            }
+            let o = (y * w as usize + x) * 4;
+            for c in 0..4 {
+                dst[o + c] = (sum[c] / (n * n) as u32) as u8;
+            }
+        }
     }
     Some(out)
 }
@@ -394,5 +474,43 @@ mod tests {
         // Красный квадрат на всю иконку.
         assert_eq!(p.pixel(13, 13).unwrap().red(), 255);
         assert!(i.get("missing", 26).is_none());
+    }
+
+    #[test]
+    fn image_files_by_content_and_fit() {
+        let t = TempDir::new("files");
+        // SVG 2:1 без расширения (как ~/.face): левая половина красная, правая синяя.
+        t.write(
+            "face",
+            "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10'>\
+             <rect width='10' height='10' fill='#f00'/>\
+             <rect x='10' width='10' height='10' fill='#00f'/></svg>",
+        );
+        let cover = render_file(&t.0.join("face"), 10, 10, Fit::Cover).unwrap();
+        // Заполнено целиком: края не прозрачные, середина — стык половин.
+        assert_eq!(cover.pixel(0, 0).unwrap().alpha(), 255);
+        assert_eq!(cover.pixel(0, 5).unwrap().red(), 255);
+        assert_eq!(cover.pixel(9, 5).unwrap().blue(), 255);
+        let contain = render_file(&t.0.join("face"), 10, 10, Fit::Contain).unwrap();
+        assert_eq!(contain.pixel(5, 0).unwrap().alpha(), 0, "поля сверху");
+
+        // JPEG 64×32 (красный | синий) в 16×16 с заполнением: уменьшение в 2 раза
+        // усреднением, края — чистые цвета.
+        let jpg = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/half.jpg");
+        let p = render_file(&jpg, 16, 16, Fit::Cover).unwrap();
+        assert!(p.pixel(1, 8).unwrap().red() > 240);
+        assert!(p.pixel(14, 8).unwrap().blue() > 240);
+        assert_eq!(p.pixel(0, 0).unwrap().alpha(), 255);
+
+        // PNG по содержимому, имя без расширения.
+        let mut png = Pixmap::new(4, 4).unwrap();
+        png.fill(tiny_skia::Color::from_rgba8(0, 255, 0, 255));
+        std::fs::write(t.0.join("pic"), png.encode_png().unwrap()).unwrap();
+        let p = render_file(&t.0.join("pic"), 8, 8, Fit::Contain).unwrap();
+        assert_eq!(p.pixel(4, 4).unwrap().green(), 255);
+
+        assert!(render_file(&t.0.join("missing"), 8, 8, Fit::Cover).is_none());
+        t.write("junk", "не картинка");
+        assert!(render_file(&t.0.join("junk"), 8, 8, Fit::Cover).is_none());
     }
 }
