@@ -63,6 +63,8 @@ pub struct DockUi {
     over_preview: bool,
     /// Когда мышь ушла с дока или миниатюр.
     left_at: Option<Instant>,
+    /// Столбцы окна дока, где что-то нарисовано (после прошлого кадра).
+    painted: Option<(u32, u32)>,
     tx: Sender<Msg>,
     terminal: Vec<String>,
     screen: (u32, u32),
@@ -97,6 +99,7 @@ impl DockUi {
             preview_blocked: false,
             over_preview: false,
             left_at: None,
+            painted: None,
             tx,
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
@@ -757,11 +760,51 @@ impl DockUi {
     fn redraw(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
         let now = Instant::now();
         let frame = self.dock.render(fonts, icons, now);
-        self.window.present(d, &frame)?;
+        let t1 = Instant::now();
+        // Окно во всю ширину экрана, а нарисовано обычно меньше: отправляем
+        // только занятые столбцы — и те, что были заняты прошлым кадром
+        // (их нужно стереть).
+        let painted = painted_columns(&frame);
+        let send = match (painted, self.painted) {
+            (Some((a, b)), Some((c, e))) => Some((a.min(c), b.max(e))),
+            (one, other) => one.or(other),
+        };
+        if let Some((x0, x1)) = send {
+            self.window.present_columns(d, &frame, x0, x1)?;
+        }
+        self.painted = painted;
+        let t2 = Instant::now();
         self.window
             .set_input(d, &self.dock.input_rects(self.dock.hidden_at(now)))?;
+        if std::env::var_os("SHELL_TIMING").is_some() {
+            d.sync()?;
+            eprintln!(
+                "кадр {}x{}: рисование {:?}, вывод {:?}, до конца {:?}",
+                frame.width(),
+                frame.height(),
+                t1 - now,
+                t2 - t1,
+                now.elapsed()
+            );
+        }
         Ok(())
     }
+}
+
+/// Столбцы `x0..x1`, в которых есть хоть одна непрозрачная точка.
+fn painted_columns(pm: &tiny_skia::Pixmap) -> Option<(u32, u32)> {
+    let w = pm.width() as usize;
+    let (mut x0, mut x1) = (w, 0);
+    for row in pm.data().chunks(w * 4) {
+        let px = row.as_chunks::<4>().0;
+        if let Some(first) = px[..x0].iter().position(|p| p[3] != 0) {
+            x0 = first;
+        }
+        if let Some(last) = px[x1..].iter().rposition(|p| p[3] != 0) {
+            x1 = x1 + last + 1;
+        }
+    }
+    (x0 < x1).then_some((x0 as u32, x1 as u32))
 }
 
 /// Записать закреплённые значки в `[dock] apps` файла настроек; остальное
@@ -782,4 +825,22 @@ fn save_pinned(path: &Path, apps: &[String]) -> std::io::Result<()> {
     std::io::Write::write_all(&mut file, text.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::painted_columns;
+    use tiny_skia::{Color, Pixmap, Rect, Transform};
+
+    #[test]
+    fn painted_columns_finds_content() {
+        let mut pm = Pixmap::new(100, 20).unwrap();
+        assert_eq!(painted_columns(&pm), None);
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(Color::from_rgba8(255, 255, 255, 255));
+        let rect = |x, y, w| Rect::from_xywh(x, y, w, 2.0).unwrap();
+        pm.fill_rect(rect(30.0, 15.0, 10.0), &paint, Transform::identity(), None);
+        pm.fill_rect(rect(55.0, 2.0, 5.0), &paint, Transform::identity(), None);
+        assert_eq!(painted_columns(&pm), Some((30, 60)));
+    }
 }

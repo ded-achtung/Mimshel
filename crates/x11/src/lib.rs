@@ -4,6 +4,7 @@
 //! окно-док ([`dock`]).
 
 mod dock;
+mod shm;
 mod windows;
 
 pub use dock::DockWindow;
@@ -131,6 +132,8 @@ pub struct Display {
     pub(crate) visual: u32,
     pub(crate) colormap: u32,
     keymap: Mutex<Keymap>,
+    /// Общая память для больших картинок (см. [`shm`]).
+    shm: shm::Shm,
 }
 
 impl Display {
@@ -156,6 +159,7 @@ impl Display {
         conn.create_colormap(ColormapAlloc::NONE, colormap, root, visual)?;
         let keymap = Mutex::new(Keymap::load(&conn)?);
         let atoms = Atoms::new(&conn)?.reply()?;
+        let shm = shm::Shm::new(&conn);
 
         Ok(Display {
             conn,
@@ -165,6 +169,7 @@ impl Display {
             visual,
             colormap,
             keymap,
+            shm,
         })
     }
 
@@ -222,16 +227,24 @@ impl Display {
     /// Снимок всего экрана (как он виден сейчас, с окнами).
     pub fn capture_screen(&self) -> Result<Pixmap> {
         let (w, h) = self.screen_size();
-        let reply = self
-            .conn
-            .get_image(ImageFormat::Z_PIXMAP, self.root, 0, 0, w, h, !0)?
-            .reply()?;
-        let mut data = reply.data;
-        if data.len() != usize::from(w) * usize::from(h) * 4 {
-            return Err(
-                format!("неожиданный формат снимка экрана (глубина {})", reply.depth).into(),
-            );
-        }
+        let mut data = match self.shm_get(self.root, w, h) {
+            Some(Some(data)) => data,
+            Some(None) => return Err("снимок экрана не получился".into()),
+            None => {
+                let reply = self
+                    .conn
+                    .get_image(ImageFormat::Z_PIXMAP, self.root, 0, 0, w, h, !0)?
+                    .reply()?;
+                if reply.data.len() != usize::from(w) * usize::from(h) * 4 {
+                    return Err(format!(
+                        "неожиданный формат снимка экрана (глубина {})",
+                        reply.depth
+                    )
+                    .into());
+                }
+                reply.data
+            }
+        };
         // X отдаёт BGRX, картинке нужен RGBA без прозрачности.
         for px in data.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
@@ -451,15 +464,48 @@ impl Popup {
 
 /// Выводит картинку в 32-битное окно.
 pub(crate) fn put_pixmap(d: &Display, window: Window, gc: u32, pixmap: &Pixmap) -> Result<()> {
-    let (w, h) = (pixmap.width() as usize, pixmap.height() as usize);
+    put_columns(d, window, gc, pixmap, 0, pixmap.width())
+}
+
+/// Через общую память выводим только большие картинки: на маленьких
+/// ожидание ответа сервера съедает выигрыш.
+const SHM_MIN_BYTES: usize = 2 * 1024 * 1024;
+
+/// Выводит столбцы `x0..x1` картинки в те же столбцы окна (остальное в окне
+/// не меняется).
+pub(crate) fn put_columns(
+    d: &Display,
+    window: Window,
+    gc: u32,
+    pixmap: &Pixmap,
+    x0: u32,
+    x1: u32,
+) -> Result<()> {
+    let (x0, x1) = (
+        x0.min(pixmap.width()) as usize,
+        x1.min(pixmap.width()) as usize,
+    );
+    let (full, h) = (pixmap.width() as usize, pixmap.height() as usize);
+    let w = x1.saturating_sub(x0);
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
     // tiny-skia хранит RGBA, X-сервер ждёт BGRA.
-    let mut data = pixmap.data().to_vec();
+    let src = pixmap.data();
+    let mut data = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        data.extend_from_slice(&src[(y * full + x0) * 4..(y * full + x1) * 4]);
+    }
     for px in data.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
+    if data.len() >= SHM_MIN_BYTES && d.shm_put(window, gc, (w as u16, h as u16), x0 as i16, &data)
+    {
+        return Ok(());
+    }
     // Большую картинку отправляем полосами — у запроса к X есть предел размера.
     let max = d.conn.maximum_request_bytes().saturating_sub(64);
-    let rows = (max / (w * 4)).clamp(1, h.max(1));
+    let rows = (max / (w * 4)).clamp(1, h);
     for (i, chunk) in data.chunks(rows * w * 4).enumerate() {
         d.conn.put_image(
             ImageFormat::Z_PIXMAP,
@@ -467,7 +513,7 @@ pub(crate) fn put_pixmap(d: &Display, window: Window, gc: u32, pixmap: &Pixmap) 
             gc,
             w as u16,
             (chunk.len() / (w * 4)) as u16,
-            0,
+            x0 as i16,
             (i * rows) as i16,
             0,
             32,

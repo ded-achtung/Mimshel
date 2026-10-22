@@ -189,13 +189,18 @@ impl Display {
     /// даже если окно закрыто другими. Свёрнутое окно не нарисовано — `None`.
     pub fn capture_window(&self, w: Window) -> Option<Pixmap> {
         let g = self.conn.get_geometry(w).ok()?.reply().ok()?;
-        let reply = self
-            .conn
-            .get_image(ImageFormat::Z_PIXMAP, w, 0, 0, g.width, g.height, !0)
-            .ok()?
-            .reply()
-            .ok()?;
-        let mut data = reply.data;
+        let mut data = match self.shm_get(w, g.width, g.height) {
+            Some(Some(data)) => data,
+            Some(None) => return None,
+            None => {
+                self.conn
+                    .get_image(ImageFormat::Z_PIXMAP, w, 0, 0, g.width, g.height, !0)
+                    .ok()?
+                    .reply()
+                    .ok()?
+                    .data
+            }
+        };
         if data.len() != usize::from(g.width) * usize::from(g.height) * 4 {
             return None;
         }

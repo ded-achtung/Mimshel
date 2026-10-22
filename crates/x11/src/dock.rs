@@ -11,7 +11,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use crate::{Display, Result, put_pixmap};
+use crate::{Display, Result, put_columns, put_pixmap};
 
 pub struct DockWindow {
     window: Window,
@@ -119,6 +119,11 @@ impl DockWindow {
 
     pub fn present(&self, d: &Display, pixmap: &Pixmap) -> Result<()> {
         put_pixmap(d, self.window, self.gc, pixmap)
+    }
+
+    /// Вывести только столбцы `x0..x1` (остальная часть окна не меняется).
+    pub fn present_columns(&self, d: &Display, pixmap: &Pixmap, x0: u32, x1: u32) -> Result<()> {
+        put_columns(d, self.window, self.gc, pixmap, x0, x1)
     }
 
     /// Где окно принимает клики и указатель — прямоугольники `(x, y, w, h)`
