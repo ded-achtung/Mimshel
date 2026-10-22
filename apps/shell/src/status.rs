@@ -144,7 +144,7 @@ fn watch<T: Send + 'static>(
     let (ping_tx, ping_rx) = mpsc::channel::<()>();
     std::thread::spawn(move || {
         loop {
-            let child = Command::new(program)
+            let child = watcher_command(program)
                 .args(args)
                 .env("LC_ALL", "C")
                 .stdin(Stdio::null())
@@ -172,6 +172,21 @@ fn watch<T: Send + 'static>(
             }
         }
     });
+}
+
+/// Команда для наблюдателя. Наблюдатель пишет только при событиях и
+/// поэтому не замечает, что службы не стало, — после каждого перезапуска
+/// службы такие копии оставались висеть. `setpriv --pdeathsig TERM` просит
+/// ядро завершить его вместе со службой (точнее — с потоком, который его
+/// запустил; этот поток живёт, пока жива служба).
+fn watcher_command(program: &str) -> Command {
+    if std::path::Path::new("/usr/bin/setpriv").exists() {
+        let mut cmd = Command::new("/usr/bin/setpriv");
+        cmd.args(["--pdeathsig", "TERM", "--", program]);
+        cmd
+    } else {
+        Command::new(program)
+    }
 }
 
 pub fn watch_sound(tx: Sender<Msg>) {
