@@ -117,8 +117,8 @@ impl Dock {
             }
         }
 
-        // Подпись над значком под указателем.
-        if let Some((s, icon_top)) = hovered {
+        // Подпись над значком под указателем (не при открытом меню).
+        if let Some((s, icon_top)) = hovered.filter(|_| !self.menu_open) {
             let name = &self.items[s.item].name;
             let tw = fonts.measure(name, &TIP_TEXT).min(400.0);
             let (bw, bh) = (tw + 20.0, TIP_TEXT.line_height() + 8.0);
@@ -155,7 +155,7 @@ impl Dock {
     }
 }
 
-fn paint(c: [u8; 4]) -> Paint<'static> {
+pub(crate) fn paint(c: [u8; 4]) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color(Color::from_rgba8(c[0], c[1], c[2], c[3]));
     p.anti_alias = true;
@@ -175,7 +175,7 @@ fn circle(x: f32, y: f32, r: f32) -> Option<Path> {
 }
 
 /// Прямоугольник со скруглёнными углами.
-fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
+pub(crate) fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
     let r = r.min(w / 2.0).min(h / 2.0);
     let k = r * 0.552_284_8;
     let (x1, y1) = (x + w, y + h);

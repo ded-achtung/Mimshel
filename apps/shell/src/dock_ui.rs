@@ -1,18 +1,20 @@
 //! Док на экране: окно-док во всю ширину у нижнего края, окна программ
-//! (список, активное окно, иконки), клики, «умное» скрытие и анимация.
+//! (список, активное окно, иконки), клики, меню значка, «умное» скрытие
+//! и анимация.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use shell_apps::App;
-use shell_core::config::{Config, DockHide};
-use shell_dock::{Action, Dock, Look, Rect, should_hide};
+use shell_core::config::{Config, DockHide, set_ini_value};
+use shell_dock::{Action, Dock, Look, Menu, MenuCommand, MenuResult, Rect, should_hide};
 use shell_icons::Icons;
 use shell_text::Fonts;
-use shell_x11::{Display, DockWindow, Event, Property};
+use shell_x11::{Display, DockWindow, Event, Popup, Property};
 
 use crate::ui::{Msg, Result};
 
@@ -29,6 +31,10 @@ pub struct DockUi {
     ticking: Arc<AtomicBool>,
     /// Нужно перерисовать (рисуем в [`DockUi::flush`], один раз на пачку событий).
     dirty: bool,
+    /// Меню значка (правый клик) и его окно; `menu_dirty` — перерисовать меню.
+    menu: Option<Menu>,
+    menu_popup: Popup,
+    menu_dirty: bool,
     tx: Sender<Msg>,
     terminal: Vec<String>,
     screen: (u32, u32),
@@ -49,6 +55,9 @@ impl DockUi {
             watched: HashSet::new(),
             ticking: Arc::new(AtomicBool::new(false)),
             dirty: true,
+            menu: None,
+            menu_popup: d.create_popup("dock-menu")?,
+            menu_dirty: false,
             tx,
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
@@ -90,7 +99,9 @@ impl DockUi {
             | Event::Motion { window, .. }
             | Event::Enter { window, .. }
             | Event::Leave { window }
-            | Event::Expose { window } => window == own,
+            | Event::Expose { window } => window == own || window == self.menu_popup.id(),
+            // Клавиатура у дока, только пока открыто меню.
+            Event::Key(_) => self.menu.is_some(),
             Event::Property { window, .. } | Event::Configure { window } => {
                 window == d.root() || self.watched.contains(&window)
             }
@@ -99,10 +110,23 @@ impl DockUi {
     }
 
     /// Обработать событие. Рисует потом [`DockUi::flush`].
-    pub fn event(&mut self, d: &Display, ev: Event) -> Result<()> {
+    pub fn event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
         let now = Instant::now();
         if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
             eprintln!("док: {ev:?}");
+        }
+        // Пока открыто меню, мышь и клавиатура — его; окна программ и экран
+        // отслеживаем как обычно.
+        if self.menu.is_some() && !matches!(ev, Event::Property { .. } | Event::Configure { .. }) {
+            return self.menu_event(d, fonts, ev);
+        }
+        // Запоздалые события уже закрытого меню.
+        if let Event::Button { window, .. }
+        | Event::Motion { window, .. }
+        | Event::Expose { window } = ev
+            && window == self.menu_popup.id()
+        {
+            return Ok(());
         }
         match ev {
             Event::Motion { x, .. } | Event::Enter { x, .. } => {
@@ -117,20 +141,11 @@ impl DockUi {
                 let Some(i) = self.dock.item_at(f32::from(x), f32::from(y)) else {
                     return Ok(());
                 };
-                match self.dock.click(i, button, now) {
-                    Action::Nothing => {}
-                    Action::Launch(app) => {
-                        if let Err(e) = app.launch(&self.terminal) {
-                            eprintln!("Не удалось запустить «{}»: {e}", app.name);
-                        }
-                        self.start_ticking();
-                    }
-                    Action::Activate(w) => d.activate(w)?,
-                    Action::Minimize(ws) => {
-                        for w in ws {
-                            d.minimize(w)?;
-                        }
-                    }
+                if button == 3 {
+                    self.open_menu(d, fonts, i)?;
+                } else {
+                    let action = self.dock.click(i, button, now);
+                    self.perform(d, action)?;
                 }
             }
             Event::Expose { .. } => {}
@@ -165,6 +180,139 @@ impl DockUi {
         Ok(())
     }
 
+    /// События, пока открыто меню значка.
+    fn menu_event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
+        let Some(menu) = &mut self.menu else {
+            return Ok(());
+        };
+        let popup = self.menu_popup.id();
+        let result = match ev {
+            Event::Motion { window, x, y } if window == popup => {
+                if menu.motion(f32::from(x), f32::from(y)) {
+                    MenuResult::Redraw
+                } else {
+                    MenuResult::Nothing
+                }
+            }
+            Event::Button { window, x, y, .. } if window == popup => {
+                menu.click(f32::from(x), f32::from(y))
+            }
+            // Правый клик по другому значку — его меню, как на Mac.
+            Event::Button {
+                x, y, button: 3, ..
+            } => {
+                let next = self.dock.item_at(f32::from(x), f32::from(y));
+                self.close_menu(d)?;
+                if let Some(i) = next {
+                    self.open_menu(d, fonts, i)?;
+                }
+                return Ok(());
+            }
+            // Любой другой клик мимо меню (в том числе по доку) — закрыть.
+            Event::Button { .. } => MenuResult::Close,
+            Event::Key(k) => menu.key(k.key),
+            Event::Expose { window } if window == popup => MenuResult::Redraw,
+            Event::Expose { .. } => {
+                self.dirty = true;
+                MenuResult::Nothing
+            }
+            // Движение по доку не трогаем: значки «замирают», пока открыто меню.
+            _ => MenuResult::Nothing,
+        };
+        match result {
+            MenuResult::Nothing => {}
+            MenuResult::Redraw => self.menu_dirty = true,
+            MenuResult::Close => self.close_menu(d)?,
+            MenuResult::Run(command) => {
+                let key = menu.key.clone();
+                self.close_menu(d)?;
+                self.run_command(d, &key, command)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Открыть меню значка `index` над ним.
+    fn open_menu(&mut self, d: &Display, fonts: &mut Fonts, index: usize) -> Result<()> {
+        let now = Instant::now();
+        let (Some(mut menu), Some((cx, icon_top))) = (
+            self.dock.menu(index),
+            self.dock.anchor(index, self.dock.hidden_at(now)),
+        ) else {
+            return Ok(());
+        };
+        let (w, h) = menu.measure(fonts);
+        let (sw, sh) = self.screen;
+        let window_top = sh as f32 - self.dock.window_height() as f32;
+        let x = (cx - w as f32 / 2.0).clamp(4.0, (sw as f32 - w as f32 - 4.0).max(4.0));
+        let y = (window_top + icon_top - h as f32 - 10.0).max(0.0);
+        self.menu_popup
+            .show(d, x as i16, y as i16, w as u16, h as u16)?;
+        self.menu = Some(menu);
+        self.menu_dirty = true;
+        self.dock.set_menu_open(true);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Закрыть меню (если открыто): например, перед открытием Spotlight.
+    pub fn close_menu(&mut self, d: &Display) -> Result<()> {
+        if self.menu.take().is_none() {
+            return Ok(());
+        }
+        self.menu_popup.hide(d)?;
+        self.dock.set_menu_open(false);
+        // Пока меню было открыто, док не следил за мышью — где она теперь?
+        let bar = self.dock.bar_rect(self.screen.1);
+        let over = d.pointer_position().filter(|&(x, y)| {
+            let x = i32::from(x);
+            i32::from(y) >= bar.y && x >= bar.x && x < bar.x + bar.w as i32
+        });
+        self.dock.set_pointer(over.map(|(x, _)| f32::from(x)));
+        self.update_hide(d);
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn run_command(&mut self, d: &Display, key: &str, command: MenuCommand) -> Result<()> {
+        let action = self.dock.command(key, command, Instant::now());
+        self.perform(d, action)
+    }
+
+    fn perform(&mut self, d: &Display, action: Action) -> Result<()> {
+        match action {
+            Action::Nothing => {}
+            Action::Launch(app) => {
+                if let Err(e) = app.launch(&self.terminal) {
+                    eprintln!("Не удалось запустить «{}»: {e}", app.name);
+                }
+                self.start_ticking();
+            }
+            Action::Activate(w) => d.activate(w)?,
+            Action::Minimize(ws) => {
+                for w in ws {
+                    d.minimize(w)?;
+                }
+            }
+            Action::Close(ws) => {
+                for w in ws {
+                    d.close(w)?;
+                }
+            }
+            Action::Pinned(list) => {
+                // Полоса стала шире или уже — обновить резерв места и скрытие.
+                self.place(d)?;
+                self.update_hide(d);
+                if let Some(path) = crate::ui::config_path()
+                    && let Err(e) = save_pinned(&path, &list)
+                {
+                    eprintln!("Не удалось сохранить значки дока в {}: {e}", path.display());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Кадр анимации. Сам кадр рисует [`DockUi::flush`]; если анимация
     /// закончилась, это будет последний кадр — в конечном положении.
     pub fn tick(&mut self) {
@@ -178,11 +326,17 @@ impl DockUi {
 
     /// Перерисовать, если что-то изменилось.
     pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
-        if !self.dirty {
-            return Ok(());
+        if self.dirty {
+            self.dirty = false;
+            self.redraw(d, fonts, icons)?;
         }
-        self.dirty = false;
-        self.redraw(d, fonts, icons)
+        if self.menu_dirty {
+            self.menu_dirty = false;
+            if let Some(menu) = &self.menu {
+                self.menu_popup.present(d, &menu.render(fonts))?;
+            }
+        }
+        Ok(())
     }
 
     fn start_ticking(&self) {
@@ -277,4 +431,24 @@ impl DockUi {
             .set_input(d, &self.dock.input_rects(self.dock.hidden_at(now)))?;
         Ok(())
     }
+}
+
+/// Записать закреплённые значки в `[dock] apps` файла настроек; остальное
+/// в файле не меняется. Пишем во временный файл и подменяем — при сбое
+/// посреди записи старый файл останется целым.
+fn save_pinned(path: &Path, apps: &[String]) -> std::io::Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let text = set_ini_value(&text, "dock", "apps", &apps.join(", "));
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("ini.tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    std::io::Write::write_all(&mut file, text.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path)
 }

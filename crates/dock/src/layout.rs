@@ -145,6 +145,16 @@ impl Dock {
             .map(|s| s.item)
     }
 
+    /// Середина значка `index` и верх его иконки (в координатах окна, при
+    /// нынешнем увеличении) — над ним открывается меню.
+    pub fn anchor(&self, index: usize, hidden: f32) -> Option<(f32, f32)> {
+        let h = self.window_height() as f32;
+        let bottom = self.bar_bottom(h, hidden);
+        let (slots, ..) = self.slots_at(self.pointer);
+        let s = slots.iter().find(|s| s.item == index)?;
+        Some((s.center(), bottom - PAD_BOTTOM - s.size))
+    }
+
     /// Где окно принимает клики (в координатах окна). Спрятан — тонкая полоска
     /// у края экрана, чтобы док выехал, когда к ней подведут указатель.
     pub fn input_rects(&self, hidden: f32) -> Vec<(i32, i32, u32, u32)> {

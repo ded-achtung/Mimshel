@@ -6,10 +6,12 @@ mod draw;
 mod hide;
 mod items;
 mod layout;
+mod menu;
 
 pub use hide::{Rect, should_hide};
 pub use items::{Item, match_window};
 pub use layout::Slot;
+pub use menu::{Menu, MenuCommand, MenuEntry, MenuResult};
 
 use std::time::{Duration, Instant};
 
@@ -31,6 +33,10 @@ pub enum Action {
     Launch(Box<App>),
     Activate(u32),
     Minimize(Vec<u32>),
+    /// Закрыть окна («Завершить»).
+    Close(Vec<u32>),
+    /// Закреплённые значки поменялись — сохранить новый список в настройки.
+    Pinned(Vec<String>),
 }
 
 /// Настройки внешнего вида.
@@ -60,6 +66,8 @@ pub struct Dock {
     slide: Option<(f32, f32, Instant)>,
     /// Прыжки значков после запуска: ключ значка и начало.
     bounces: Vec<(String, Instant)>,
+    /// Открыто меню значка — подпись над значком не нужна.
+    menu_open: bool,
 }
 
 impl Dock {
@@ -77,6 +85,7 @@ impl Dock {
             hidden: 0.0,
             slide: None,
             bounces: Vec::new(),
+            menu_open: false,
         };
         d.rebuild();
         d
@@ -187,6 +196,79 @@ impl Dock {
             self.launched(&key, now);
         }
         action
+    }
+
+    /// Меню значка `index` (правый клик). Пусто — меню нет.
+    pub fn menu(&self, index: usize) -> Option<Menu> {
+        let item = self.items.get(index)?;
+        let running = !item.windows.is_empty();
+        let mut entries = Vec::new();
+        // У окна без ярлыка нечего запускать и закреплять — только завершить.
+        if item.app.is_some() {
+            entries.push(MenuEntry {
+                label: if running {
+                    "Новое окно"
+                } else {
+                    "Открыть"
+                },
+                command: MenuCommand::Launch,
+                checked: false,
+                separator_before: false,
+            });
+            entries.push(MenuEntry {
+                label: "Оставить в Dock",
+                command: MenuCommand::TogglePin,
+                checked: item.pinned,
+                separator_before: true,
+            });
+        }
+        if running {
+            entries.push(MenuEntry {
+                label: "Завершить",
+                command: MenuCommand::Quit,
+                checked: false,
+                separator_before: true,
+            });
+        }
+        (!entries.is_empty()).then(|| Menu::new(item.key.clone(), entries))
+    }
+
+    /// Выполнить пункт меню значка `key`.
+    pub fn command(&mut self, key: &str, command: MenuCommand, now: Instant) -> Action {
+        let Some(item) = self.items.iter().find(|i| i.key == key) else {
+            return Action::Nothing;
+        };
+        match command {
+            MenuCommand::Launch => match &item.app {
+                Some(app) => {
+                    let app = app.clone();
+                    self.launched(key, now);
+                    Action::Launch(Box::new(app))
+                }
+                None => Action::Nothing,
+            },
+            MenuCommand::Quit => Action::Close(item.windows.clone()),
+            MenuCommand::TogglePin => {
+                if item.app.is_none() {
+                    return Action::Nothing;
+                }
+                // В настройках имена без «.desktop» (как пишет macos-look).
+                let stem = key.trim_end_matches(".desktop");
+                let same = |p: &String| p.trim_end_matches(".desktop") == stem;
+                if self.pinned.iter().any(same) {
+                    self.pinned.retain(|p| !same(p));
+                } else {
+                    self.pinned.push(stem.to_string());
+                }
+                self.rebuild();
+                Action::Pinned(self.pinned.clone())
+            }
+        }
+    }
+
+    /// Открыто ли меню значка (тогда подпись над значком не рисуется).
+    pub fn set_menu_open(&mut self, open: bool) {
+        self.menu_open = open;
     }
 
     /// Программа запущена (из дока, Spotlight или Launchpad) — её значок
@@ -368,6 +450,71 @@ pub(crate) mod tests {
         );
         assert_eq!(d.items[2].windows, [11]);
         assert_eq!(d.windows_without_icon(), [12]);
+    }
+
+    #[test]
+    fn pin_and_unpin_from_menu() {
+        let now = Instant::now();
+        let mut d = dock();
+        d.set_windows(vec![
+            (window(10, "xfce4-terminal", "Xfce4-terminal"), None),
+            (window(12, "xeyes", "XEyes"), None),
+        ]);
+        let labels = |m: &Menu| -> Vec<(&str, bool)> {
+            m.entries.iter().map(|e| (e.label, e.checked)).collect()
+        };
+
+        // Запущенный, не закреплённый Терминал: закрепить.
+        let m = d.menu(3).unwrap();
+        assert_eq!(
+            labels(&m),
+            [
+                ("Новое окно", false),
+                ("Оставить в Dock", false),
+                ("Завершить", false)
+            ]
+        );
+        let a = d.command(&m.key, MenuCommand::TogglePin, now);
+        assert_eq!(
+            a,
+            Action::Pinned(vec![
+                "thunar".into(),
+                "firefox".into(),
+                "org.xfce.mousepad".into(),
+                "xfce4-terminal".into()
+            ])
+        );
+        assert!(
+            d.items[3].pinned,
+            "теперь среди закреплённых, без разделителя"
+        );
+        assert!(!d.items[3].separator_before && d.items[4].separator_before);
+
+        // Закреплённый незапущенный Firefox: открепить — значок пропадает.
+        let m = d.menu(1).unwrap();
+        assert_eq!(labels(&m), [("Открыть", false), ("Оставить в Dock", true)]);
+        d.command(&m.key, MenuCommand::TogglePin, now);
+        assert_eq!(
+            keys(&d),
+            [
+                "thunar.desktop",
+                "org.xfce.mousepad.desktop",
+                "xfce4-terminal.desktop",
+                "window:12"
+            ]
+        );
+
+        // Окно без ярлыка: только «Завершить».
+        let m = d.menu(3).unwrap();
+        assert_eq!(labels(&m), [("Завершить", false)]);
+        assert_eq!(
+            d.command(&m.key, MenuCommand::Quit, now),
+            Action::Close(vec![12])
+        );
+        assert_eq!(
+            d.command(&m.key, MenuCommand::TogglePin, now),
+            Action::Nothing
+        );
     }
 
     #[test]

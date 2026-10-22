@@ -125,6 +125,53 @@ impl Config {
     }
 }
 
+/// Текст ini, в котором `ключ = значение` в `[раздел]` заменено (или добавлено).
+/// Остальные строки, комментарии и порядок не меняются.
+pub fn set_ini_value(text: &str, section: &str, key: &str, value: &str) -> String {
+    let new_line = format!("{key} = {value}");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut current = String::new();
+    // Последняя непустая строка нужного раздела — после неё допишем ключ.
+    let mut section_end = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with(';') {
+            continue;
+        }
+        if let Some(s) = t.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            current = s.trim().to_string();
+            if current == section {
+                section_end = Some(i);
+            }
+        } else if current == section {
+            section_end = Some(i);
+            if t.split_once('=').is_some_and(|(k, _)| k.trim() == key) {
+                lines[i] = new_line;
+                return join_lines(lines, text);
+            }
+        }
+    }
+    match section_end {
+        Some(i) => lines.insert(i + 1, new_line),
+        None => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{section}]"));
+            lines.push(new_line);
+        }
+    }
+    join_lines(lines, text)
+}
+
+fn join_lines(lines: Vec<String>, original: &str) -> String {
+    let mut out = lines.join("\n");
+    if original.is_empty() || original.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// `[раздел]` и `ключ = значение`; строки с `#` и `;` — комментарии.
 fn parse_ini(text: &str) -> HashMap<(String, String), String> {
     let mut out = HashMap::new();
@@ -178,5 +225,29 @@ mod tests {
         assert_eq!(c.dock_icon, 48);
         assert_eq!(c.dock_hide, DockHide::Smart);
         assert_eq!(Config::from_macos_look("").dock_apps.len(), 6);
+    }
+
+    #[test]
+    fn set_value_keeps_the_rest() {
+        let text = "# шапка\n[dock]\nengine = shell\napps = a, b\n\n[lock]\napps = x\n";
+        let out = set_ini_value(text, "dock", "apps", "a, b, c");
+        assert_eq!(
+            out,
+            "# шапка\n[dock]\nengine = shell\napps = a, b, c\n\n[lock]\napps = x\n"
+        );
+        assert_eq!(
+            Config::from_macos_look(&out).dock_apps,
+            ["a", "b", "c"],
+            "читается обратно"
+        );
+
+        // Ключа нет — дописывается в конец своего раздела.
+        let out = set_ini_value("[dock]\nengine = shell\n\n[lock]\n", "dock", "apps", "a");
+        assert_eq!(out, "[dock]\nengine = shell\napps = a\n\n[lock]\n");
+
+        // Раздела нет — появляется в конце.
+        let out = set_ini_value("[look]\nfont = Inter", "dock", "apps", "a");
+        assert_eq!(out, "[look]\nfont = Inter\n\n[dock]\napps = a");
+        assert_eq!(set_ini_value("", "dock", "apps", "a"), "[dock]\napps = a\n");
     }
 }

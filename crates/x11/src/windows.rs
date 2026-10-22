@@ -183,6 +183,12 @@ impl Display {
         ))
     }
 
+    /// Где указатель мыши на экране.
+    pub fn pointer_position(&self) -> Option<(i16, i16)> {
+        let r = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
+        Some((r.root_x, r.root_y))
+    }
+
     fn client_message(&self, w: Window, kind: u32, data: [u32; 5]) -> Result<()> {
         let ev = ClientMessageEvent::new(32, w, kind, data);
         let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;

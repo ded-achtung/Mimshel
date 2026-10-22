@@ -68,15 +68,19 @@ pub(crate) enum Msg {
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
 pub fn load_config() -> Config {
-    let path = std::env::var_os("SHELL_CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/macos-look/config.ini"))
-        });
-    match path.and_then(|p| std::fs::read_to_string(p).ok()) {
+    match config_path().and_then(|p| std::fs::read_to_string(p).ok()) {
         Some(text) => Config::from_macos_look(&text),
         None => Config::default(),
     }
+}
+
+/// Файл настроек: из `SHELL_CONFIG` или `~/.config/macos-look/config.ini`.
+pub fn config_path() -> Option<PathBuf> {
+    std::env::var_os("SHELL_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/macos-look/config.ini"))
+        })
 }
 
 /// Только ярлыки, видимые в меню, — для Spotlight и Launchpad.
@@ -214,6 +218,9 @@ struct Ui<'a> {
 
 impl Ui<'_> {
     fn toggle(&mut self, panel: Panel) -> Result<()> {
+        if let Some(dock) = &mut self.dock {
+            dock.close_menu(self.display)?;
+        }
         let was = self.shown;
         if was.is_some() {
             self.hide()?;
@@ -364,7 +371,7 @@ impl Ui<'_> {
         if let Some(dock) = &mut self.dock
             && dock.wants(self.display, &ev)
         {
-            return dock.event(self.display, ev);
+            return dock.event(self.display, &mut self.fonts, ev);
         }
         let Some(panel) = self.shown else {
             return Ok(());
