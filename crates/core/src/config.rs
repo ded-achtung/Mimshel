@@ -105,7 +105,16 @@ impl Config {
     pub fn from_macos_look(text: &str) -> Config {
         let ini = parse_ini(text);
         let get = |section: &str, key: &str| ini.get(&(section.to_string(), key.to_string()));
-        let num = |section: &str, key: &str| get(section, key).and_then(|v| v.parse::<u32>().ok());
+        let num = |section: &str, key: &str| {
+            let name = match (section, key) {
+                ("panel", "height") => "menubar.height".to_string(),
+                ("dock", "zoom_percent") => "dock.zoom".to_string(),
+                _ => format!("{section}.{key}"),
+            };
+            get(section, key)
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|&v| number_range(&name).is_none_or(|(min, max)| (min..=max).contains(&v)))
+        };
         let mut c = Config::default();
 
         if let Some(font) = get("look", "font") {
@@ -234,6 +243,10 @@ impl Config {
             get(section, key)
                 .and_then(|v| v.as_integer())
                 .and_then(|v| u32::try_from(v).ok())
+                .filter(|&v| {
+                    number_range(&format!("{section}.{key}"))
+                        .is_none_or(|(min, max)| (min..=max).contains(&v))
+                })
         };
         let text = |section: &str, key: &str| {
             get(section, key)
@@ -245,8 +258,14 @@ impl Config {
             get(section, key).and_then(|v| v.as_array()).map(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str())
-                    .map(|v| v.trim().trim_end_matches(".desktop").to_string())
-                    .filter(|v| !v.is_empty())
+                    .map(|v| {
+                        if section == "dock" {
+                            v.trim().trim_end_matches(".desktop").to_string()
+                        } else {
+                            v.to_string()
+                        }
+                    })
+                    .filter(|v| section != "dock" || !v.is_empty())
                     .collect::<Vec<_>>()
             })
         };
@@ -280,7 +299,7 @@ impl Config {
             Some(v) if v.as_bool() == Some(false) => c.dock_zoom = None,
             Some(v) => {
                 if let Some(p) = v.as_integer().and_then(|p| u32::try_from(p).ok())
-                    && p >= 100
+                    && (100..=300).contains(&p)
                 {
                     c.dock_zoom = Some(p);
                 }
@@ -299,8 +318,10 @@ impl Config {
         if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
             c.launchpad_icon = v;
         }
-        for (name, ..) in PARTS {
-            if let Some(v) = get("parts", name).and_then(|v| v.as_str()) {
+        for (name, old, _) in PARTS {
+            if let Some(v) = get("parts", name).and_then(|v| v.as_str())
+                && (v == "shell" || v == *old)
+            {
                 c.set_part(name, v == "shell");
             }
         }
@@ -435,26 +456,30 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("parts.launchpad", "\"shell\" или \"rofi\""),
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),
-    ("menubar.height", "высота строки меню, от 16"),
+    ("menubar.height", "высота строки меню, 16–128"),
     ("menubar.menu_icon", "иконка меню яблока"),
     ("menubar.clock_format", "формат часов, как у date"),
     ("dock.apps", "программы через запятую"),
-    ("dock.icon_size", "размер значков, от 16"),
-    ("dock.zoom", "увеличение в процентах (от 100) или false"),
+    ("dock.icon_size", "размер значков, 16–256"),
+    ("dock.zoom", "увеличение в процентах (100–300) или false"),
     ("dock.hide", "never, smart, auto или maximized"),
-    ("launchpad.columns", "столбцов, от 1"),
-    ("launchpad.rows", "строк, от 1"),
-    ("launchpad.icon_size", "размер значков, от 16"),
+    ("launchpad.columns", "столбцов, 1–32"),
+    ("launchpad.rows", "строк, 1–32"),
+    ("launchpad.icon_size", "размер значков, 16–256"),
     ("apps.terminal", "команда терминала через пробел"),
 ];
 
 /// Значение для файла из того, что набрали в `shell set` (`раздел.ключ`).
 pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
     let input = input.trim();
-    let number = |min: i64| match input.parse::<i64>() {
-        Ok(n) if n >= min => Ok(Value::from(n)),
-        _ => Err(format!("нужно число от {min}")),
-    };
+    if let Some((min, max)) = number_range(key)
+        && !(key == "dock.zoom" && matches!(input, "false" | "no"))
+    {
+        return match input.parse::<u32>() {
+            Ok(n) if (min..=max).contains(&n) => Ok(Value::from(i64::from(n))),
+            _ => Err(format!("нужно целое число от {min} до {max}")),
+        };
+    }
     let words = |list: &[&str]| {
         if list.contains(&input) {
             Ok(Value::from(input))
@@ -478,10 +503,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 Ok(Value::from(input))
             }
         }
-        "menubar.height" | "dock.icon_size" | "launchpad.icon_size" => number(16),
-        "launchpad.columns" | "launchpad.rows" => number(1),
         "dock.zoom" if input == "false" || input == "no" => Ok(Value::from(false)),
-        "dock.zoom" => number(100),
         "dock.hide" => words(&["never", "smart", "auto", "maximized"]),
         "dock.apps" => Ok(Value::Array(
             input
@@ -498,11 +520,65 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
     }
 }
 
-/// Ошибка в тексте своего файла настроек (`None` — файл разбирается).
+/// Разумные пределы размеров: защищают от огромных буферов отрисовки.
+fn number_range(key: &str) -> Option<(u32, u32)> {
+    match key {
+        "menubar.height" => Some((16, 128)),
+        "dock.icon_size" | "launchpad.icon_size" => Some((16, 256)),
+        "dock.zoom" => Some((100, 300)),
+        "launchpad.columns" | "launchpad.rows" => Some((1, 32)),
+        _ => None,
+    }
+}
+
+/// Проверка синтаксиса, известных ключей, типов и допустимых значений.
+/// Только прошедший её файл можно сохранять как последнюю исправную копию.
 pub fn toml_error(text: &str) -> Option<String> {
-    text.parse::<DocumentMut>()
-        .err()
-        .map(|e| e.to_string().trim().to_string())
+    let doc = match text.parse::<DocumentMut>() {
+        Ok(doc) => doc,
+        Err(e) => return Some(e.to_string().trim().to_string()),
+    };
+    for (section, table) in doc.iter() {
+        if !SETTINGS
+            .iter()
+            .any(|(key, _)| key.split_once('.').is_some_and(|(s, _)| s == section))
+        {
+            return Some(format!("неизвестный раздел {section}"));
+        }
+        let Some(table) = table.as_table_like() else {
+            return Some(format!("{section}: нужен раздел настроек"));
+        };
+        for (name, item) in table.iter() {
+            let key = format!("{section}.{name}");
+            if !SETTINGS.iter().any(|(k, _)| *k == key) {
+                return Some(format!("неизвестная настройка {key}"));
+            }
+            let valid = if let Some((min, max)) = number_range(&key) {
+                (key == "dock.zoom" && item.as_bool() == Some(false))
+                    || item
+                        .as_integer()
+                        .is_some_and(|n| (i64::from(min)..=i64::from(max)).contains(&n))
+            } else if key == "dock.apps" || key == "apps.terminal" {
+                item.as_array().is_some_and(|a| {
+                    a.iter().all(|v| {
+                        v.as_str()
+                            .is_some_and(|s| key == "apps.terminal" || !s.trim().is_empty())
+                    }) && (key != "apps.terminal"
+                        || a.get(0)
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| !s.trim().is_empty()))
+                })
+            } else {
+                item.as_str().is_some_and(|v| {
+                    setting_value(&key, v).is_ok_and(|parsed| parsed.as_str() == Some(v))
+                })
+            };
+            if !valid {
+                return Some(format!("{key}: недопустимый тип или значение"));
+            }
+        }
+    }
+    None
 }
 
 /// `[раздел]` и `ключ = значение`; строки с `#` и `;` — комментарии.
@@ -528,6 +604,50 @@ pub fn parse_ini(text: &str) -> HashMap<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_types_ranges_and_unknown_keys() {
+        assert!(toml_error(&Config::default().to_toml()).is_none());
+        assert!(toml_error("[dock]\napps = []\nzoom = false").is_none());
+        for text in [
+            "[parts]\ndock = \"shel\"",
+            "[dock]\nicon_size = 4294967295",
+            "[dock]\nzoom = true",
+            "[dock]\nzoom = 301",
+            "[launchpad]\nrows = 33",
+            "[launchpad]\ncolumns = 0",
+            "[dock]\nicon_size = \"48\"",
+            "[apps]\nterminal = []",
+            "[apps]\nterminal = [1]",
+            "[apps]\nterminal = [\"\"]",
+            "[dock]\napps = [1]",
+            "[dock]\nicon_szie = 48",
+            "[dok]\napps = []",
+            "dock = 4",
+        ] {
+            assert!(toml_error(text).is_some(), "{text}");
+        }
+        assert!(setting_value("dock.icon_size", "4294967296").is_err());
+        assert!(setting_value("launchpad.rows", "33").is_err());
+        assert_eq!(
+            Config::from_toml("[dock]\nicon_size = 4294967295").dock_icon,
+            48
+        );
+        assert_eq!(
+            Config::from_macos_look("[dock]\nicon_size = 4294967295").dock_icon,
+            48
+        );
+    }
+
+    #[test]
+    fn terminal_arguments_are_preserved() {
+        let text = "[apps]\nterminal = [\"terminal.desktop\", \"\", \" spaced \"]";
+        assert!(toml_error(text).is_none());
+        assert_eq!(
+            Config::from_toml(text).terminal,
+            ["terminal.desktop", "", " spaced "]
+        );
+    }
 
     #[test]
     fn reads_macos_look_config() {

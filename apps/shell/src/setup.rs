@@ -4,12 +4,12 @@
 
 use std::process::Command;
 
-use shell_core::config::{PARTS, SETTINGS, set_value, setting_value, toml_error};
+use shell_core::config::{PARTS, SETTINGS, set_value, setting_value};
 use shell_setup::doctor::{Check, checks, fix_parts};
 use shell_setup::look::{Look, Paths, set_macos_look_engine};
 use shell_setup::parts::{APPLY_PARTS, apply};
 
-use crate::ui::{config_path, load_config, write_file};
+use crate::ui::{config_path, config_store, load_config};
 
 /// Части, которые чинит shell; остальные — macos-look.
 const OWN: &[&str] = &[
@@ -123,16 +123,11 @@ pub fn set(key: &str, input: &str) -> i32 {
         println!("✘ Не найти папку настроек (нет HOME)");
         return 1;
     };
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    if let Some(e) = toml_error(&text) {
-        println!("✘ В {} ошибка — исправьте её сначала:\n{e}", path.display());
-        return 1;
-    }
     let (section, name) = key.split_once('.').expect("ключи из SETTINGS с точкой");
-    let Some(text) = set_value(&text, section, name, value) else {
-        return 1;
-    };
-    if let Err(e) = write_file(&path, &text) {
+    if let Err(e) = config_store(path.clone()).edit(|text| {
+        set_value(text, section, name, value)
+            .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))
+    }) {
         println!("✘ Не записать {}: {e}", path.display());
         return 1;
     }

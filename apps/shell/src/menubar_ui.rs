@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::time::{Duration, Instant};
 
 use shell_apps::App;
@@ -27,7 +27,7 @@ use shell_widgets::{Menu, MenuEntry, MenuResult};
 use shell_x11::Key;
 use shell_x11::{Display, DockWindow, Event, Popup, Property};
 
-use crate::status::{self, Audio};
+use crate::status::{self, Audio, ControlRequest};
 use crate::ui::{Msg, Result};
 
 /// Что делает пункт меню строки.
@@ -68,6 +68,9 @@ pub struct MenubarUi {
     battery: Option<Battery>,
     dnd: bool,
     audio: Sender<Audio>,
+    control: SyncSender<ControlRequest>,
+    network: shell_menubar::Network,
+    bluetooth: Option<bool>,
     /// Когда громкость меняли отсюда.
     volume_changed: Option<Instant>,
     /// Трей (`None` — его держит кто-то другой, например панель Xfce),
@@ -88,6 +91,7 @@ pub struct MenubarUi {
     /// Пункт управления (в том же всплывающем окне).
     control_panel: Option<ControlPanel>,
     popup: Popup,
+    popup_x: i16,
     popup_dirty: bool,
     dirty: bool,
     /// Служба — для просьб, которые выполняет не строка (центр уведомлений).
@@ -107,7 +111,10 @@ impl MenubarUi {
             sound: None,
             battery: None,
             dnd: false,
-            audio: status::audio_worker(),
+            audio: status::audio_worker(tx.clone()),
+            control: status::control_worker(tx.clone()),
+            network: shell_menubar::Network::default(),
+            bluetooth: None,
             volume_changed: None,
             tray: None,
             tray_items: Vec::new(),
@@ -120,6 +127,7 @@ impl MenubarUi {
             sound_panel: None,
             control_panel: None,
             popup: d.create_popup("menubar-menu")?,
+            popup_x: 0,
             popup_dirty: false,
             dirty: true,
             tx: tx.clone(),
@@ -129,9 +137,6 @@ impl MenubarUi {
         ui.read_layouts(d);
         ui.bar.app_name = ui.app_name(d);
         ui.bar.clock = clock(&config.clock_format).0;
-        ui.set_sound(status::read_sound());
-        ui.set_battery(status::read_battery());
-        ui.set_dnd(status::read_dnd());
         ui.bar.control = true;
         watch_clock(config.clock_format.clone(), tx.clone());
         status::watch_sound(tx.clone());
@@ -211,6 +216,16 @@ impl MenubarUi {
         }
         self.sound = sound;
         self.dirty = true;
+    }
+
+    pub fn set_control(&mut self, network: shell_menubar::Network, bluetooth: Option<bool>) {
+        self.network = network;
+        self.bluetooth = bluetooth;
+        if let Some(panel) = &mut self.control_panel {
+            panel.state.network = self.network.clone();
+            panel.state.bluetooth = bluetooth;
+            self.popup_dirty = true;
+        }
     }
 
     pub fn set_battery(&mut self, battery: Option<Battery>) {
@@ -530,6 +545,7 @@ impl MenubarUi {
     /// Показать всплывающее окно под частью строки (левый край — `x`).
     fn show_popup(&mut self, d: &Display, part: Part, x: f32, (w, h): (u32, u32)) -> Result<()> {
         let x = x.min(self.bar.width as f32 - w as f32 - 4.0).max(4.0);
+        self.popup_x = x as i16;
         self.popup
             .show(d, x as i16, self.bar.height as i16, w as u16, h as u16)?;
         self.popup_dirty = true;
@@ -599,9 +615,11 @@ impl MenubarUi {
     }
 
     fn open_control(&mut self, d: &Display, x: f32) -> Result<()> {
+        let _ = self.control.try_send(ControlRequest::Refresh);
+        let _ = self.audio.send(Audio::Refresh);
         let panel = ControlPanel::new(ControlState {
-            network: status::read_network(),
-            bluetooth: status::read_bluetooth(),
+            network: self.network.clone(),
+            bluetooth: self.bluetooth,
             dnd: self.dnd,
             sound: self.sound.clone(),
         });
@@ -616,11 +634,11 @@ impl MenubarUi {
             ControlAction::Redraw => self.popup_dirty = true,
             ControlAction::Close => self.close_popup(d)?,
             ControlAction::SetWifi(on) => {
-                status::set_wifi(on);
+                let _ = self.control.try_send(ControlRequest::Wifi(on));
                 self.popup_dirty = true;
             }
             ControlAction::SetBluetooth(on) => {
-                status::set_bluetooth(on);
+                let _ = self.control.try_send(ControlRequest::Bluetooth(on));
                 self.popup_dirty = true;
             }
             ControlAction::SetDnd(on) => {
@@ -640,8 +658,9 @@ impl MenubarUi {
     }
 
     fn open_sound(&mut self, d: &Display, x: f32) -> Result<()> {
-        // Свежее состояние: устройства могли появиться или пропасть.
-        let Some(sound) = status::read_sound().or_else(|| self.sound.clone()) else {
+        // Показываем последнее состояние сразу, обновляем в фоне.
+        let _ = self.audio.send(Audio::Refresh);
+        let Some(sound) = self.sound.clone() else {
             return Ok(());
         };
         let panel = SoundPanel::new(sound);
@@ -912,8 +931,24 @@ impl MenubarUi {
             if let Some(menu) = &self.menu {
                 self.popup.present(d, &menu.render(fonts))?;
             } else if let Some(panel) = &self.sound_panel {
+                let (w, h) = panel.size();
+                self.popup.set_geometry(
+                    d,
+                    self.popup_x,
+                    self.bar.height as i16,
+                    w as u16,
+                    h as u16,
+                )?;
                 self.popup.present(d, &panel.render(fonts))?;
             } else if let Some(panel) = &self.control_panel {
+                let (w, h) = panel.size();
+                self.popup.set_geometry(
+                    d,
+                    self.popup_x,
+                    self.bar.height as i16,
+                    w as u16,
+                    h as u16,
+                )?;
                 self.popup.present(d, &panel.render(fonts, icons))?;
             }
         }

@@ -918,18 +918,14 @@ fn painted_columns(pm: &tiny_skia::Pixmap) -> Option<(u32, u32)> {
 /// Записать закреплённые значки в `[dock] apps` файла настроек; остальное
 /// в файле не меняется.
 fn save_pinned(path: &Path, apps: &[String]) -> std::io::Result<()> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-    let text = set_dock_apps(&text, apps).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "в файле ошибка, исправьте её — тогда значки сохранятся",
-        )
-    })?;
-    crate::ui::write_file(path, &text)
+    crate::ui::config_store(path.to_path_buf()).edit(|text| {
+        set_dock_apps(text, apps).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "в файле ошибка, исправьте её — тогда значки сохранятся",
+            )
+        })
+    })
 }
 
 #[cfg(test)]

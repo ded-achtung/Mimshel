@@ -20,8 +20,6 @@ use crate::sys::{command, home, running, succeeds, which};
 /// Метка в i3lock, собранном с заплаткой macos-look (подсказка в поле
 /// сменяется точками ● при вводе).
 pub const LOCKER_MARK: &[u8] = b"macos-look-field-v3";
-/// Больше перезапусков подряд — что-то совсем сломано, не крутимся вечно.
-const MAX_RESTARTS: u32 = 100;
 
 /// Положения на экране блокировки (в точках экрана).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -257,16 +255,41 @@ pub fn supervise(look: &Look) -> i32 {
     let l = Layout::new(w, h);
     let bg = background(look, w, h);
     let args = lock_args(&bg, &l, look.get("lock", "placeholder"), locker_patched());
-    let mut restarts = 0;
+    supervise_with(
+        || {
+            command(&args[0])
+                .args(&args[1..])
+                .arg("--nofork")
+                .env("LC_TIME", look.get("lock", "date_locale"))
+                .env("MACOS_LOOK_MAX_DOTS", l.max_dots().to_string())
+                .status()
+        },
+        || succeeds(&["xset", "q"]),
+        |restarts, how| {
+            log(&format!(
+                "блокировка: i3lock завершился {how} без пароля — перезапуск #{restarts}"
+            ));
+            // Первый перезапуск — сразу. При постоянной ошибке запуска
+            // ограничиваем нагрузку, но не бросаем попытки заблокировать экран.
+            if restarts > 1 {
+                std::thread::sleep(Duration::from_millis(if restarts < 10 {
+                    200
+                } else {
+                    1000
+                }));
+            }
+        },
+    )
+}
+
+fn supervise_with(
+    mut launch: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
+    mut session_alive: impl FnMut() -> bool,
+    mut retry: impl FnMut(u32, &str),
+) -> i32 {
+    let mut restarts = 0u32;
     loop {
-        log(&format!("блокировка: {} {}", args[0], bg.display()));
-        let status = command(&args[0])
-            .args(&args[1..])
-            .arg("--nofork")
-            .env("LC_TIME", look.get("lock", "date_locale"))
-            .env("MACOS_LOOK_MAX_DOTS", l.max_dots().to_string())
-            .status();
-        let (code, how) = match status {
+        let (code, how) = match launch() {
             Ok(s) if s.success() => return 0,
             Ok(s) => match (s.code(), s.signal()) {
                 (Some(c), _) => (c, format!("с кодом {c}")),
@@ -275,24 +298,11 @@ pub fn supervise(look: &Look) -> i32 {
             },
             Err(e) => (1, format!("не запустившись ({e})")),
         };
-        // Сеанс завершён, экрана больше нет — блокировать нечего.
-        if !succeeds(&["xset", "q"]) {
-            log("блокировка: X-сервер недоступен, выхожу");
+        if !session_alive() {
             return code;
         }
-        restarts += 1;
-        log(&format!(
-            "блокировка: i3lock завершился {how} без пароля — перезапуск #{restarts}"
-        ));
-        if restarts >= MAX_RESTARTS {
-            log("блокировка: слишком много перезапусков, сдаюсь");
-            return code;
-        }
-        std::thread::sleep(Duration::from_millis(if restarts < 10 {
-            200
-        } else {
-            1000
-        }));
+        restarts = restarts.saturating_add(1);
+        retry(restarts, &how);
     }
 }
 
@@ -313,6 +323,39 @@ fn log(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_retrying_until_success_even_after_100_failures() {
+        let mut attempts = 0;
+        let mut retries = 0;
+        let result = supervise_with(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(std::io::Error::other("не удалось запустить"))
+                } else {
+                    Ok(std::process::ExitStatus::from_raw(if attempts <= 150 {
+                        6
+                    } else {
+                        0
+                    }))
+                }
+            },
+            || true,
+            |n, _| retries = n,
+        );
+        assert_eq!((result, attempts, retries), (0, 151, 150));
+    }
+
+    #[test]
+    fn stops_when_session_is_gone() {
+        let result = supervise_with(
+            || Ok(std::process::ExitStatus::from_raw(256)),
+            || false,
+            |_, _| panic!("сеанс завершён — перезапуск не нужен"),
+        );
+        assert_eq!(result, 1);
+    }
 
     /// Эталон — команда, которую для тех же экранов составляет macos-look
     /// (`testdata/`, по аргументу в строке).

@@ -13,9 +13,17 @@ use shell_menubar::status::{Battery, Sound, parse_mute, parse_sinks, parse_upowe
 
 use crate::ui::Msg;
 
+/// Ограничение относится к коротким запросам, но не к наблюдателям.
+/// timeout завершает и группу дочерних процессов; KILL страхует зависший TERM.
+fn bounded_command(program: &str, limit: &str) -> Command {
+    let mut cmd = Command::new("timeout");
+    cmd.args(["--signal=TERM", "--kill-after=1s", limit, program]);
+    cmd
+}
+
 /// Вывод команды (с `LC_ALL=C` — ответы на одном языке) или `None`.
 fn output(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program)
+    let out = bounded_command(program, "3s")
         .args(args)
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
@@ -28,7 +36,7 @@ fn output(program: &str, args: &[&str]) -> Option<String> {
 }
 
 fn run(program: &str, args: &[&str]) {
-    let _ = Command::new(program)
+    let _ = bounded_command(program, "3s")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -130,23 +138,40 @@ pub fn read_bluetooth() -> Option<bool> {
     Some(!blocked)
 }
 
-/// Включить или выключить Wi-Fi / Bluetooth (в отдельном потоке: может
-/// занять время).
-pub fn set_wifi(on: bool) {
-    std::thread::spawn(move || run("nmcli", &["radio", "wifi", if on { "on" } else { "off" }]));
+/// Последовательные запросы состояния и изменения сети — вне потока интерфейса.
+pub enum ControlRequest {
+    Refresh,
+    Wifi(bool),
+    Bluetooth(bool),
 }
 
-pub fn set_bluetooth(on: bool) {
+pub fn control_worker(tx: Sender<Msg>) -> mpsc::SyncSender<ControlRequest> {
+    let (request, rx) = mpsc::sync_channel(8);
     std::thread::spawn(move || {
-        run(
-            "timeout",
-            &["5", "bluetoothctl", "power", if on { "on" } else { "off" }],
-        );
+        loop {
+            let network = read_network();
+            let bluetooth = read_bluetooth();
+            if tx.send(Msg::Control(network, bluetooth)).is_err() {
+                return;
+            }
+            match rx.recv() {
+                Ok(ControlRequest::Refresh) => {}
+                Ok(ControlRequest::Wifi(on)) => {
+                    run("nmcli", &["radio", "wifi", if on { "on" } else { "off" }])
+                }
+                Ok(ControlRequest::Bluetooth(on)) => {
+                    run("bluetoothctl", &["power", if on { "on" } else { "off" }])
+                }
+                Err(_) => return,
+            }
+        }
     });
+    request
 }
 
 /// Что сделать со звуком.
 pub enum Audio {
+    Refresh,
     Volume(u32),
     ToggleMute,
     Sink(String),
@@ -154,7 +179,7 @@ pub enum Audio {
 
 /// Поток, который меняет звук. Пока тащат ползунок, приходит много
 /// громкостей подряд — выполняем только последнюю из накопившихся.
-pub fn audio_worker() -> Sender<Audio> {
+pub fn audio_worker(events: Sender<Msg>) -> Sender<Audio> {
     let (tx, rx) = mpsc::channel::<Audio>();
     std::thread::spawn(move || {
         while let Ok(mut cmd) = rx.recv() {
@@ -162,19 +187,22 @@ pub fn audio_worker() -> Sender<Audio> {
                 match (&cmd, &next) {
                     (Audio::Volume(_), Audio::Volume(_)) => cmd = next,
                     _ => {
-                        apply(cmd);
+                        apply(cmd, &events);
                         cmd = next;
                     }
                 }
             }
-            apply(cmd);
+            apply(cmd, &events);
         }
     });
     tx
 }
 
-fn apply(cmd: Audio) {
+fn apply(cmd: Audio, tx: &Sender<Msg>) {
     match cmd {
+        Audio::Refresh => {
+            let _ = tx.send(Msg::Sound(read_sound()));
+        }
         Audio::Volume(v) => {
             run("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "0"]);
             run(
@@ -222,6 +250,9 @@ fn watch<T: Send + 'static>(
         }
     });
     std::thread::spawn(move || {
+        if tx.send(msg(read())).is_err() {
+            return;
+        }
         while ping_rx.recv().is_ok() {
             while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
             if tx.send(msg(read())).is_err() {
@@ -277,4 +308,27 @@ pub fn watch_dnd(tx: Sender<Msg>) {
         Msg::Dnd,
         tx,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_timeout_and_output() {
+        let out = bounded_command("printf", "1s")
+            .args(["%s", "готово"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "готово");
+        // Дочерний процесс игнорирует TERM: ограничитель обязан применить KILL.
+        let start = std::time::Instant::now();
+        let out = bounded_command("sh", "0.1s")
+            .args(["-c", "trap '' TERM; sleep 30"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
 }

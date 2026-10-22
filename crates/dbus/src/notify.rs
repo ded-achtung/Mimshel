@@ -176,11 +176,25 @@ impl Server {
 fn image_from(v: OwnedValue) -> Option<Image> {
     let (w, h, stride, alpha, bits, channels, data) =
         <(i32, i32, i32, bool, i32, i32, Vec<u8>)>::try_from(Value::from(v)).ok()?;
-    if w <= 0 || h <= 0 || bits != 8 || !(3..=4).contains(&channels) {
+    // Уведомления приходят от других процессов: проверяем размеры до
+    // выделения памяти, включая последний ряд без завершающего отступа.
+    if !(1..=2048).contains(&w)
+        || !(1..=2048).contains(&h)
+        || stride <= 0
+        || bits != 8
+        || channels != if alpha { 4 } else { 3 }
+    {
         return None;
     }
     let (w, h, stride, ch) = (w as usize, h as usize, stride as usize, channels as usize);
-    let mut rgba = Vec::with_capacity(w * h * 4);
+    let row_bytes = w.checked_mul(ch)?;
+    let required = (h - 1).checked_mul(stride)?.checked_add(row_bytes)?;
+    if stride < row_bytes || data.len() < required {
+        return None;
+    }
+    let len = w.checked_mul(h)?.checked_mul(4)?;
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(len).ok()?;
     for y in 0..h {
         let row = data.get(y * stride..y * stride + w * ch)?;
         for px in row.chunks(ch) {
@@ -243,6 +257,55 @@ mod tests {
         assert_eq!(
             strip_markup("<b>Готово</b>: файл &lt;a&gt; &amp; <a href=\"x\">ссылка</a>"),
             "Готово: файл <a> & ссылка"
+        );
+    }
+
+    fn image(
+        w: i32,
+        h: i32,
+        stride: i32,
+        alpha: bool,
+        channels: i32,
+        data: Vec<u8>,
+    ) -> Option<Image> {
+        let v: Value = StructureBuilder::new()
+            .add_field(w)
+            .add_field(h)
+            .add_field(stride)
+            .add_field(alpha)
+            .add_field(8i32)
+            .add_field(channels)
+            .add_field(data)
+            .build()
+            .unwrap()
+            .into();
+        image_from(OwnedValue::try_from(v).unwrap())
+    }
+
+    #[test]
+    fn rejects_invalid_image_before_allocation() {
+        for (w, h, stride) in [
+            (i32::MAX, i32::MAX, i32::MAX),
+            (0, 1, 3),
+            (1, -1, 3),
+            (1, 1, -1),
+            (2, 1, 3),
+            (1, 2, i32::MAX),
+            (1, 2, 3),
+        ] {
+            assert!(image(w, h, stride, false, 3, vec![0; 3]).is_none());
+        }
+        assert!(image(1, 1, 4, true, 3, vec![0; 4]).is_none());
+        assert!(image(1, 1, 4, false, 4, vec![0; 4]).is_none());
+    }
+
+    #[test]
+    fn accepts_padding_and_rgba() {
+        let img = image(1, 2, 4, false, 3, vec![1, 2, 3, 99, 4, 5, 6]).unwrap();
+        assert_eq!(img.rgba, [1, 2, 3, 255, 4, 5, 6, 255]);
+        assert_eq!(
+            image(1, 1, 4, true, 4, vec![1, 2, 3, 4]).unwrap().rgba,
+            [1, 2, 3, 4]
         );
     }
 

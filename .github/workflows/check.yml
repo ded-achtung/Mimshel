@@ -1,0 +1,27 @@
+name: Проверки Rust
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Инструменты и шрифты для тестов отрисовки
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+          sudo apt-get update
+          sudo apt-get install -y fonts-dejavu-core dbus xvfb
+      - name: Форматирование
+        run: cargo fmt --all -- --check
+      - name: Статические проверки
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Тесты без графического сеанса
+        run: cargo test --workspace --locked
+      - name: Окна на отдельном X-сервере
+        run: cargo test -p shell-x11 --test windows --locked -- --ignored

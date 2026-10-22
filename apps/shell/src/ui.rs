@@ -7,9 +7,9 @@
 //! медленнее, но работают. Открыто не больше одного окна: открытие одного
 //! закрывает другое.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
@@ -72,6 +72,7 @@ pub(crate) enum Msg {
     Clock(String),
     /// Звук, батарея, «Не беспокоить» изменились.
     Sound(Option<shell_menubar::status::Sound>),
+    Control(shell_menubar::Network, Option<bool>),
     Battery(Option<shell_menubar::status::Battery>),
     Dnd(bool),
     /// Значки трея или меню значка.
@@ -92,92 +93,23 @@ pub fn load_config() -> Config {
         .as_ref()
         .and_then(|h| std::fs::read_to_string(h.join(".config/macos-look/config.ini")).ok())
         .map(|text| Config::from_macos_look(&text));
-    let mut config = match config_path().map(|p| (std::fs::read_to_string(&p), p)) {
-        Some((Ok(text), path)) => match shell_core::config::toml_error(&text) {
-            None => {
-                remember_good(&text);
-                Config::from_toml(&text)
-            }
-            // Опечатка в файле не должна сбрасывать док и остальное к
-            // значениям по умолчанию: берём последние рабочие настройки.
-            Some(e) => {
-                eprintln!(
-                    "Ошибка в файле настроек {} — беру последние рабочие настройки:\n{e}",
-                    path.display()
-                );
-                good_copy()
-                    .and_then(|p| std::fs::read_to_string(p).ok())
-                    .map(|text| {
-                        let mut c = Config::from_toml(&text);
-                        if !shell_core::config::has_parts(&text)
-                            && let Some(look) = &look
-                        {
-                            for (name, ..) in shell_core::config::PARTS {
-                                c.set_part(name, look.part(name) == Some(true));
-                            }
-                        }
-                        c
-                    })
-                    .or_else(|| look.clone())
-                    .unwrap_or_default()
-            }
-        },
-        Some((Err(e), path)) if e.kind() == std::io::ErrorKind::NotFound => {
-            let config = look.clone().unwrap_or_default();
-            match write_file(&path, &config.to_toml()) {
-                Ok(()) => eprintln!("Создан файл настроек {}", path.display()),
-                Err(e) => eprintln!("Не удалось создать {}: {e}", path.display()),
-            }
-            config
-        }
-        Some((Err(e), path)) => {
-            eprintln!("Не удалось прочитать {}: {e}", path.display());
-            Config::default()
-        }
-        None => Config::default(),
+    match config_path() {
+        Some(path) => config_store(path).load(look.as_ref()),
+        None => look.unwrap_or_default(),
+    }
+}
+
+pub fn config_store(path: PathBuf) -> crate::config_store::Store {
+    let good = if std::env::var_os("SHELL_CONFIG").is_some() {
+        None
+    } else {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+            .map(|p| p.join("shell/config.good.toml"))
     };
-    // Файл создан до раздела `[parts]` — какие части включены, берём у
-    // macos-look и дописываем в файл.
-    if let (Some(path), Some(look)) = (config_path(), look)
-        && let Ok(text) = std::fs::read_to_string(&path)
-        && shell_core::config::toml_error(&text).is_none()
-        && !shell_core::config::has_parts(&text)
-    {
-        let mut text = Some(text);
-        for (name, old, _) in shell_core::config::PARTS {
-            let shell = look.part(name) == Some(true);
-            config.set_part(name, shell);
-            let value = if shell { "shell" } else { old };
-            text = text
-                .and_then(|t| shell_core::config::set_value(&t, "parts", name, (*value).into()));
-        }
-        if let Some(text) = text
-            && let Err(e) = write_file(&path, &text)
-        {
-            eprintln!("Не удалось дописать [parts] в {}: {e}", path.display());
-        }
-    }
-    config
-}
-
-/// Копия последнего исправного файла настроек — на случай опечатки в нём.
-fn good_copy() -> Option<PathBuf> {
-    if std::env::var_os("SHELL_CONFIG").is_some() {
-        return None;
-    }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/shell/config.good.toml"))
-}
-
-fn remember_good(text: &str) {
-    if let Some(path) = good_copy()
-        && std::fs::read_to_string(&path).ok().as_deref() != Some(text)
-        && let Err(e) = write_file(&path, text)
-    {
-        eprintln!(
-            "Не удалось сохранить копию настроек {}: {e}",
-            path.display()
-        );
-    }
+    crate::config_store::Store { path, good }
 }
 
 /// Файл настроек: из `SHELL_CONFIG` или `~/.config/shell/config.toml`.
@@ -193,42 +125,22 @@ pub fn config_path() -> Option<PathBuf> {
         })
 }
 
-/// Записать файл целиком: во временный рядом, затем подменить — при сбое
-/// посреди записи старый файл останется целым.
-pub fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    let mut file = std::fs::File::create(&tmp)?;
-    std::io::Write::write_all(&mut file, text.as_bytes())?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, path)
-}
-
 /// Только ярлыки, видимые в меню, — для Spotlight и Launchpad.
 fn visible(apps: &[App]) -> Vec<App> {
     apps.iter().filter(|a| !a.no_display).cloned().collect()
 }
 
-/// Где служба ждёт команды.
-pub fn socket_path() -> PathBuf {
-    match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(dir) => PathBuf::from(dir).join("shell.sock"),
-        None => std::env::temp_dir().join(format!("shell-{}.sock", std::process::id())),
-    }
-}
-
 /// Служба уже запущена (кто-то слушает её сокет)?
 pub fn daemon_running() -> bool {
-    UnixStream::connect(socket_path()).is_ok()
+    crate::ipc::socket_path()
+        .and_then(UnixStream::connect)
+        .is_ok()
 }
 
 /// Просит запущенную службу открыть окно. `false` — службы нет.
 pub fn ask_daemon(panel: Panel) -> bool {
-    UnixStream::connect(socket_path())
+    crate::ipc::socket_path()
+        .and_then(UnixStream::connect)
         .and_then(|mut s| s.write_all(format!("{}\n", panel.name()).as_bytes()))
         .is_ok()
 }
@@ -291,11 +203,14 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     };
     // Свои уведомления — вместо xfce4-notifyd (`SHELL_NOTIFY=1` — для проверки).
     let notify = if daemon && (config.notify || std::env::var_os("SHELL_NOTIFY").is_some()) {
+        if menubar.is_none() {
+            crate::status::watch_dnd(tx.clone());
+        }
         Some(NotifyUi::new(
             &display,
             all_apps.clone(),
             config.menubar_height,
-            crate::status::read_dnd(),
+            true,
             tx.clone(),
         )?)
     } else {
@@ -579,6 +494,12 @@ impl Ui<'_> {
                 }
                 Ok(())
             }
+            Msg::Control(network, bluetooth) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_control(network, bluetooth);
+                }
+                Ok(())
+            }
             Msg::Battery(battery) => {
                 if let Some(menubar) = &mut self.menubar {
                     menubar.set_battery(battery);
@@ -696,7 +617,7 @@ fn switch_to(panel: Panel, k: KeyPress) -> Option<Panel> {
 
 /// Принимает команды через сокет в отдельном потоке.
 fn listen(tx: Sender<Msg>) -> Result<()> {
-    let path = socket_path();
+    let path = crate::ipc::socket_path()?;
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -709,19 +630,7 @@ fn listen(tx: Sender<Msg>) -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     };
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            for line in BufReader::new(stream).lines().map_while(|l| l.ok()) {
-                let Some(panel) = Panel::parse(line.trim()) else {
-                    eprintln!("Неизвестная команда: {}", line.trim());
-                    continue;
-                };
-                if tx.send(Msg::Toggle(panel)).is_err() {
-                    return;
-                }
-            }
-        }
-    });
+    crate::ipc::start(listener, tx)?;
     Ok(())
 }
 

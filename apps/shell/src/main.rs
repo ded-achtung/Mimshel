@@ -1,7 +1,9 @@
 //! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
 
+mod config_store;
 mod dock_ui;
 mod guard;
+mod ipc;
 mod menubar_ui;
 mod notify_ui;
 mod setup;
