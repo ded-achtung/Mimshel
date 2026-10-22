@@ -441,14 +441,14 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         paths.autostart.join("xfce4-screensaver.desktop").exists() && !running("xfce4-screensaver"),
         "",
     );
-    let (w, h) = screen_size();
+    let (w, h) = crate::lock::screen_size();
     add(
         "lock",
         &format!("фон блокировки {w}x{h}"),
         home()
-            .join(format!(".cache/macos-look/lock/bg-{w}x{h}.png"))
+            .join(format!(".cache/shell/lock/bg-{w}x{h}.png"))
             .exists(),
-        "macos-look apply lock",
+        "shell apply lock",
     );
     if succeeds(&["systemd-detect-virt", "-q"]) {
         for key in ["inactivity-on-ac", "inactivity-on-battery"] {
@@ -638,22 +638,6 @@ fn panel_session_slot(command: &[&str]) -> bool {
         .unwrap_or(0);
     (0..count)
         .any(|i| xget_list("xfce4-session", &format!("{SESSION}/Client{i}_Command")) == command)
-}
-
-/// Размер экрана из xrandr.
-fn screen_size() -> (u32, u32) {
-    output_any(&["xrandr", "--current"])
-        .lines()
-        .find_map(|l| {
-            let (w, h) = l
-                .split_once("current")?
-                .1
-                .split(',')
-                .next()?
-                .split_once('x')?;
-            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-        })
-        .unwrap_or((1920, 1080))
 }
 
 #[cfg(test)]

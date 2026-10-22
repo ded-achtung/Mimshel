@@ -1057,6 +1057,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell-lock"
+version = "0.1.0"
+dependencies = [
+ "shell-text",
+ "shell-widgets",
+ "tiny-skia",
+]
+
+[[package]]
 name = "shell-menubar"
 version = "0.1.0"
 dependencies = [
@@ -1083,6 +1092,10 @@ name = "shell-setup"
 version = "0.1.0"
 dependencies = [
  "shell-core",
+ "shell-icons",
+ "shell-lock",
+ "shell-text",
+ "tiny-skia",
 ]
 
 [[package]]

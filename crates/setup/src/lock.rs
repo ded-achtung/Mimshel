@@ -14,80 +14,14 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use shell_lock::{Layout, round};
+
 use crate::look::Look;
 use crate::sys::{command, home, running, succeeds, which};
 
 /// Метка в i3lock, собранном с заплаткой macos-look (подсказка в поле
 /// сменяется точками ● при вводе).
 pub const LOCKER_MARK: &[u8] = b"macos-look-field-v3";
-
-/// Положения на экране блокировки (в точках экрана).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Layout {
-    pub w: i64,
-    pub h: i64,
-    /// Масштаб относительно экрана высотой 1080.
-    pub s: f64,
-    pub avatar: i64,
-    pub pill_w: i64,
-    pub pill_h: i64,
-    pub date_y: i64,
-    pub time_y: i64,
-    pub avatar_y: i64,
-    pub name_y: i64,
-    pub pill_x: i64,
-    pub pill_y: i64,
-    pub ind_x: i64,
-    pub ind_y: i64,
-}
-
-/// Округление «к чётному», как `round` в Python: так считал macos-look, и
-/// фон, нарисованный им, должен совпасть с полем и кольцом до точки.
-fn round(v: f64) -> i64 {
-    v.round_ties_even() as i64
-}
-
-impl Layout {
-    pub fn new(w: i64, h: i64) -> Layout {
-        let s = h as f64 / 1080.0;
-        let avatar = round(84.0 * s);
-        let pill_w = round(230.0 * s);
-        let pill_h = round(32.0 * s);
-        let date_y = round(h as f64 * 0.12);
-        let avatar_y = round(h as f64 * 0.70);
-        let name_y = avatar_y + avatar + round(14.0 * s);
-        let pill_x = (w - pill_w).div_euclid(2);
-        let pill_y = name_y + round(40.0 * s);
-        Layout {
-            w,
-            h,
-            s,
-            avatar,
-            pill_w,
-            pill_h,
-            date_y,
-            time_y: date_y + round(118.0 * s),
-            avatar_y,
-            name_y,
-            pill_x,
-            pill_y,
-            ind_x: pill_x + pill_w - round(17.0 * s),
-            ind_y: pill_y + pill_h.div_euclid(2),
-        }
-    }
-
-    fn px(&self, v: f64) -> String {
-        round(v * self.s).to_string()
-    }
-
-    /// Сколько точек ● помещается в поле: от левого отступа до кольца.
-    /// Шаг точки (● и узкий пробел) ≈ 1,15 размера шрифта — замерено на экране.
-    pub fn max_dots(&self) -> i64 {
-        let room = self.pill_w - round(14.0 * self.s) - round(34.0 * self.s);
-        let step = 1.15 * round(13.5 * self.s) as f64;
-        ((room as f64 / step).floor() as i64).max(1)
-    }
-}
 
 /// Команда i3lock: картинка фона, часы, кольцо ввода, подсказка в поле
 /// (`placeholder`, только у собранного с заплаткой — иначе она на фоне).
@@ -234,15 +168,90 @@ pub fn screen_size() -> (i64, i64) {
         .unwrap_or((1920, 1080))
 }
 
-/// Картинка фона: нарисованная заранее под этот экран, иначе просто обои.
+/// Версия рисования фона: поменялась — старые картинки перерисовываются.
+const BACKGROUND_VERSION: u32 = 1;
+
+/// Картинка фона под этот экран. Рисуется заранее (`shell apply lock`) или
+/// при блокировке, если обои, аватар, имя или экран поменялись. Не
+/// получилось — фон macos-look, иначе просто обои: блокировка важнее вида.
 pub fn background(look: &Look, w: i64, h: i64) -> PathBuf {
-    let drawn = home().join(format!(".cache/macos-look/lock/bg-{w}x{h}.png"));
-    if drawn.exists() {
-        return drawn;
-    }
-    crate::look::Paths::new()
+    let wallpaper = crate::look::Paths::new()
         .wallpapers
-        .join(format!("{}.jpg", look.names().wallpaper))
+        .join(format!("{}.jpg", look.names().wallpaper));
+    // Падение при рисовании не должно помешать заблокировать экран.
+    match std::panic::catch_unwind(|| draw_background(look, &wallpaper, w, h)) {
+        Ok(Ok(path)) => return path,
+        Ok(Err(e)) => log(&format!("фон блокировки не нарисован: {e}")),
+        Err(_) => log("фон блокировки: сбой при рисовании"),
+    }
+    let old = home().join(format!(".cache/macos-look/lock/bg-{w}x{h}.png"));
+    if old.exists() { old } else { wallpaper }
+}
+
+/// Нарисовать фон (если готового с тем же ключом нет) и вернуть путь к нему.
+pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, String> {
+    let dir = home().join(".cache/shell/lock");
+    let out = dir.join(format!("bg-{w}x{h}.png"));
+    let stamp = dir.join(format!("bg-{w}x{h}.key"));
+    let face = home().join(".face");
+    let user = std::env::var("USER")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .or_else(|| home().file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    let patched = locker_patched();
+    let placeholder = look.get("lock", "placeholder");
+    let mtime = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos())
+    };
+    let key = format!(
+        "{w}|{h}|{}|{}|{}|{user}|{placeholder}|{patched}|{BACKGROUND_VERSION}",
+        wallpaper.display(),
+        mtime(wallpaper),
+        mtime(&face),
+    );
+    if out.exists() && std::fs::read_to_string(&stamp).ok().as_deref() == Some(key.as_str()) {
+        return Ok(out);
+    }
+    let l = Layout::new(w, h);
+    let (pw, ph) = (
+        u32::try_from(w).map_err(|_| "ширина экрана")?,
+        u32::try_from(h).map_err(|_| "высота экрана")?,
+    );
+    let fit = shell_icons::Fit::Cover;
+    let wall = shell_icons::render_file(wallpaper, pw, ph, fit);
+    if wall.is_none() {
+        log(&format!(
+            "обои {} не прочитаны — тёмный фон",
+            wallpaper.display()
+        ));
+    }
+    let a = u32::try_from(l.avatar).map_err(|_| "размер аватара")?;
+    let face = shell_icons::render_file(&face, a, a, fit);
+    let mut fonts = shell_text::Fonts::new("Inter");
+    let pm = shell_lock::draw(
+        &l,
+        shell_lock::Scene {
+            wallpaper: wall,
+            face,
+            user: &user,
+            // Собранный с заплаткой i3lock пишет подсказку сам (и прячет её при вводе).
+            placeholder: (!patched).then_some(placeholder),
+        },
+        &mut fonts,
+    )
+    .ok_or("пустой экран")?;
+    let png = pm.encode_png().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let tmp = dir.join(format!(".bg-{w}x{h}.png.tmp"));
+    std::fs::write(&tmp, png).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &out).map_err(|e| e.to_string())?;
+    std::fs::write(&stamp, &key).map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// Заблокировать экран и держать блокировку, пока не введён верный пароль.

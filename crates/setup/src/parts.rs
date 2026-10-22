@@ -373,6 +373,10 @@ impl Plan<'_> {
             println!("✘ Нет i3lock-color или xss-lock — запустите: macos-look install");
             return;
         }
+        // Фон рисуем заранее: при блокировке он будет готов сразу.
+        let (w, h) = crate::lock::screen_size();
+        let bg = crate::lock::background(self.look, w, h);
+        println!("  фон: {}", bg.display());
         let bin = self.paths.shell_bin.display().to_string();
         xset(
             "xfce4-session",

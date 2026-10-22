@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 shell-core = { path = "../core" }
+shell-lock = { path = "../lock" }
+shell-icons = { path = "../icons" }
+shell-text = { path = "../text" }
+tiny-skia = "0.12.0"
 
 [lints]
 workspace = true
