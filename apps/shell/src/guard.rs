@@ -80,6 +80,18 @@ pub fn watch_parent() {
 fn spawn(exe: &PathBuf) -> std::io::Result<ExitStatus> {
     let mut cmd = Command::new(exe);
     cmd.args(["daemon", "--child"]).stdin(Stdio::null());
+    // Распределитель памяти glibc после первого освобождения большого
+    // буфера (снимок экрана, фон Launchpad) поднимает порог и дальше держит
+    // такие куски у себя. Твёрдый порог — большие буферы берутся у системы
+    // и сразу возвращаются; две «арены» вместо одной на каждый поток.
+    for (key, value) in [
+        ("MALLOC_MMAP_THRESHOLD_", "131072"),
+        ("MALLOC_ARENA_MAX", "2"),
+    ] {
+        if std::env::var_os(key).is_none() {
+            cmd.env(key, value);
+        }
+    }
     // Всё, что служба пишет (и сообщение о панике), — в журнал.
     if let Some(file) = log_file() {
         cmd.stderr(file.try_clone()?).stdout(file);
