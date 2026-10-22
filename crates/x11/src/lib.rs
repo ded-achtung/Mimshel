@@ -1,6 +1,12 @@
 //! Связь с X-сервером: всплывающее окно с прозрачностью, вывод в него
 //! картинки, захват клавиатуры и мыши, перевод нажатий в буквы с учётом
-//! раскладки (us/ru) и регистра.
+//! раскладки (us/ru) и регистра. Для дока — окна программ ([`windows`]) и
+//! окно-док ([`dock`]).
+
+mod dock;
+mod windows;
+
+pub use dock::DockWindow;
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -23,32 +29,100 @@ use xkeysym::{Keysym, key};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// События, которые нужны оболочке. Координаты — относительно окна;
+x11rb::atom_manager! {
+    /// Имена свойств EWMH/ICCCM, которые нужны оболочке.
+    pub(crate) Atoms: AtomsCookie {
+        UTF8_STRING,
+        WM_STATE,
+        WM_CHANGE_STATE,
+        _NET_CLIENT_LIST,
+        _NET_CLIENT_LIST_STACKING,
+        _NET_ACTIVE_WINDOW,
+        _NET_CLOSE_WINDOW,
+        _NET_WM_PID,
+        _NET_WM_NAME,
+        _NET_WM_ICON,
+        _NET_WM_DESKTOP,
+        _NET_WM_STATE,
+        _NET_WM_STATE_SKIP_TASKBAR,
+        _NET_WM_STATE_HIDDEN,
+        _NET_WM_STATE_MAXIMIZED_VERT,
+        _NET_WM_STATE_MAXIMIZED_HORZ,
+        _NET_WM_STATE_ABOVE,
+        _NET_WM_STATE_STICKY,
+        _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_NORMAL,
+        _NET_WM_WINDOW_TYPE_DIALOG,
+        _NET_WM_WINDOW_TYPE_DOCK,
+        _NET_WM_STRUT,
+        _NET_WM_STRUT_PARTIAL,
+        _NET_FRAME_EXTENTS,
+    }
+}
+
+/// Какое свойство окна изменилось.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Property {
+    /// Список окон программ (у корневого окна).
+    ClientList,
+    /// Активное окно (у корневого окна).
+    ActiveWindow,
+    /// Свёрнуто/развёрнуто и т. п.
+    State,
+    Title,
+    Icon,
+    Class,
+    Other,
+}
+
+/// События, которые нужны оболочке. Координаты — относительно окна `window`;
 /// при захвате мыши клик мимо окна приходит с координатами за его краями.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
     Key(KeyPress),
     Button {
+        window: u32,
         x: i16,
         y: i16,
         button: u8,
     },
     Motion {
+        window: u32,
         x: i16,
         y: i16,
     },
+    /// Указатель вошёл в окно (в точку `x`, `y`) / вышел из него.
+    Enter {
+        window: u32,
+        x: i16,
+        y: i16,
+    },
+    Leave {
+        window: u32,
+    },
     /// Окно нужно перерисовать.
-    Expose,
+    Expose {
+        window: u32,
+    },
+    Property {
+        window: u32,
+        what: Property,
+    },
+    /// Окно сдвинулось или поменяло размер (корневое — сменился размер экрана).
+    Configure {
+        window: u32,
+    },
     Other,
 }
 
 pub struct Display {
-    conn: RustConnection,
-    root: Window,
+    pub(crate) conn: RustConnection,
+    pub(crate) root: Window,
+    pub(crate) atoms: Atoms,
     screen_size: (u16, u16),
     /// Вид пикселей с прозрачностью (32 бита) и палитра для него.
-    visual: u32,
-    colormap: u32,
+    pub(crate) visual: u32,
+    pub(crate) colormap: u32,
     keymap: Mutex<Keymap>,
 }
 
@@ -74,10 +148,12 @@ impl Display {
         let colormap = conn.generate_id()?;
         conn.create_colormap(ColormapAlloc::NONE, colormap, root, visual)?;
         let keymap = Mutex::new(Keymap::load(&conn)?);
+        let atoms = Atoms::new(&conn)?.reply()?;
 
         Ok(Display {
             conn,
             root,
+            atoms,
             screen_size,
             visual,
             colormap,
@@ -200,15 +276,44 @@ impl Display {
                 })
             }
             XEvent::ButtonPress(e) => Event::Button {
+                window: e.event,
                 x: e.event_x,
                 y: e.event_y,
                 button: e.detail,
             },
             XEvent::MotionNotify(e) => Event::Motion {
+                window: e.event,
                 x: e.event_x,
                 y: e.event_y,
             },
-            XEvent::Expose(e) if e.count == 0 => Event::Expose,
+            XEvent::EnterNotify(e) => Event::Enter {
+                window: e.event,
+                x: e.event_x,
+                y: e.event_y,
+            },
+            XEvent::LeaveNotify(e) => Event::Leave { window: e.event },
+            XEvent::Expose(e) if e.count == 0 => Event::Expose { window: e.window },
+            XEvent::PropertyNotify(e) => {
+                let a = &self.atoms;
+                let what = match e.atom {
+                    x if x == a._NET_CLIENT_LIST || x == a._NET_CLIENT_LIST_STACKING => {
+                        Property::ClientList
+                    }
+                    x if x == a._NET_ACTIVE_WINDOW => Property::ActiveWindow,
+                    x if x == a._NET_WM_STATE || x == a.WM_STATE => Property::State,
+                    x if x == a._NET_WM_NAME || x == u32::from(AtomEnum::WM_NAME) => {
+                        Property::Title
+                    }
+                    x if x == a._NET_WM_ICON => Property::Icon,
+                    x if x == u32::from(AtomEnum::WM_CLASS) => Property::Class,
+                    _ => Property::Other,
+                };
+                Event::Property {
+                    window: e.window,
+                    what,
+                }
+            }
+            XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
             XEvent::MappingNotify(_) => {
                 // Сменилась раскладка клавиатуры — перечитываем.
                 if let Ok(k) = Keymap::load(&self.conn) {
@@ -216,7 +321,12 @@ impl Display {
                 }
                 Event::Other
             }
-            _ => Event::Other,
+            other => {
+                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+                    eprintln!("X (не разобрано): {other:?}");
+                }
+                Event::Other
+            }
         }
     }
 }
@@ -296,32 +406,41 @@ impl Popup {
 
     /// Выводит картинку в окно (левый верхний угол к углу).
     pub fn present(&self, d: &Display, pixmap: &Pixmap) -> Result<()> {
-        let (w, h) = (pixmap.width() as usize, pixmap.height() as usize);
-        // tiny-skia хранит RGBA, X-сервер ждёт BGRA.
-        let mut data = pixmap.data().to_vec();
-        for px in data.as_chunks_mut::<4>().0 {
-            px.swap(0, 2);
-        }
-        // Большую картинку отправляем полосами — у запроса к X есть предел размера.
-        let max = d.conn.maximum_request_bytes().saturating_sub(64);
-        let rows = (max / (w * 4)).clamp(1, h.max(1));
-        for (i, chunk) in data.chunks(rows * w * 4).enumerate() {
-            d.conn.put_image(
-                ImageFormat::Z_PIXMAP,
-                self.window,
-                self.gc,
-                w as u16,
-                (chunk.len() / (w * 4)) as u16,
-                0,
-                (i * rows) as i16,
-                0,
-                32,
-                chunk,
-            )?;
-        }
-        d.conn.flush()?;
-        Ok(())
+        put_pixmap(d, self.window, self.gc, pixmap)
     }
+
+    pub fn id(&self) -> u32 {
+        self.window
+    }
+}
+
+/// Выводит картинку в 32-битное окно.
+pub(crate) fn put_pixmap(d: &Display, window: Window, gc: u32, pixmap: &Pixmap) -> Result<()> {
+    let (w, h) = (pixmap.width() as usize, pixmap.height() as usize);
+    // tiny-skia хранит RGBA, X-сервер ждёт BGRA.
+    let mut data = pixmap.data().to_vec();
+    for px in data.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    // Большую картинку отправляем полосами — у запроса к X есть предел размера.
+    let max = d.conn.maximum_request_bytes().saturating_sub(64);
+    let rows = (max / (w * 4)).clamp(1, h.max(1));
+    for (i, chunk) in data.chunks(rows * w * 4).enumerate() {
+        d.conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            window,
+            gc,
+            w as u16,
+            (chunk.len() / (w * 4)) as u16,
+            0,
+            (i * rows) as i16,
+            0,
+            32,
+            chunk,
+        )?;
+    }
+    d.conn.flush()?;
+    Ok(())
 }
 
 /// Таблица «код клавиши → символы» из X-сервера.
