@@ -1,6 +1,7 @@
 //! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
 
 mod dock_ui;
+mod guard;
 mod ui;
 
 use std::collections::HashMap;
@@ -13,7 +14,8 @@ const HELP: &str = "\
   shell apps            список программ, которые увидит Launchpad
   shell search ТЕКСТ    что найдёт Spotlight по этому тексту
   shell watch           следить за ярлыками и печатать, что появилось и пропало
-  shell daemon          служба: держит Spotlight и Launchpad наготове
+  shell daemon          служба: держит Spotlight и Launchpad наготове, рисует док;
+                        упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
   shell spotlight       открыть или закрыть Spotlight (через службу, без неё — сам)
   shell launchpad       открыть или закрыть Launchpad (через службу, без неё — сам)
   shell snapshot spotlight|launchpad ТЕКСТ ФАЙЛ.png
@@ -25,7 +27,14 @@ fn main() {
         Some("apps") => list_apps(),
         Some("search") if args.len() > 1 => search(&args[1..].join(" ")),
         Some("watch") => watch(),
-        Some("daemon") => exit_on_error(ui::run(None)),
+        Some("daemon") if args.get(1).map(String::as_str) == Some("--child") => {
+            if ui::daemon_running() {
+                std::process::exit(guard::ALREADY_RUNNING);
+            }
+            guard::watch_parent();
+            exit_on_error(ui::run(None))
+        }
+        Some("daemon") => guard::run(),
         Some(cmd) if ui::Panel::parse(cmd).is_some() => {
             let panel = ui::Panel::parse(cmd).expect("проверено выше");
             if !ui::ask_daemon(panel) {

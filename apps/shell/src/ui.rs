@@ -96,6 +96,11 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
+/// Служба уже запущена (кто-то слушает её сокет)?
+pub fn daemon_running() -> bool {
+    UnixStream::connect(socket_path()).is_ok()
+}
+
 /// Просит запущенную службу открыть окно. `false` — службы нет.
 pub fn ask_daemon(panel: Panel) -> bool {
     UnixStream::connect(socket_path())
