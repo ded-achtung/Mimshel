@@ -18,7 +18,10 @@ use shell_dbus::{
 };
 use shell_icons::Icons;
 use shell_menubar::status::{Battery, Sound};
-use shell_menubar::{AppleItem, Bar, Part, SoundAction, SoundPanel, apple_menu};
+use shell_menubar::{
+    AppleItem, Bar, ControlAction, ControlPanel, ControlState, Part, SoundAction, SoundPanel,
+    apple_menu,
+};
 use shell_text::Fonts;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
 use shell_x11::Key;
@@ -82,6 +85,8 @@ pub struct MenubarUi {
     /// в одном всплывающем окне; `popup_dirty` — перерисовать его.
     menu: Option<Menu<Cmd>>,
     sound_panel: Option<SoundPanel>,
+    /// Пункт управления (в том же всплывающем окне).
+    control_panel: Option<ControlPanel>,
     popup: Popup,
     popup_dirty: bool,
     dirty: bool,
@@ -113,6 +118,7 @@ impl MenubarUi {
             app_menu_wait: None,
             menu: None,
             sound_panel: None,
+            control_panel: None,
             popup: d.create_popup("menubar-menu")?,
             popup_dirty: false,
             dirty: true,
@@ -126,6 +132,7 @@ impl MenubarUi {
         ui.set_sound(status::read_sound());
         ui.set_battery(status::read_battery());
         ui.set_dnd(status::read_dnd());
+        ui.bar.control = true;
         watch_clock(config.clock_format.clone(), tx.clone());
         status::watch_sound(tx.clone());
         status::watch_battery(tx.clone());
@@ -196,6 +203,12 @@ impl MenubarUi {
             panel.sound = s.clone();
             self.popup_dirty = true;
         }
+        if let Some(panel) = &mut self.control_panel
+            && !panel.dragging()
+        {
+            panel.state.sound = sound.clone();
+            self.popup_dirty = true;
+        }
         self.sound = sound;
         self.dirty = true;
     }
@@ -216,11 +229,15 @@ impl MenubarUi {
             "notification-symbolic"
         };
         self.bar.bell = Some(icon.into());
+        if let Some(panel) = &mut self.control_panel {
+            panel.state.dnd = on;
+            self.popup_dirty = true;
+        }
         self.dirty = true;
     }
 
     fn popup_open(&self) -> bool {
-        self.menu.is_some() || self.sound_panel.is_some()
+        self.menu.is_some() || self.sound_panel.is_some() || self.control_panel.is_some()
     }
 
     /// Это событие для строки меню?
@@ -255,6 +272,10 @@ impl MenubarUi {
                     let action = panel.motion(x, y);
                     self.sound_action(d, action)?;
                 }
+                if let Some(panel) = &mut self.control_panel {
+                    let action = panel.motion(x, y);
+                    self.control_action(d, action)?;
+                }
             }
             Event::Button { window, x, y, .. } if window == popup => {
                 let (x, y) = (f32::from(x), f32::from(y));
@@ -264,10 +285,16 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.sound_panel {
                     let action = panel.press(x, y);
                     self.sound_action(d, action)?;
+                } else if let Some(panel) = &mut self.control_panel {
+                    let action = panel.press(x, y);
+                    self.control_action(d, action)?;
                 }
             }
             Event::Release { window, .. } if window == popup => {
                 if let Some(panel) = &mut self.sound_panel {
+                    panel.release();
+                }
+                if let Some(panel) = &mut self.control_panel {
                     panel.release();
                 }
             }
@@ -301,6 +328,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.sound_panel {
                     let action = panel.key(k.key);
                     self.sound_action(d, action)?;
+                } else if let Some(panel) = &mut self.control_panel {
+                    let action = panel.key(k.key);
+                    self.control_action(d, action)?;
                 }
             }
             Event::Expose { window } if window == popup => self.popup_dirty = true,
@@ -359,6 +389,7 @@ impl MenubarUi {
                     Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,
                     Some((Part::Bell, px)) => self.open_bell(d, fonts, px)?,
                     Some((Part::Volume, px)) => self.open_sound(d, px)?,
+                    Some((Part::Control, px)) => self.open_control(d, px)?,
                     Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
                     Some((Part::Menu(i), px)) => {
                         // Читаем меню заново: доступность пунктов могла поменяться.
@@ -567,6 +598,47 @@ impl MenubarUi {
         self.open_menu(d, fonts, Part::Bell, "bell".into(), x, entries)
     }
 
+    fn open_control(&mut self, d: &Display, x: f32) -> Result<()> {
+        let panel = ControlPanel::new(ControlState {
+            network: status::read_network(),
+            bluetooth: status::read_bluetooth(),
+            dnd: self.dnd,
+            sound: self.sound.clone(),
+        });
+        let size = panel.size();
+        self.control_panel = Some(panel);
+        self.show_popup(d, Part::Control, x, size)
+    }
+
+    fn control_action(&mut self, d: &Display, action: ControlAction) -> Result<()> {
+        match action {
+            ControlAction::Nothing => {}
+            ControlAction::Redraw => self.popup_dirty = true,
+            ControlAction::Close => self.close_popup(d)?,
+            ControlAction::SetWifi(on) => {
+                status::set_wifi(on);
+                self.popup_dirty = true;
+            }
+            ControlAction::SetBluetooth(on) => {
+                status::set_bluetooth(on);
+                self.popup_dirty = true;
+            }
+            ControlAction::SetDnd(on) => {
+                self.set_dnd(on);
+                std::thread::spawn(move || status::set_dnd(on));
+            }
+            ControlAction::SetVolume(v) => {
+                self.change_volume(d, v)?;
+                self.popup_dirty = true;
+            }
+            ControlAction::NetworkSettings => {
+                self.close_popup(d)?;
+                run(&["nm-connection-editor".to_string()]);
+            }
+        }
+        Ok(())
+    }
+
     fn open_sound(&mut self, d: &Display, x: f32) -> Result<()> {
         // Свежее состояние: устройства могли появиться или пропасть.
         let Some(sound) = status::read_sound().or_else(|| self.sound.clone()) else {
@@ -756,7 +828,10 @@ impl MenubarUi {
     /// Закрыть меню или окошко громкости (если открыто): например, перед
     /// открытием Spotlight.
     pub fn close_popup(&mut self, d: &Display) -> Result<()> {
-        if self.menu.take().is_some() | self.sound_panel.take().is_some() {
+        if self.menu.take().is_some()
+            | self.sound_panel.take().is_some()
+            | self.control_panel.take().is_some()
+        {
             self.popup.hide(d)?;
             self.bar.open = None;
             self.dirty = true;
@@ -838,6 +913,8 @@ impl MenubarUi {
                 self.popup.present(d, &menu.render(fonts))?;
             } else if let Some(panel) = &self.sound_panel {
                 self.popup.present(d, &panel.render(fonts))?;
+            } else if let Some(panel) = &self.control_panel {
+                self.popup.present(d, &panel.render(fonts, icons))?;
             }
         }
         Ok(())

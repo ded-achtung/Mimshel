@@ -88,6 +88,63 @@ pub fn set_dnd(on: bool) {
     );
 }
 
+/// Сеть: подключение (`nmcli device`) и есть ли Wi-Fi (`nmcli radio`).
+pub fn read_network() -> shell_menubar::Network {
+    let devices =
+        output("nmcli", &["-t", "-f", "TYPE,STATE,CONNECTION", "device"]).unwrap_or_default();
+    let active = devices.lines().find_map(|l| {
+        let mut f = l.splitn(3, ':');
+        let (kind, state, name) = (f.next()?, f.next()?, f.next()?);
+        (matches!(kind, "ethernet" | "wifi") && state == "connected")
+            .then(|| (kind == "ethernet", name.to_string()))
+    });
+    let radio = output("nmcli", &["-t", "-f", "WIFI-HW,WIFI", "radio"]).unwrap_or_default();
+    let mut r = radio.trim().split(':');
+    let wifi = match (r.next(), r.next()) {
+        (Some("enabled"), Some(state)) => Some(state == "enabled"),
+        _ => None,
+    };
+    let (wired, connection) = active.unwrap_or_default();
+    shell_menubar::Network {
+        connection,
+        wired,
+        wifi,
+    }
+}
+
+/// Bluetooth: `None` — адаптера нет; иначе включён ли (по rfkill в /sys —
+/// мгновенно; `bluetoothctl` без службы bluetooth зависает).
+pub fn read_bluetooth() -> Option<bool> {
+    let adapters = std::fs::read_dir("/sys/class/bluetooth").ok()?.count();
+    if adapters == 0 {
+        return None;
+    }
+    let blocked = std::fs::read_dir("/sys/class/rfkill")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            std::fs::read_to_string(e.path().join("type")).is_ok_and(|t| t.trim() == "bluetooth")
+        })
+        .any(|e| std::fs::read_to_string(e.path().join("soft")).is_ok_and(|v| v.trim() == "1"));
+    Some(!blocked)
+}
+
+/// Включить или выключить Wi-Fi / Bluetooth (в отдельном потоке: может
+/// занять время).
+pub fn set_wifi(on: bool) {
+    std::thread::spawn(move || run("nmcli", &["radio", "wifi", if on { "on" } else { "off" }]));
+}
+
+pub fn set_bluetooth(on: bool) {
+    std::thread::spawn(move || {
+        run(
+            "timeout",
+            &["5", "bluetoothctl", "power", if on { "on" } else { "off" }],
+        );
+    });
+}
+
 /// Что сделать со звуком.
 pub enum Audio {
     Volume(u32),

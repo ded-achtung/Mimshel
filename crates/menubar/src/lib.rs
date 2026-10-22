@@ -5,10 +5,12 @@
 //! стоит, и рисование в картинку.
 
 mod apple;
+mod control;
 mod sound;
 pub mod status;
 
 pub use apple::{AppleItem, apple_menu, parse_menu};
+pub use control::{ControlAction, ControlPanel, ControlState, Network, Tile};
 pub use sound::{Row, SoundAction, SoundPanel};
 
 use shell_icons::Icons;
@@ -29,6 +31,8 @@ pub enum Part {
     Volume,
     Battery,
     Bell,
+    /// Пункт управления.
+    Control,
     Clock,
 }
 
@@ -53,6 +57,8 @@ pub struct Bar {
     pub bell: Option<String>,
     /// Значки трея — готовые картинки (размер любой, рисуются 16×16).
     pub tray: Vec<Pixmap>,
+    /// Показывать значок Пункта управления.
+    pub control: bool,
     pub clock: String,
     /// Подсвеченная часть — та, чьё меню открыто.
     pub open: Option<Part>,
@@ -94,6 +100,7 @@ impl Bar {
             battery: None,
             bell: None,
             tray: Vec::new(),
+            control: false,
             clock: String::new(),
             open: None,
         }
@@ -123,6 +130,10 @@ impl Bar {
             out.push((Part::Clock, right, w));
         }
         let icon_w = ICON as f32 + 2.0 * ITEM_PAD;
+        if self.control {
+            right -= icon_w;
+            out.push((Part::Control, right, icon_w));
+        }
         if self.bell.is_some() {
             right -= icon_w;
             out.push((Part::Bell, right, icon_w));
@@ -217,6 +228,7 @@ impl Bar {
                         icon(&mut pm, name);
                     }
                 }
+                Part::Control => control_icon(&mut pm, tx, hf / 2.0),
                 Part::Bell => {
                     if let Some(name) = &self.bell {
                         icon(&mut pm, name);
@@ -247,6 +259,27 @@ impl Bar {
             }
         }
         pm
+    }
+}
+
+/// Значок Пункта управления — два переключателя-«таблетки»: у верхнего
+/// кружок справа, у нижнего слева (как в macOS). `x` — левый край, `cy` —
+/// середина по высоте.
+fn control_icon(pm: &mut Pixmap, x: f32, cy: f32) {
+    let stroke = tiny_skia::Stroke {
+        width: 1.3,
+        ..tiny_skia::Stroke::default()
+    };
+    let color = paint([0xf2, 0xf2, 0xf2, 0xff]);
+    for (dy, knob_right) in [(-3.6, true), (3.6, false)] {
+        let y = cy + dy;
+        if let Some(r) = rounded(x + 1.0, y - 3.0, 14.0, 6.0, 3.0) {
+            pm.stroke_path(&r, &color, &stroke, Transform::identity(), None);
+        }
+        let kx = if knob_right { x + 12.0 } else { x + 4.0 };
+        if let Some(c) = shell_widgets::shape::circle(kx, y, 2.2) {
+            pm.fill_path(&c, &color, FillRule::Winding, Transform::identity(), None);
+        }
     }
 }
 
