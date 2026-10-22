@@ -127,20 +127,23 @@ impl Watcher {
 }
 
 /// Запустить трей. `notify` получает обновления (из потока трея).
-/// Имя наблюдателя занято (трей уже держит кто-то другой) — ошибка.
+/// Имя наблюдателя занято — ждём в очереди, пока его не освободят.
 pub fn start(notify: impl Fn(TrayUpdate) + Send + 'static) -> zbus::Result<Tray> {
     let items = Arc::new(Mutex::new(Vec::new()));
     let (wake_tx, wake_rx) = mpsc::channel();
-    let conn = zbus::blocking::connection::Builder::session()?
-        .serve_at(
-            "/StatusNotifierWatcher",
-            Watcher {
-                items: items.clone(),
-                changed: wake_tx.clone(),
-            },
-        )?
-        .name(WATCHER)?
-        .build()?;
+    let conn = Connection::session()?;
+    conn.object_server().at(
+        "/StatusNotifierWatcher",
+        Watcher {
+            items: items.clone(),
+            changed: wake_tx.clone(),
+        },
+    )?;
+    // Имя занято (трей панели Xfce, которую вот-вот остановят) — встаём в
+    // очередь: имя перейдёт к нам, а программы сами перерегистрируют значки.
+    let reply =
+        conn.request_name_with_flags(WATCHER, zbus::fdo::RequestNameFlags::ReplaceExisting.into())?;
+    eprintln!("Трей: {reply:?}");
 
     // Сигналы значков и уход программ с шины — отдельный поток: он только
     // будит основной.
