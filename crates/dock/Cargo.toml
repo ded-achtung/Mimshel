@@ -9,6 +9,7 @@ shell-core = { path = "../core" }
 shell-apps = { path = "../apps" }
 shell-text = { path = "../text" }
 shell-icons = { path = "../icons" }
+shell-widgets = { path = "../widgets" }
 tiny-skia = "0.12.0"
 
 [lints]

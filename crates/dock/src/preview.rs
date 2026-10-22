@@ -6,7 +6,7 @@
 use shell_text::{Fonts, Style};
 use tiny_skia::{FillRule, FilterQuality, IntSize, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
-use crate::draw::{paint, rounded};
+use shell_widgets::shape::{paint, rounded};
 
 /// Окно в миниатюрах.
 #[derive(Debug, Clone, PartialEq)]

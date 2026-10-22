@@ -576,6 +576,7 @@ dependencies = [
  "shell-core",
  "shell-icons",
  "shell-text",
+ "shell-widgets",
  "tiny-skia",
 ]
 
@@ -603,6 +604,15 @@ name = "shell-text"
 version = "0.1.0"
 dependencies = [
  "cosmic-text",
+ "tiny-skia",
+]
+
+[[package]]
+name = "shell-widgets"
+version = "0.1.0"
+dependencies = [
+ "shell-core",
+ "shell-text",
  "tiny-skia",
 ]
 

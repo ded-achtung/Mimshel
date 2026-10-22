@@ -6,13 +6,11 @@ use std::time::Instant;
 
 use shell_icons::Icons;
 use shell_text::{Fonts, Style};
-use tiny_skia::{
-    Color, FillRule, FilterQuality, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke,
-    Transform,
-};
+use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
 use crate::Dock;
 use crate::layout::{PAD_BOTTOM, SEPARATOR};
+use shell_widgets::shape::{circle, paint, rounded};
 
 const BAR: [u8; 4] = [0x19, 0x19, 0x19, 0xbe];
 const BAR_EDGE: [u8; 4] = [0xff, 0xff, 0xff, 0x26];
@@ -230,42 +228,10 @@ fn tip(pm: &mut Pixmap, fonts: &mut Fonts, text: &str, x: f32, y: f32) {
     fonts.draw(pm, text, &TIP_TEXT, x + 10.0, y + 4.0, Some(bw - 19.0));
 }
 
-pub(crate) fn paint(c: [u8; 4]) -> Paint<'static> {
-    let mut p = Paint::default();
-    p.set_color(Color::from_rgba8(c[0], c[1], c[2], c[3]));
-    p.anti_alias = true;
-    p
-}
-
 fn fill_rect(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
     if let Some(r) = Rect::from_xywh(x, y, w, h) {
         pm.fill_rect(r, &paint(c), Transform::identity(), None);
     }
-}
-
-fn circle(x: f32, y: f32, r: f32) -> Option<Path> {
-    let mut pb = PathBuilder::new();
-    pb.push_circle(x, y, r);
-    pb.finish()
-}
-
-/// Прямоугольник со скруглёнными углами.
-pub(crate) fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
-    let r = r.min(w / 2.0).min(h / 2.0);
-    let k = r * 0.552_284_8;
-    let (x1, y1) = (x + w, y + h);
-    let mut pb = PathBuilder::new();
-    pb.move_to(x + r, y);
-    pb.line_to(x1 - r, y);
-    pb.cubic_to(x1 - r + k, y, x1, y + r - k, x1, y + r);
-    pb.line_to(x1, y1 - r);
-    pb.cubic_to(x1, y1 - r + k, x1 - r + k, y1, x1 - r, y1);
-    pb.line_to(x + r, y1);
-    pb.cubic_to(x + r - k, y1, x, y1 - r + k, x, y1 - r);
-    pb.line_to(x, y + r);
-    pb.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
-    pb.close();
-    pb.finish()
 }
 
 #[cfg(test)]
