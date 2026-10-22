@@ -9,7 +9,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
@@ -84,21 +84,65 @@ pub(crate) enum Msg {
     ToggleCenter,
 }
 
-/// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
+/// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
+/// Файла ещё нет — он создаётся из нынешних настроек macos-look. Какие
+/// части включены, пока решает macos-look: эти переключатели — из его файла.
 pub fn load_config() -> Config {
-    match config_path().and_then(|p| std::fs::read_to_string(p).ok()) {
-        Some(text) => Config::from_macos_look(&text),
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let look = home
+        .as_ref()
+        .and_then(|h| std::fs::read_to_string(h.join(".config/macos-look/config.ini")).ok())
+        .map(|text| Config::from_macos_look(&text));
+    let mut config = match config_path().map(|p| (std::fs::read_to_string(&p), p)) {
+        Some((Ok(text), _)) => Config::from_toml(&text),
+        Some((Err(e), path)) if e.kind() == std::io::ErrorKind::NotFound => {
+            let config = look.clone().unwrap_or_default();
+            match write_file(&path, &config.to_toml()) {
+                Ok(()) => eprintln!("Создан файл настроек {}", path.display()),
+                Err(e) => eprintln!("Не удалось создать {}: {e}", path.display()),
+            }
+            config
+        }
+        Some((Err(e), path)) => {
+            eprintln!("Не удалось прочитать {}: {e}", path.display());
+            Config::default()
+        }
         None => Config::default(),
+    };
+    if let Some(look) = look {
+        config.dock = look.dock;
+        config.menubar = look.menubar;
+        config.notify = look.notify;
     }
+    config
 }
 
-/// Файл настроек: из `SHELL_CONFIG` или `~/.config/macos-look/config.ini`.
+/// Файл настроек: из `SHELL_CONFIG` или `~/.config/shell/config.toml`.
 pub fn config_path() -> Option<PathBuf> {
     std::env::var_os("SHELL_CONFIG")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/macos-look/config.ini"))
+            let base = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+            Some(base.join("shell/config.toml"))
         })
+}
+
+/// Записать файл целиком: во временный рядом, затем подменить — при сбое
+/// посреди записи старый файл останется целым.
+pub fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let mut file = std::fs::File::create(&tmp)?;
+    std::io::Write::write_all(&mut file, text.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Только ярлыки, видимые в меню, — для Spotlight и Launchpad.

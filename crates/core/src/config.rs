@@ -1,9 +1,13 @@
-//! Настройки оболочки. Пока берутся из конфига macos-look
-//! (`~/.config/macos-look/config.ini`) — это единственный конфиг, который
-//! сейчас ведёт пользователь; чего там нет — значения по умолчанию.
-//! Здесь только разбор текста, файл читает программа.
+//! Настройки оболочки: свой файл `~/.config/shell/config.toml`
+//! ([`Config::from_toml`]). Первый раз он создаётся из конфига macos-look
+//! (`~/.config/macos-look/config.ini`, [`Config::from_macos_look`]), а какие
+//! части включены (док, строка меню, уведомления), пока решает macos-look —
+//! эти три переключателя служба берёт из его файла.
+//! Здесь только разбор и составление текста, файлы читает программа.
 
 use std::collections::HashMap;
+
+use toml_edit::{Array, DocumentMut, Value};
 
 /// Когда прятать док (как `hide_mode` в Plank и macos-look).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +22,7 @@ pub enum DockHide {
     Maximized,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Основной шрифт.
     pub font: String,
@@ -150,51 +154,195 @@ impl Config {
     }
 }
 
-/// Текст ini, в котором `ключ = значение` в `[раздел]` заменено (или добавлено).
-/// Остальные строки, комментарии и порядок не меняются.
-pub fn set_ini_value(text: &str, section: &str, key: &str, value: &str) -> String {
-    let new_line = format!("{key} = {value}");
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut current = String::new();
-    // Последняя непустая строка нужного раздела — после неё допишем ключ.
-    let mut section_end = None;
-    for (i, line) in lines.iter().enumerate() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with('#') || t.starts_with(';') {
-            continue;
-        }
-        if let Some(s) = t.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            current = s.trim().to_string();
-            if current == section {
-                section_end = Some(i);
-            }
-        } else if current == section {
-            section_end = Some(i);
-            if t.split_once('=').is_some_and(|(k, _)| k.trim() == key) {
-                lines[i] = new_line;
-                return join_lines(lines, text);
-            }
+impl DockHide {
+    /// Слово в файле настроек.
+    pub fn name(self) -> &'static str {
+        match self {
+            DockHide::Never => "never",
+            DockHide::Smart => "smart",
+            DockHide::Auto => "auto",
+            DockHide::Maximized => "maximized",
         }
     }
-    match section_end {
-        Some(i) => lines.insert(i + 1, new_line),
-        None => {
-            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
-                lines.push(String::new());
-            }
-            lines.push(format!("[{section}]"));
-            lines.push(new_line);
-        }
+
+    fn parse(s: &str) -> Option<DockHide> {
+        [
+            DockHide::Never,
+            DockHide::Smart,
+            DockHide::Auto,
+            DockHide::Maximized,
+        ]
+        .into_iter()
+        .find(|h| h.name() == s)
     }
-    join_lines(lines, text)
 }
 
-fn join_lines(lines: Vec<String>, original: &str) -> String {
-    let mut out = lines.join("\n");
-    if original.is_empty() || original.ends_with('\n') {
-        out.push('\n');
+impl Config {
+    /// Настройки из своего файла поверх значений по умолчанию. Непонятные
+    /// значения и сломанный файл не мешают запуску: берётся значение по
+    /// умолчанию.
+    pub fn from_toml(text: &str) -> Config {
+        let mut c = Config::default();
+        let Ok(doc) = text.parse::<DocumentMut>() else {
+            return c;
+        };
+        let get = |section: &str, key: &str| doc.get(section).and_then(|t| t.get(key));
+        let num = |section: &str, key: &str| {
+            get(section, key)
+                .and_then(|v| v.as_integer())
+                .and_then(|v| u32::try_from(v).ok())
+        };
+        let text = |section: &str, key: &str| {
+            get(section, key)
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        let list = |section: &str, key: &str| {
+            get(section, key).and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|v| v.trim().trim_end_matches(".desktop").to_string())
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        if let Some(v) = text("look", "font") {
+            c.font = v;
+        }
+        if let Some(v) = text("look", "icon_theme") {
+            c.icon_theme = v;
+        }
+        if let Some(v) = list("apps", "terminal").filter(|v| !v.is_empty()) {
+            c.terminal = v;
+        }
+        if let Some(v) = num("menubar", "height").filter(|&v| v >= 16) {
+            c.menubar_height = v;
+        }
+        if let Some(v) = text("menubar", "menu_icon") {
+            c.menu_icon = v;
+        }
+        if let Some(v) = text("menubar", "clock_format") {
+            c.clock_format = v;
+        }
+        if let Some(v) = list("dock", "apps") {
+            c.dock_apps = v;
+        }
+        if let Some(v) = num("dock", "icon_size").filter(|&v| v >= 16) {
+            c.dock_icon = v;
+        }
+        // Увеличение: число процентов или `false` — выключено.
+        match get("dock", "zoom") {
+            Some(v) if v.as_bool() == Some(false) => c.dock_zoom = None,
+            Some(v) => {
+                if let Some(p) = v.as_integer().and_then(|p| u32::try_from(p).ok())
+                    && p >= 100
+                {
+                    c.dock_zoom = Some(p);
+                }
+            }
+            None => {}
+        }
+        if let Some(h) = text("dock", "hide").and_then(|h| DockHide::parse(&h)) {
+            c.dock_hide = h;
+        }
+        if let Some(v) = num("launchpad", "columns").filter(|&v| v > 0) {
+            c.launchpad_columns = v as usize;
+        }
+        if let Some(v) = num("launchpad", "rows").filter(|&v| v > 0) {
+            c.launchpad_rows = v as usize;
+        }
+        if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
+            c.launchpad_icon = v;
+        }
+        c
     }
-    out
+
+    /// Текст своего файла настроек с пояснениями — для первого создания.
+    /// Переключатели частей (`dock`, `menubar`, `notify`) сюда не пишутся.
+    pub fn to_toml(&self) -> String {
+        let s = |v: &str| Value::from(v).to_string();
+        let list = |v: &[String]| {
+            let items: Vec<String> = v.iter().map(|v| s(v)).collect();
+            format!("[{}]", items.join(", "))
+        };
+        let zoom = self
+            .dock_zoom
+            .map_or("false".to_string(), |p| p.to_string());
+        format!(
+            "\
+# Настройки оболочки shell. После правки перезапустите службу: macos-look apply menu
+# Какие части включены (док, строка меню, уведомления), пока задаёт macos-look:
+#   macos-look set dock.engine shell   (или plank; menubar.engine, notify.engine)
+
+[look]
+# Шрифт и тема иконок.
+font = {font}
+icon_theme = {theme}
+
+[menubar]
+# Высота в точках, иконка меню яблока (имя в теме или путь к файлу),
+# формат часов как у команды date: %a — день недели, %-d — число, %b — месяц.
+height = {height}
+menu_icon = {menu_icon}
+clock_format = {clock}
+
+[dock]
+# Закреплённые программы — имена ярлыков без .desktop. Меняется и само,
+# когда закрепляете или открепляете значок в доке.
+apps = {apps}
+icon_size = {icon}
+# Увеличение под мышью в процентах; false — без увеличения.
+zoom = {zoom}
+# Когда прятать: never — никогда, smart — когда окно заходит на док,
+# auto — всегда, maximized — когда окно развёрнуто.
+hide = {hide}
+
+[launchpad]
+columns = {columns}
+rows = {rows}
+icon_size = {lp_icon}
+
+[apps]
+# Чем открывать программы, которым нужен терминал; программа идёт следом.
+terminal = {terminal}
+",
+            font = s(&self.font),
+            theme = s(&self.icon_theme),
+            height = self.menubar_height,
+            menu_icon = s(&self.menu_icon),
+            clock = s(&self.clock_format),
+            apps = list(&self.dock_apps),
+            icon = self.dock_icon,
+            hide = s(self.dock_hide.name()),
+            columns = self.launchpad_columns,
+            rows = self.launchpad_rows,
+            lp_icon = self.launchpad_icon,
+            terminal = list(&self.terminal),
+        )
+    }
+}
+
+/// Текст файла настроек, в котором `[dock] apps` заменён на `apps`.
+/// Пояснения и остальные строки не меняются. Сломанный файл — `None`
+/// (не затираем то, что человек, может быть, правит прямо сейчас).
+pub fn set_dock_apps(text: &str, apps: &[String]) -> Option<String> {
+    let mut doc = text.parse::<DocumentMut>().ok()?;
+    if !doc.contains_table("dock") {
+        doc["dock"] = toml_edit::table();
+    }
+    let new: Array = apps.iter().map(String::as_str).collect();
+    match doc["dock"].get_mut("apps").and_then(|v| v.as_value_mut()) {
+        // Пробелы и пояснение после значения остаются прежними.
+        Some(old) => {
+            let decor = old.decor().clone();
+            *old = Value::Array(new);
+            *old.decor_mut() = decor;
+        }
+        None => doc["dock"]["apps"] = toml_edit::value(new),
+    }
+    Some(doc.to_string())
 }
 
 /// `[раздел]` и `ключ = значение`; строки с `#` и `;` — комментарии.
@@ -253,26 +401,46 @@ mod tests {
     }
 
     #[test]
-    fn set_value_keeps_the_rest() {
-        let text = "# шапка\n[dock]\nengine = shell\napps = a, b\n\n[lock]\napps = x\n";
-        let out = set_ini_value(text, "dock", "apps", "a, b, c");
+    fn toml_round_trip() {
+        let mut c = Config::from_macos_look(
+            "[dock]\napps = thunar, firefox\nzoom = no\nhide_mode = 2\n\
+             [panel]\nclock_format = %H:%M \"x\"\n",
+        );
+        // Переключатели частей в свой файл не пишутся.
+        c.dock = false;
+        let text = c.to_toml();
+        assert_eq!(Config::from_toml(&text), c, "{text}");
+        assert_eq!(Config::from_toml(&text).clock_format, "%H:%M \"x\"");
+        assert_eq!(
+            Config::from_toml(&Config::default().to_toml()),
+            Config::default()
+        );
+    }
+
+    #[test]
+    fn toml_bad_values_keep_defaults() {
+        let c = Config::from_toml(
+            "[dock]\nzoom = 150\nicon_size = \"big\"\nhide = \"sometimes\"\n\
+             [menubar]\nheight = -5\n",
+        );
+        assert_eq!(c.dock_zoom, Some(150));
+        assert_eq!(c.dock_icon, 48);
+        assert_eq!(c.dock_hide, DockHide::Smart);
+        assert_eq!(c.menubar_height, 28);
+        assert_eq!(Config::from_toml("это не toml ["), Config::default());
+    }
+
+    #[test]
+    fn dock_apps_keep_the_rest() {
+        let text = "# шапка\n[dock]\napps = [\"a\"]  # пояснение\nicon_size = 48\n";
+        let out = set_dock_apps(text, &["a".into(), "b".into()]).unwrap();
         assert_eq!(
             out,
-            "# шапка\n[dock]\nengine = shell\napps = a, b, c\n\n[lock]\napps = x\n"
+            "# шапка\n[dock]\napps = [\"a\", \"b\"]  # пояснение\nicon_size = 48\n"
         );
-        assert_eq!(
-            Config::from_macos_look(&out).dock_apps,
-            ["a", "b", "c"],
-            "читается обратно"
-        );
-
-        // Ключа нет — дописывается в конец своего раздела.
-        let out = set_ini_value("[dock]\nengine = shell\n\n[lock]\n", "dock", "apps", "a");
-        assert_eq!(out, "[dock]\nengine = shell\napps = a\n\n[lock]\n");
-
-        // Раздела нет — появляется в конце.
-        let out = set_ini_value("[look]\nfont = Inter", "dock", "apps", "a");
-        assert_eq!(out, "[look]\nfont = Inter\n\n[dock]\napps = a");
-        assert_eq!(set_ini_value("", "dock", "apps", "a"), "[dock]\napps = a\n");
+        let out = set_dock_apps("[look]\nfont = \"Inter\"\n", &["a".into()]).unwrap();
+        assert_eq!(Config::from_toml(&out).dock_apps, ["a"]);
+        assert_eq!(Config::from_toml(&out).font, "Inter");
+        assert!(set_dock_apps("[dock\n", &[]).is_none());
     }
 }

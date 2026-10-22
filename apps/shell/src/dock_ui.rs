@@ -11,7 +11,7 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use shell_apps::App;
-use shell_core::config::{Config, DockHide, set_ini_value};
+use shell_core::config::{Config, DockHide, set_dock_apps};
 use shell_dock::{
     Action, Dock, Look, Menu, MenuCommand, MenuResult, POOF, Preview, PreviewCard, Rect, THUMB_H,
     THUMB_W, poof_image, should_hide, thumbnail,
@@ -916,23 +916,20 @@ fn painted_columns(pm: &tiny_skia::Pixmap) -> Option<(u32, u32)> {
 }
 
 /// Записать закреплённые значки в `[dock] apps` файла настроек; остальное
-/// в файле не меняется. Пишем во временный файл и подменяем — при сбое
-/// посреди записи старый файл останется целым.
+/// в файле не меняется.
 fn save_pinned(path: &Path, apps: &[String]) -> std::io::Result<()> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e),
     };
-    let text = set_ini_value(&text, "dock", "apps", &apps.join(", "));
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("ini.tmp");
-    let mut file = std::fs::File::create(&tmp)?;
-    std::io::Write::write_all(&mut file, text.as_bytes())?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, path)
+    let text = set_dock_apps(&text, apps).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "в файле ошибка, исправьте её — тогда значки сохранятся",
+        )
+    })?;
+    crate::ui::write_file(path, &text)
 }
 
 #[cfg(test)]
