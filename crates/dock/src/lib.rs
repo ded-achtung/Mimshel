@@ -1,0 +1,410 @@
+//! Док, как в macOS: закреплённые программы, затем запущенные; точка под
+//! запущенной; увеличение под мышью; подпись над значком; прыжок при запуске;
+//! «умное» скрытие. Здесь нет X11: состояние, решения и рисование в картинку.
+
+mod draw;
+mod hide;
+mod items;
+mod layout;
+
+pub use hide::{Rect, should_hide};
+pub use items::{Item, match_window};
+pub use layout::Slot;
+
+use std::time::{Duration, Instant};
+
+use shell_apps::App;
+use shell_core::config::DockHide;
+use shell_core::windows::WindowInfo;
+use tiny_skia::Pixmap;
+
+/// Сколько длится выезд/уезд дока (как HideTime в теме Plank).
+pub const SLIDE: Duration = Duration::from_millis(200);
+/// Один прыжок значка при запуске и сколько прыгать, пока не появится окно.
+pub const BOUNCE: Duration = Duration::from_millis(600);
+pub const BOUNCE_LIMIT: Duration = Duration::from_millis(3000);
+
+/// Что сделать после клика.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Nothing,
+    Launch(Box<App>),
+    Activate(u32),
+    Minimize(Vec<u32>),
+}
+
+/// Настройки внешнего вида.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    pub icon: u32,
+    /// Увеличение под мышью, во сколько раз (1.0 — нет).
+    pub zoom: f32,
+    pub hide: DockHide,
+}
+
+pub struct Dock {
+    pub(crate) look: Look,
+    apps: Vec<App>,
+    pinned: Vec<String>,
+    /// Окна программ (снизу вверх) и номер программы, к которой окно относится.
+    windows: Vec<(WindowInfo, Option<usize>)>,
+    /// Иконки окон без ярлыка.
+    window_icons: Vec<(u32, Pixmap)>,
+    active: Option<u32>,
+    pub(crate) items: Vec<Item>,
+    pub(crate) screen_w: f32,
+    /// Где указатель (x в окне дока), пока он над доком.
+    pub(crate) pointer: Option<f32>,
+    /// Насколько спрятан: 0 — виден, 1 — совсем спрятан; и куда едет.
+    hidden: f32,
+    slide: Option<(f32, f32, Instant)>,
+    /// Прыжки значков после запуска: ключ значка и начало.
+    bounces: Vec<(String, Instant)>,
+}
+
+impl Dock {
+    pub fn new(look: Look, apps: Vec<App>, pinned: Vec<String>, screen_w: u32) -> Dock {
+        let mut d = Dock {
+            look,
+            apps,
+            pinned,
+            windows: Vec::new(),
+            window_icons: Vec::new(),
+            active: None,
+            items: Vec::new(),
+            screen_w: screen_w as f32,
+            pointer: None,
+            hidden: 0.0,
+            slide: None,
+            bounces: Vec::new(),
+        };
+        d.rebuild();
+        d
+    }
+
+    pub fn set_apps(&mut self, apps: Vec<App>) {
+        self.apps = apps;
+        let infos: Vec<_> = self.windows.drain(..).map(|(w, _)| (w, None)).collect();
+        self.set_windows(infos);
+    }
+
+    pub fn apps(&self) -> &[App] {
+        &self.apps
+    }
+
+    pub fn set_screen_width(&mut self, w: u32) {
+        self.screen_w = w as f32;
+    }
+
+    /// Новый список окон (снизу вверх) с подсказкой — ярлыком, из которого
+    /// запущен процесс окна (если известен).
+    pub fn set_windows(&mut self, windows: Vec<(WindowInfo, Option<String>)>) {
+        self.windows = windows
+            .into_iter()
+            .map(|(w, hint)| {
+                let app = match_window(&w, hint.as_deref(), &self.apps);
+                (w, app)
+            })
+            .collect();
+        let alive: Vec<u32> = self.windows.iter().map(|(w, _)| w.id).collect();
+        self.window_icons.retain(|(id, _)| alive.contains(id));
+        self.rebuild();
+    }
+
+    /// Окна без ярлыка, для которых нужна иконка самого окна.
+    pub fn windows_without_icon(&self) -> Vec<u32> {
+        self.windows
+            .iter()
+            .filter(|(w, app)| {
+                app.is_none() && !self.window_icons.iter().any(|(id, _)| *id == w.id)
+            })
+            .map(|(w, _)| w.id)
+            .collect()
+    }
+
+    pub fn set_window_icon(&mut self, window: u32, icon: Pixmap) {
+        self.window_icons.push((window, icon));
+    }
+
+    pub(crate) fn window_icon(&self, window: u32) -> Option<&Pixmap> {
+        self.window_icons
+            .iter()
+            .find(|(id, _)| *id == window)
+            .map(|(_, p)| p)
+    }
+
+    pub fn set_active(&mut self, w: Option<u32>) {
+        self.active = w;
+    }
+
+    pub fn active(&self) -> Option<u32> {
+        self.active
+    }
+
+    /// Окно по номеру (для решения о скрытии).
+    pub fn window(&self, id: u32) -> Option<&WindowInfo> {
+        self.windows.iter().map(|(w, _)| w).find(|w| w.id == id)
+    }
+
+    fn rebuild(&mut self) {
+        self.items = items::build(&self.apps, &self.pinned, &self.windows);
+        // Окно появилось — прыгать незачем.
+        let items = &self.items;
+        self.bounces
+            .retain(|(key, _)| items.iter().any(|i| &i.key == key && i.windows.is_empty()));
+    }
+
+    /// Клик по значку `index` кнопкой `button`.
+    pub fn click(&mut self, index: usize, button: u8, now: Instant) -> Action {
+        let Some(item) = self.items.get(index) else {
+            return Action::Nothing;
+        };
+        let launch = |item: &Item| match &item.app {
+            Some(app) => Action::Launch(Box::new(app.clone())),
+            None => Action::Nothing,
+        };
+        let action = match button {
+            // Средняя кнопка — ещё одна копия программы.
+            2 => launch(item),
+            1 if item.windows.is_empty() => launch(item),
+            1 => {
+                let ours = |w: &u32| Some(*w) == self.active;
+                if !item.windows.iter().any(ours) {
+                    // Самое верхнее окно программы (список — снизу вверх).
+                    Action::Activate(*item.windows.last().expect("не пусто"))
+                } else if item.windows.len() > 1 {
+                    // Несколько окон — следующее по кругу: самое нижнее из них.
+                    Action::Activate(item.windows[0])
+                } else {
+                    // Как в Plank: клик по активной программе сворачивает её.
+                    Action::Minimize(item.windows.clone())
+                }
+            }
+            _ => Action::Nothing,
+        };
+        if let Action::Launch(_) = action {
+            let key = item.key.clone();
+            self.launched(&key, now);
+        }
+        action
+    }
+
+    /// Программа запущена (из дока, Spotlight или Launchpad) — её значок
+    /// прыгает, пока не появится окно. Значка нет — ничего.
+    pub fn launched(&mut self, app_id: &str, now: Instant) {
+        if self.items.iter().any(|i| i.key == app_id) {
+            self.bounces.retain(|(k, _)| k != app_id);
+            self.bounces.push((app_id.to_string(), now));
+        }
+    }
+
+    /// Высота прыжка значка (доля размера иконки) в момент `now`.
+    pub(crate) fn bounce(&self, key: &str, now: Instant) -> f32 {
+        let Some((_, start)) = self.bounces.iter().find(|(k, _)| k == key) else {
+            return 0.0;
+        };
+        let t = now.saturating_duration_since(*start);
+        if t >= BOUNCE_LIMIT {
+            return 0.0;
+        }
+        let phase = (t.as_secs_f32() % BOUNCE.as_secs_f32()) / BOUNCE.as_secs_f32();
+        (phase * std::f32::consts::PI).sin() * 0.5
+    }
+
+    /// Указатель над доком (x в окне) или ушёл (`None`).
+    pub fn set_pointer(&mut self, x: Option<f32>) {
+        self.pointer = x;
+    }
+
+    pub fn pointer(&self) -> Option<f32> {
+        self.pointer
+    }
+
+    /// Начать выезд (`false`) или уезд (`true`) дока, если он уже не там.
+    pub fn slide_to(&mut self, hidden: bool, now: Instant) {
+        let target = if hidden { 1.0 } else { 0.0 };
+        let current = self.hidden_at(now);
+        match self.slide {
+            Some((_, to, _)) if to == target => {}
+            _ if self.slide.is_none() && current == target => {}
+            _ => self.slide = Some((current, target, now)),
+        }
+    }
+
+    /// Насколько док спрятан в момент `now` (0..=1).
+    pub fn hidden_at(&self, now: Instant) -> f32 {
+        match self.slide {
+            None => self.hidden,
+            Some((from, to, start)) => {
+                let t = (now.saturating_duration_since(start).as_secs_f32() / SLIDE.as_secs_f32())
+                    .min(1.0);
+                // Плавно в начале и в конце.
+                let t = t * t * (3.0 - 2.0 * t);
+                from + (to - from) * t
+            }
+        }
+    }
+
+    /// Двигается ли что-нибудь (тогда нужна перерисовка по таймеру).
+    pub fn animating(&self, now: Instant) -> bool {
+        let sliding = self
+            .slide
+            .is_some_and(|(_, _, start)| now.saturating_duration_since(start) < SLIDE);
+        let bouncing = self
+            .bounces
+            .iter()
+            .any(|(_, s)| now.saturating_duration_since(*s) < BOUNCE_LIMIT);
+        sliding || bouncing
+    }
+
+    /// Закончить завершившиеся движения (вызывать после перерисовки).
+    pub fn settle(&mut self, now: Instant) {
+        if let Some((_, to, start)) = self.slide
+            && now.saturating_duration_since(start) >= SLIDE
+        {
+            self.hidden = to;
+            self.slide = None;
+        }
+        self.bounces
+            .retain(|(_, s)| now.saturating_duration_since(*s) < BOUNCE_LIMIT);
+    }
+
+    /// Спрятан полностью (и не едет).
+    pub fn is_hidden(&self) -> bool {
+        self.slide.is_none() && self.hidden >= 1.0
+    }
+
+    pub fn items(&self) -> &[Item] {
+        &self.items
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub fn app(id: &str, name: &str) -> App {
+        App {
+            id: format!("{id}.desktop"),
+            path: PathBuf::from(format!("/usr/share/applications/{id}.desktop")),
+            name: name.into(),
+            name_untranslated: name.into(),
+            generic_name: None,
+            comment: None,
+            keywords: vec![],
+            categories: vec![],
+            icon: Some(id.into()),
+            command: vec![id.into()],
+            working_dir: None,
+            terminal: false,
+            startup_wm_class: None,
+            no_display: false,
+        }
+    }
+
+    pub fn window(id: u32, instance: &str, class: &str) -> WindowInfo {
+        WindowInfo {
+            id,
+            instance: instance.into(),
+            class: class.into(),
+            title: format!("окно {id}"),
+            pid: None,
+            minimized: false,
+            maximized: false,
+        }
+    }
+
+    pub const LOOK: Look = Look {
+        icon: 48,
+        zoom: 1.4,
+        hide: DockHide::Smart,
+    };
+
+    pub fn dock() -> Dock {
+        let apps = vec![
+            app("thunar", "Проводник"),
+            app("firefox", "Firefox"),
+            app("org.xfce.mousepad", "Блокнот"),
+            app("xfce4-terminal", "Терминал"),
+        ];
+        let pinned = vec![
+            "thunar".into(),
+            "firefox".into(),
+            "org.xfce.mousepad".into(),
+        ];
+        Dock::new(LOOK, apps, pinned, 1600)
+    }
+
+    fn keys(d: &Dock) -> Vec<String> {
+        d.items.iter().map(|i| i.key.clone()).collect()
+    }
+
+    #[test]
+    fn pinned_then_running() {
+        let mut d = dock();
+        assert_eq!(
+            keys(&d),
+            [
+                "thunar.desktop",
+                "firefox.desktop",
+                "org.xfce.mousepad.desktop"
+            ]
+        );
+        d.set_windows(vec![
+            (window(10, "xfce4-terminal", "Xfce4-terminal"), None),
+            (window(11, "org.xfce.mousepad", "Org.xfce.mousepad"), None),
+            (window(12, "xeyes", "XEyes"), None),
+        ]);
+        assert_eq!(
+            keys(&d),
+            [
+                "thunar.desktop",
+                "firefox.desktop",
+                "org.xfce.mousepad.desktop",
+                "xfce4-terminal.desktop",
+                "window:12"
+            ]
+        );
+        assert_eq!(d.items[2].windows, [11]);
+        assert_eq!(d.windows_without_icon(), [12]);
+    }
+
+    #[test]
+    fn click_actions() {
+        let now = Instant::now();
+        let mut d = dock();
+        assert!(matches!(d.click(1, 1, now), Action::Launch(a) if a.name == "Firefox"));
+        assert!(d.animating(now));
+        d.set_windows(vec![
+            (window(20, "Navigator", "firefox"), None),
+            (window(21, "Navigator", "firefox"), None),
+        ]);
+        // Окно появилось — прыжки кончились.
+        assert!(!d.animating(now));
+        assert_eq!(d.click(1, 1, now), Action::Activate(21));
+        d.set_active(Some(21));
+        assert_eq!(d.click(1, 1, now), Action::Activate(20));
+        d.set_windows(vec![(window(20, "Navigator", "firefox"), None)]);
+        d.set_active(Some(20));
+        assert_eq!(d.click(1, 1, now), Action::Minimize(vec![20]));
+        assert!(matches!(d.click(1, 2, now), Action::Launch(_)));
+        assert_eq!(d.click(9, 1, now), Action::Nothing);
+    }
+
+    #[test]
+    fn slide() {
+        let t0 = Instant::now();
+        let mut d = dock();
+        assert_eq!(d.hidden_at(t0), 0.0);
+        d.slide_to(true, t0);
+        let mid = d.hidden_at(t0 + SLIDE / 2);
+        assert!(mid > 0.3 && mid < 0.7, "{mid}");
+        assert!(d.animating(t0 + SLIDE / 2));
+        d.settle(t0 + SLIDE);
+        assert!(d.is_hidden());
+        // Повторная просьба спрятаться ничего не начинает.
+        d.slide_to(true, t0 + SLIDE);
+        assert!(!d.animating(t0 + SLIDE));
+    }
+}

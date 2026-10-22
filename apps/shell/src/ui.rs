@@ -20,9 +20,11 @@ use shell_icons::Icons;
 use shell_launcher::{Action, Grid, Launchpad, Spotlight, backdrop};
 use shell_text::Fonts;
 use shell_x11::{Display, Event, Key, KeyPress, Popup};
+
+use crate::dock_ui::DockUi;
 use tiny_skia::Pixmap;
 
-type Result<T> = shell_x11::Result<T>;
+pub(crate) type Result<T> = shell_x11::Result<T>;
 
 /// Иконки программ в списке Spotlight — такого размера (см. его оформление).
 const ROW_ICON: u32 = 26;
@@ -54,12 +56,32 @@ impl Panel {
     }
 }
 
-enum Msg {
+pub(crate) enum Msg {
     X(Event),
     /// Открыть или закрыть окно.
     Toggle(Panel),
-    /// Список программ изменился.
+    /// Список программ изменился (все ярлыки, вместе с `NoDisplay`).
     Apps(Vec<App>),
+    /// Кадр анимации дока.
+    Tick,
+}
+
+/// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
+pub fn load_config() -> Config {
+    let path = std::env::var_os("SHELL_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/macos-look/config.ini"))
+        });
+    match path.and_then(|p| std::fs::read_to_string(p).ok()) {
+        Some(text) => Config::from_macos_look(&text),
+        None => Config::default(),
+    }
+}
+
+/// Только ярлыки, видимые в меню, — для Spotlight и Launchpad.
+fn visible(apps: &[App]) -> Vec<App> {
+    apps.iter().filter(|a| !a.no_display).cloned().collect()
 }
 
 /// Где служба ждёт команды.
@@ -90,7 +112,7 @@ fn grid(config: &Config) -> Grid {
 pub fn run(once: Option<Panel>) -> Result<()> {
     let start = Instant::now();
     let daemon = once.is_none();
-    let config = Config::default();
+    let config = load_config();
     let (tx, rx) = mpsc::channel();
 
     if daemon {
@@ -110,7 +132,8 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     }
 
     let settings = Settings::from_env();
-    let apps = shell_apps::load(&settings);
+    let all_apps = shell_apps::load_all(&settings);
+    let apps = visible(&all_apps);
     let mut icons = Icons::new(&config.icon_theme);
     if daemon {
         watch_apps(settings, tx.clone());
@@ -120,6 +143,14 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             icons.get(name, config.launchpad_icon);
         }
     }
+    // Свой док — только у службы и только если он выбран вместо Plank.
+    let dock = if daemon && config.dock {
+        let dock = DockUi::new(&display, &config, all_apps, tx.clone())?;
+        dock.preload(&mut icons);
+        Some(dock)
+    } else {
+        None
+    };
     let (sw, sh) = display.screen_size();
     let mut ui = Ui {
         display: &display,
@@ -133,7 +164,11 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         frame: None,
         shown: None,
         terminal: config.terminal,
+        dock,
     };
+    if let Some(dock) = &mut ui.dock {
+        dock.draw(ui.display, &mut ui.fonts, &mut ui.icons)?;
+    }
     match once {
         None => eprintln!("Служба готова за {:?}", start.elapsed()),
         Some(panel) => {
@@ -146,8 +181,17 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         match msg {
             Msg::Toggle(panel) => ui.toggle(panel)?,
             Msg::Apps(apps) => ui.set_apps(apps)?,
-            Msg::X(ev) if ui.shown.is_some() => ui.event(ev)?,
-            Msg::X(_) => {}
+            Msg::X(ev) => {
+                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+                    eprintln!("X: {ev:?}");
+                }
+                ui.event(ev)?
+            }
+            Msg::Tick => {
+                if let Some(dock) = &mut ui.dock {
+                    dock.tick(ui.display, &mut ui.fonts, &mut ui.icons)?;
+                }
+            }
         }
         if !daemon && ui.shown.is_none() {
             break;
@@ -170,6 +214,7 @@ struct Ui<'a> {
     frame: Option<Pixmap>,
     shown: Option<Panel>,
     terminal: Vec<String>,
+    dock: Option<DockUi>,
 }
 
 impl Ui<'_> {
@@ -288,9 +333,13 @@ impl Ui<'_> {
         Ok(())
     }
 
-    fn set_apps(&mut self, apps: Vec<App>) -> Result<()> {
+    fn set_apps(&mut self, all: Vec<App>) -> Result<()> {
+        let apps = visible(&all);
         self.spotlight.set_apps(apps.clone());
         self.launchpad.set_apps(apps);
+        if let Some(dock) = &mut self.dock {
+            dock.set_apps(self.display, all);
+        }
         if self.shown.is_some() {
             self.redraw()?;
         }
@@ -298,22 +347,27 @@ impl Ui<'_> {
     }
 
     fn event(&mut self, ev: Event) -> Result<()> {
+        if let Some(dock) = &mut self.dock
+            && dock.wants(self.display, &ev)
+        {
+            return dock.event(self.display, &mut self.fonts, &mut self.icons, ev);
+        }
         let Some(panel) = self.shown else {
             return Ok(());
         };
         let action = match (panel, ev) {
             (Panel::Spotlight, Event::Key(k)) => self.spotlight.key(k),
             (Panel::Launchpad, Event::Key(k)) => self.launchpad.key(k),
-            (Panel::Spotlight, Event::Button { x, y, button }) => {
+            (Panel::Spotlight, Event::Button { x, y, button, .. }) => {
                 self.spotlight.click(i32::from(x), i32::from(y), button)
             }
-            (Panel::Launchpad, Event::Button { x, y, button }) => {
+            (Panel::Launchpad, Event::Button { x, y, button, .. }) => {
                 self.launchpad.click(i32::from(x), i32::from(y), button)
             }
-            (Panel::Spotlight, Event::Motion { x, y }) => {
+            (Panel::Spotlight, Event::Motion { x, y, .. }) => {
                 self.spotlight.motion(i32::from(x), i32::from(y))
             }
-            (_, Event::Expose) => {
+            (_, Event::Expose { .. }) => {
                 if let Some(frame) = &self.frame {
                     let popup = match panel {
                         Panel::Spotlight => &self.spot_popup,
@@ -338,8 +392,13 @@ impl Ui<'_> {
             Action::Close => self.hide()?,
             Action::Launch(app) => {
                 self.hide()?;
-                if let Err(e) = app.launch(&self.terminal) {
-                    eprintln!("Не удалось запустить «{}»: {e}", app.name);
+                match app.launch(&self.terminal) {
+                    Ok(_) => {
+                        if let Some(dock) = &mut self.dock {
+                            dock.launched(&app);
+                        }
+                    }
+                    Err(e) => eprintln!("Не удалось запустить «{}»: {e}", app.name),
                 }
             }
         }
@@ -398,7 +457,7 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
     };
     std::thread::spawn(move || {
         while watcher.wait().is_ok() {
-            if tx.send(Msg::Apps(shell_apps::load(&settings))).is_err() {
+            if tx.send(Msg::Apps(shell_apps::load_all(&settings))).is_err() {
                 break;
             }
         }
@@ -408,7 +467,7 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
 /// Рисует окно с набранным текстом в PNG. Для Launchpad, если доступен
 /// экран, берёт его размер и снимок для фона; иначе — 1920×1080, ровный фон.
 pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
-    let config = Config::default();
+    let config = load_config();
     let start = Instant::now();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);

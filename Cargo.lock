@@ -549,6 +549,7 @@ version = "0.1.0"
 dependencies = [
  "shell-apps",
  "shell-core",
+ "shell-dock",
  "shell-icons",
  "shell-launcher",
  "shell-text",
@@ -566,6 +567,17 @@ dependencies = [
 [[package]]
 name = "shell-core"
 version = "0.1.0"
+
+[[package]]
+name = "shell-dock"
+version = "0.1.0"
+dependencies = [
+ "shell-apps",
+ "shell-core",
+ "shell-icons",
+ "shell-text",
+ "tiny-skia",
+]
 
 [[package]]
 name = "shell-icons"

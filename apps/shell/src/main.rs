@@ -1,5 +1,6 @@
 //! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
 
+mod dock_ui;
 mod ui;
 
 use std::collections::HashMap;
