@@ -85,6 +85,8 @@ pub struct MenubarUi {
     popup: Popup,
     popup_dirty: bool,
     dirty: bool,
+    /// Служба — для просьб, которые выполняет не строка (центр уведомлений).
+    tx: Sender<Msg>,
 }
 
 impl MenubarUi {
@@ -114,6 +116,7 @@ impl MenubarUi {
             popup: d.create_popup("menubar-menu")?,
             popup_dirty: false,
             dirty: true,
+            tx: tx.clone(),
         };
         d.watch_root()?;
         d.watch_keyboard()?;
@@ -157,6 +160,16 @@ impl MenubarUi {
         self.apps = apps;
         self.bar.app_name = self.app_name(d);
         self.dirty = true;
+    }
+
+    /// Подсветить часы, пока открыт центр уведомлений.
+    pub fn set_center_open(&mut self, open: bool) {
+        let want = open.then_some(Part::Clock);
+        let other = self.bar.open.is_some_and(|p| p != Part::Clock);
+        if !other && self.bar.open != want {
+            self.bar.open = want;
+            self.dirty = true;
+        }
     }
 
     pub fn set_clock(&mut self, text: String) {
@@ -336,6 +349,11 @@ impl MenubarUi {
                     self.close_popup(d)?;
                 }
                 match part {
+                    // Часы — центр уведомлений (его рисует служба уведомлений;
+                    // повторный щелчок закрывает его там же).
+                    Some((Part::Clock, _)) => {
+                        let _ = self.tx.send(Msg::ToggleCenter);
+                    }
                     Some((p, _)) if Some(p) == was => {}
                     Some((Part::Apple, px)) => self.open_apple(d, fonts, px)?,
                     Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,

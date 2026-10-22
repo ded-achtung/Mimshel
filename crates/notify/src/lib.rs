@@ -57,12 +57,25 @@ const BUTTON_TEXT: Style = Style {
     weight: 500,
 };
 
-/// Уведомление на экране.
+/// Уведомление на экране (и в истории).
+#[derive(Clone)]
 pub struct Banner {
     pub n: Notification,
     /// Иконка программы или картинка уведомления (подобрала служба).
     pub icon: Option<Pixmap>,
+    /// Когда пришло.
     pub shown_at: Instant,
+}
+
+/// Сколько прошло — подпись в углу карточки: «сейчас», «5 мин назад»,
+/// «2 ч назад».
+pub fn age_label(since: Instant, now: Instant) -> String {
+    let secs = now.saturating_duration_since(since).as_secs();
+    match secs {
+        0..60 => "сейчас".into(),
+        60..3600 => format!("{} мин назад", secs / 60),
+        _ => format!("{} ч назад", secs / 3600),
+    }
 }
 
 impl Banner {
@@ -110,13 +123,8 @@ pub struct Banners {
 
 impl Banners {
     /// Показать уведомление: с тем же id — заменить на месте, иначе сверху.
-    /// Ответ — уведомления, которые не влезли (уходят в историю).
-    pub fn show(
-        &mut self,
-        n: Notification,
-        icon: Option<Pixmap>,
-        now: Instant,
-    ) -> Vec<Notification> {
+    /// Ответ — баннеры, которые не влезли (уходят в историю).
+    pub fn show(&mut self, n: Notification, icon: Option<Pixmap>, now: Instant) -> Vec<Banner> {
         let banner = Banner {
             n,
             icon,
@@ -130,32 +138,28 @@ impl Banners {
         let mut gone = Vec::new();
         while self.items.len() > MAX_BANNERS {
             if let Some(b) = self.items.pop() {
-                gone.push(b.n);
+                gone.push(b);
             }
         }
         gone
     }
 
-    pub fn remove(&mut self, id: u32) -> Option<Notification> {
+    pub fn remove(&mut self, id: u32) -> Option<Banner> {
         let i = self.items.iter().position(|b| b.n.id == id)?;
         if self.hover == Some(i) {
             self.hover = None;
         }
-        Some(self.items.remove(i).n)
+        Some(self.items.remove(i))
     }
 
     /// Убрать те, чьё время вышло (кроме баннера под указателем — пока на
     /// него смотрят, он не исчезает). Ответ — убранные.
-    pub fn expire(&mut self, now: Instant) -> Vec<Notification> {
+    pub fn expire(&mut self, now: Instant) -> Vec<Banner> {
         let hover = self.hover.and_then(|i| self.items.get(i)).map(|b| b.n.id);
-        let mut gone = Vec::new();
-        self.items.retain(|b| {
-            let keep = Some(b.n.id) == hover || b.expires().is_none_or(|t| t > now);
-            if !keep {
-                gone.push(b.n.clone());
-            }
-            keep
-        });
+        let (keep, gone): (Vec<Banner>, Vec<Banner>) = std::mem::take(&mut self.items)
+            .into_iter()
+            .partition(|b| Some(b.n.id) == hover || b.expires().is_none_or(|t| t > now));
+        self.items = keep;
         if !gone.is_empty() {
             self.hover = None;
         }
@@ -312,7 +316,8 @@ impl Banners {
         }
         let text_w = WIDTH - TEXT_X - PAD;
         let mut y = top + PAD - 2.0;
-        let now = "сейчас";
+        let age = age_label(b.shown_at, Instant::now());
+        let now = age.as_str();
         let now_w = fonts.measure(now, &APP);
         let app = b.n.app_name.to_uppercase();
         fonts.draw(pm, &app, &APP, TEXT_X, y, Some(text_w - now_w - 8.0));
@@ -362,6 +367,139 @@ impl Banners {
                 );
             }
         }
+    }
+}
+
+/// Центр уведомлений (щелчок по часам): заголовок с кнопкой «Очистить» и
+/// прошедшие уведомления карточками, как баннеры. Не влезли по высоте — не
+/// показываются (самые старые).
+pub struct Center {
+    pub list: Banners,
+    /// Указатель над «Очистить».
+    pub hover_clear: bool,
+}
+
+/// Что нажали в центре уведомлений.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CenterHit {
+    Clear,
+    /// Убрать карточку (крестик или щелчок по ней).
+    Remove(u32),
+    /// Кнопка действия карточки.
+    Action(u32, String),
+}
+
+const HEADER: f32 = 38.0;
+const HEADER_TEXT: Style = Style {
+    size: 14.0,
+    color: [0xf2, 0xf2, 0xf2, 0xff],
+    weight: 700,
+};
+const CLEAR: &str = "Очистить";
+const EMPTY: &str = "Нет уведомлений";
+
+impl Center {
+    /// Карточки из истории (иконки подобрала служба), в высоту не больше `max_h`.
+    pub fn new(fonts: &mut Fonts, items: Vec<Banner>, max_h: f32) -> Center {
+        let mut list = Banners {
+            items,
+            hover: None,
+            hover_button: None,
+        };
+        while list.items.len() > 1 && HEADER + GAP + list.size(fonts).1 as f32 > max_h {
+            list.items.pop();
+        }
+        Center {
+            list,
+            hover_clear: false,
+        }
+    }
+
+    pub fn size(&self, fonts: &mut Fonts) -> (u32, u32) {
+        let cards = self.list.size(fonts).1 as f32;
+        let h = if self.list.items.is_empty() {
+            HEADER + GAP + 60.0
+        } else {
+            HEADER + GAP + cards
+        };
+        (WIDTH as u32, h.ceil() as u32)
+    }
+
+    fn clear_rect(fonts: &mut Fonts) -> (f32, f32) {
+        let w = fonts.measure(CLEAR, &BUTTON_TEXT) + 24.0;
+        (WIDTH - PAD - w, w)
+    }
+
+    pub fn motion(&mut self, fonts: &mut Fonts, x: f32, y: f32) -> bool {
+        let (cx, cw) = Self::clear_rect(fonts);
+        let clear = (6.0..HEADER - 6.0).contains(&y) && (cx..cx + cw).contains(&x);
+        let cards = self.list.motion(fonts, x, y - HEADER - GAP);
+        let changed = clear != self.hover_clear || cards;
+        self.hover_clear = clear;
+        changed
+    }
+
+    /// Щелчок; `None` за краями — закрыть центр (решает служба).
+    pub fn hit(&self, fonts: &mut Fonts, x: f32, y: f32) -> Option<CenterHit> {
+        let (cx, cw) = Self::clear_rect(fonts);
+        if y < HEADER {
+            return (x >= cx && x < cx + cw && !self.list.items.is_empty())
+                .then_some(CenterHit::Clear);
+        }
+        match self.list.hit(fonts, x, y - HEADER - GAP)? {
+            Hit::Body(id) | Hit::Close(id) => Some(CenterHit::Remove(id)),
+            Hit::Action(id, key) => Some(CenterHit::Action(id, key)),
+        }
+    }
+
+    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+        let (w, h) = self.size(fonts);
+        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
+        let fill = |pm: &mut Pixmap, path: Option<tiny_skia::Path>, c: [u8; 4]| {
+            if let Some(p) = path {
+                pm.fill_path(
+                    &p,
+                    &paint(c),
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        };
+        // Заголовок — своей карточкой: панель лежит прямо на обоях.
+        fill(&mut pm, rounded(0.0, 0.0, WIDTH, HEADER, RADIUS), BG);
+        let ty = ((HEADER - HEADER_TEXT.line_height()) / 2.0).round();
+        fonts.draw(&mut pm, "Уведомления", &HEADER_TEXT, PAD + 2.0, ty, None);
+        if !self.list.items.is_empty() {
+            let (cx, cw) = Self::clear_rect(fonts);
+            let c = if self.hover_clear {
+                BUTTON_HOVER
+            } else {
+                BUTTON
+            };
+            fill(&mut pm, rounded(cx, 7.0, cw, HEADER - 14.0, 7.0), c);
+            let tw = fonts.measure(CLEAR, &BUTTON_TEXT);
+            let by = ((HEADER - BUTTON_TEXT.line_height()) / 2.0).round();
+            fonts.draw(&mut pm, CLEAR, &BUTTON_TEXT, cx + (cw - tw) / 2.0, by, None);
+        }
+        let top = HEADER + GAP;
+        if self.list.items.is_empty() {
+            fill(&mut pm, rounded(0.0, top, WIDTH, 60.0, RADIUS), BG);
+            let tw = fonts.measure(EMPTY, &BODY);
+            let ey = top + ((60.0 - BODY.line_height()) / 2.0).round();
+            fonts.draw(&mut pm, EMPTY, &APP, (WIDTH - tw) / 2.0, ey, None);
+        } else {
+            let cards = self.list.render(fonts);
+            pm.draw_pixmap(
+                0,
+                top as i32,
+                cards.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        }
+        pm
     }
 }
 
@@ -444,10 +582,50 @@ mod tests {
         b.show(note(3, ""), None, now);
         b.hover = Some(0); // id 3 под указателем
         let gone = b.expire(now + DEFAULT_TIMEOUT + Duration::from_millis(1));
-        assert_eq!(gone.iter().map(|n| n.id).collect::<Vec<_>>(), [1]);
+        assert_eq!(gone.iter().map(|b| b.n.id).collect::<Vec<_>>(), [1]);
         let left: Vec<u32> = b.items.iter().map(|x| x.n.id).collect();
         assert_eq!(left, [3, 2]);
         assert_eq!(b.next_expiry(), Some(now + DEFAULT_TIMEOUT));
+    }
+
+    #[test]
+    fn center_clear_and_remove() {
+        let mut fonts = Fonts::new("Inter");
+        let now = Instant::now();
+        let items: Vec<Banner> = (1..=20)
+            .map(|id| Banner {
+                n: note(id, "текст"),
+                icon: None,
+                shown_at: now,
+            })
+            .collect();
+        let c = Center::new(&mut fonts, items, 500.0);
+        assert!(c.list.items.len() < 20, "не влезли — не показываем");
+        assert!(c.size(&mut fonts).1 <= 500);
+        let (cx, _) = Center::clear_rect(&mut fonts);
+        assert_eq!(
+            c.hit(&mut fonts, cx + 5.0, HEADER / 2.0),
+            Some(CenterHit::Clear)
+        );
+        assert_eq!(
+            c.hit(&mut fonts, 200.0, HEADER + GAP + 20.0),
+            Some(CenterHit::Remove(1))
+        );
+        let empty = Center::new(&mut fonts, Vec::new(), 500.0);
+        assert_eq!(empty.hit(&mut fonts, cx + 5.0, HEADER / 2.0), None);
+        let pm = empty.render(&mut fonts);
+        assert_eq!((pm.width(), pm.height()), empty.size(&mut fonts));
+    }
+
+    #[test]
+    fn age_labels() {
+        let t = Instant::now();
+        assert_eq!(age_label(t, t + Duration::from_secs(5)), "сейчас");
+        assert_eq!(
+            age_label(t, t + Duration::from_secs(5 * 60 + 7)),
+            "5 мин назад"
+        );
+        assert_eq!(age_label(t, t + Duration::from_secs(2 * 3600)), "2 ч назад");
     }
 
     #[test]

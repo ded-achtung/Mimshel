@@ -80,6 +80,8 @@ pub(crate) enum Msg {
     AppMenu(shell_dbus::AppMenuUpdate),
     /// Уведомление пришло или программа его закрыла.
     Notify(shell_dbus::notify::NotifyEvent),
+    /// Щёлкнули по часам — открыть или закрыть центр уведомлений.
+    ToggleCenter,
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -269,6 +271,9 @@ impl Ui<'_> {
         if let Some(menubar) = &mut self.menubar {
             menubar.close_popup(self.display)?;
         }
+        if let Some(notify) = &mut self.notify {
+            notify.close_center(self.display)?;
+        }
         let was = self.shown;
         if was.is_some() {
             self.hide()?;
@@ -390,6 +395,10 @@ impl Ui<'_> {
         }
         if let Some(notify) = &mut self.notify {
             notify.flush(self.display, &mut self.fonts)?;
+            // Часы в строке меню подсвечены, пока открыт центр уведомлений.
+            if let Some(menubar) = &mut self.menubar {
+                menubar.set_center_open(notify.center_open());
+            }
         }
         if let Some(dock) = &mut self.dock {
             dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
@@ -441,6 +450,10 @@ impl Ui<'_> {
                 }
                 Ok(())
             }
+            Msg::ToggleCenter => match &mut self.notify {
+                Some(notify) => notify.toggle_center(self.display, &mut self.fonts),
+                None => Ok(()),
+            },
             Msg::Trash(full) => {
                 if let Some(dock) = &mut self.dock {
                     dock.set_trash(self.display, full)?;
@@ -494,8 +507,7 @@ impl Ui<'_> {
         if let Some(notify) = &mut self.notify
             && notify.wants(&ev)
         {
-            notify.event(&mut self.fonts, ev);
-            return Ok(());
+            return notify.event(self.display, &mut self.fonts, ev);
         }
         if let Some(menubar) = &mut self.menubar
             && menubar.wants(self.display, &ev)

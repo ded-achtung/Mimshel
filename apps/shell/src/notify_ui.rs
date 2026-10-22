@@ -1,6 +1,6 @@
 //! Уведомления на экране: служба `org.freedesktop.Notifications` (вместо
 //! xfce4-notifyd), баннеры справа сверху под строкой меню, щелчки и время
-//! исчезновения. История — для центра уведомлений.
+//! исчезновения; центр уведомлений (щелчок по часам) — история.
 
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use shell_apps::App;
 use shell_dbus::notify::{self, NotifyEvent, NotifyServer};
 use shell_icons::Icons;
-use shell_notify::{Banners, CloseReason, Hit, Notification, WIDTH};
+use shell_notify::{Banner, Banners, Center, CenterHit, CloseReason, Hit, Notification, WIDTH};
 use shell_text::Fonts;
-use shell_x11::{Display, Event, Popup};
+use shell_x11::{Display, Event, Key, Popup};
 use tiny_skia::{IntSize, Pixmap};
 
 use crate::ui::{Msg, Result};
@@ -19,6 +19,8 @@ use crate::ui::{Msg, Result};
 const HISTORY: usize = 50;
 /// Отступ баннеров от правого края и от строки меню.
 const MARGIN: u32 = 10;
+/// Столько снизу оставить под док, открывая центр уведомлений.
+const DOCK_ROOM: u32 = 90;
 
 pub struct NotifyUi {
     server: NotifyServer,
@@ -26,8 +28,14 @@ pub struct NotifyUi {
     popup: Popup,
     shown: bool,
     dirty: bool,
-    /// Прошедшие уведомления, новые — первыми.
-    pub history: Vec<Notification>,
+    /// Прошедшие уведомления (с иконками и временем прихода), новые — первыми.
+    history: Vec<Banner>,
+    /// Центр уведомлений и его окно.
+    center: Option<Center>,
+    center_popup: Popup,
+    /// Перерисовать центр; `center_stale` — история поменялась, собрать заново.
+    center_dirty: bool,
+    center_stale: bool,
     apps: Vec<App>,
     dnd: bool,
     top: u32,
@@ -53,6 +61,10 @@ impl NotifyUi {
             shown: false,
             dirty: false,
             history: Vec::new(),
+            center: None,
+            center_popup: d.create_popup("notification-center")?,
+            center_dirty: false,
+            center_stale: false,
             apps,
             dnd,
             top,
@@ -69,13 +81,20 @@ impl NotifyUi {
         self.dnd = on;
     }
 
+    pub fn center_open(&self) -> bool {
+        self.center.is_some()
+    }
+
     pub fn wants(&self, ev: &Event) -> bool {
         match *ev {
             Event::Button { window, .. }
             | Event::Motion { window, .. }
             | Event::Enter { window, .. }
             | Event::Leave { window }
-            | Event::Expose { window } => window == self.popup.id(),
+            | Event::Expose { window } => {
+                window == self.popup.id() || window == self.center_popup.id()
+            }
+            Event::Key(_) => self.center.is_some(),
             _ => false,
         }
     }
@@ -83,11 +102,16 @@ impl NotifyUi {
     pub fn notify_event(&mut self, icons: &mut Icons, e: NotifyEvent) {
         match e {
             NotifyEvent::Show(n) => {
+                let icon = self.icon(&n, icons);
                 if self.dnd && n.urgency < 2 {
-                    self.remember(n);
+                    self.remember(Banner {
+                        n,
+                        icon,
+                        shown_at: Instant::now(),
+                    });
+                    self.refresh_center();
                     return;
                 }
-                let icon = self.icon(&n, icons);
                 for gone in self.banners.show(n, icon, Instant::now()) {
                     self.remember(gone);
                 }
@@ -95,17 +119,55 @@ impl NotifyUi {
                 self.wake();
             }
             NotifyEvent::Close(id) => {
-                if let Some(n) = self.banners.remove(id) {
-                    self.remember(n);
+                if let Some(b) = self.banners.remove(id) {
+                    self.remember(b);
                     self.dirty = true;
                 }
                 self.server.closed(id, CloseReason::Closed);
             }
         }
+        self.refresh_center();
     }
 
-    pub fn event(&mut self, fonts: &mut Fonts, ev: Event) {
+    pub fn event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
+        let center = self.center_popup.id();
         match ev {
+            // Центр уведомлений.
+            Event::Motion { window, x, y } | Event::Enter { window, x, y } if window == center => {
+                if let Some(c) = &mut self.center
+                    && c.motion(fonts, f32::from(x), f32::from(y))
+                {
+                    self.center_dirty = true;
+                }
+            }
+            Event::Button { window, x, y, .. } if window == center => {
+                let hit = match &self.center {
+                    Some(c) => c.hit(fonts, f32::from(x), f32::from(y)),
+                    None => return Ok(()),
+                };
+                let (w, h) = self.center.as_ref().map_or((0, 0), |c| c.size(fonts));
+                let inside = x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h;
+                match hit {
+                    Some(CenterHit::Clear) => self.history.clear(),
+                    Some(CenterHit::Remove(id)) => self.history.retain(|b| b.n.id != id),
+                    Some(CenterHit::Action(id, key)) => {
+                        self.server.action(id, &key);
+                        self.history.retain(|b| b.n.id != id);
+                    }
+                    None if inside => return Ok(()),
+                    // Щелчок мимо — закрыть, как на Mac.
+                    None => return self.close_center(d),
+                }
+                self.center_stale = true;
+            }
+            Event::Key(k) => {
+                if k.key == Key::Escape {
+                    self.close_center(d)?;
+                }
+            }
+            Event::Expose { window } if window == center => self.center_dirty = true,
+            Event::Leave { window } if window == center => {}
+            // Баннеры.
             Event::Motion { x, y, .. } | Event::Enter { x, y, .. } => {
                 if self.banners.motion(fonts, f32::from(x), f32::from(y)) {
                     self.dirty = true;
@@ -120,7 +182,7 @@ impl NotifyUi {
             }
             Event::Button { x, y, button, .. } => {
                 let Some(hit) = self.banners.hit(fonts, f32::from(x), f32::from(y)) else {
-                    return;
+                    return Ok(());
                 };
                 let id = match hit {
                     // Правая кнопка — просто убрать, как на Mac.
@@ -139,15 +201,17 @@ impl NotifyUi {
                     }
                     Hit::Close(id) => id,
                 };
-                if let Some(n) = self.banners.remove(id) {
-                    self.remember(n);
+                if let Some(b) = self.banners.remove(id) {
+                    self.remember(b);
                 }
                 self.server.closed(id, CloseReason::Dismissed);
                 self.dirty = true;
+                self.refresh_center();
             }
             Event::Expose { .. } => self.dirty = true,
             _ => {}
         }
+        Ok(())
     }
 
     /// Время вышло — убрать баннеры.
@@ -156,11 +220,12 @@ impl NotifyUi {
         if gone.is_empty() {
             return;
         }
-        for n in gone {
-            self.server.closed(n.id, CloseReason::Expired);
-            self.remember(n);
+        for b in gone {
+            self.server.closed(b.n.id, CloseReason::Expired);
+            self.remember(b);
         }
         self.dirty = true;
+        self.refresh_center();
         self.wake();
     }
 
@@ -178,13 +243,58 @@ impl NotifyUi {
         });
     }
 
-    fn remember(&mut self, n: Notification) {
-        if n.transient {
+    fn remember(&mut self, b: Banner) {
+        if b.n.transient {
             return;
         }
-        self.history.retain(|h| h.id != n.id);
-        self.history.insert(0, n);
+        self.history.retain(|h| h.n.id != b.n.id);
+        self.history.push(b);
+        // По времени прихода, а не ухода с экрана: новые — первыми.
+        self.history
+            .sort_by(|a, b| b.shown_at.cmp(&a.shown_at).then(b.n.id.cmp(&a.n.id)));
         self.history.truncate(HISTORY);
+    }
+
+    /// Открыть центр уведомлений или закрыть, если открыт.
+    pub fn toggle_center(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
+        if self.center.is_some() {
+            return self.close_center(d);
+        }
+        self.rebuild_center(fonts, d);
+        let Some(c) = &self.center else {
+            return Ok(());
+        };
+        let (w, h) = c.size(fonts);
+        let (sw, _) = d.screen_size();
+        let x = i32::from(sw) - WIDTH as i32 - MARGIN as i32;
+        self.center_popup
+            .show(d, x as i16, (self.top + MARGIN) as i16, w as u16, h as u16)?;
+        self.center_dirty = true;
+        Ok(())
+    }
+
+    /// Закрыть центр уведомлений (если открыт).
+    pub fn close_center(&mut self, d: &Display) -> Result<()> {
+        if self.center.take().is_some() {
+            self.center_popup.hide(d)?;
+        }
+        Ok(())
+    }
+
+    /// История поменялась — открытый центр собрать заново (при выводе:
+    /// для раскладки нужны шрифты).
+    fn refresh_center(&mut self) {
+        if self.center.is_some() {
+            self.center_stale = true;
+        }
+    }
+
+    /// Собрать центр заново по истории (размер окна — по содержимому).
+    fn rebuild_center(&mut self, fonts: &mut Fonts, d: &Display) {
+        let (_, sh) = d.screen_size();
+        let max_h = (u32::from(sh)).saturating_sub(self.top + 2 * MARGIN + DOCK_ROOM) as f32;
+        self.center = Some(Center::new(fonts, self.history.clone(), max_h));
+        self.center_dirty = true;
     }
 
     /// Картинка уведомления, иначе иконка: присланная, ярлыка программы,
@@ -227,8 +337,31 @@ impl NotifyUi {
             .find_map(|name| icons.get(&name, 64).cloned())
     }
 
-    /// Показать, сдвинуть или спрятать окно баннеров.
+    /// Показать, сдвинуть или спрятать окна баннеров и центра.
     pub fn flush(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
+        if self.center_stale && self.center.is_some() {
+            // Карточек стало меньше или больше — собрать заново, подогнать окно.
+            self.center_stale = false;
+            self.rebuild_center(fonts, d);
+            if let Some(c) = &self.center {
+                let (w, h) = c.size(fonts);
+                let (sw, _) = d.screen_size();
+                let x = i32::from(sw) - WIDTH as i32 - MARGIN as i32;
+                self.center_popup.set_geometry(
+                    d,
+                    x as i16,
+                    (self.top + MARGIN) as i16,
+                    w as u16,
+                    h as u16,
+                )?;
+            }
+        }
+        if self.center_dirty {
+            self.center_dirty = false;
+            if let Some(c) = &self.center {
+                self.center_popup.present(d, &c.render(fonts))?;
+            }
+        }
         if !self.dirty {
             return Ok(());
         }
