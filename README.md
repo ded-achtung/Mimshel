@@ -106,3 +106,7 @@ X-сервера подтверждает доступность сеанса. �
 (EWMH/ICCCM, Desktop Entry, Icon Theme, StatusNotifierItem, DBusMenu, Notifications),
 пишем собственную реализацию. Чужой код не копируем. Пароль проверяет i3lock-color;
 свой механизм аутентификации не реализуем.
+
+## Лицензия
+
+GPL-3.0-or-later — текст в файле [LICENSE](LICENSE).
