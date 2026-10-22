@@ -1,0 +1,14 @@
+[package]
+name = "shell-notify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shell-dbus = { path = "../dbus" }
+shell-text = { path = "../text" }
+shell-widgets = { path = "../widgets" }
+tiny-skia = "0.12.0"
+
+[lints]
+workspace = true

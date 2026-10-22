@@ -14,6 +14,7 @@ shell-launcher = { path = "../../crates/launcher" }
 shell-dbus = { path = "../../crates/dbus" }
 shell-dock = { path = "../../crates/dock" }
 shell-menubar = { path = "../../crates/menubar" }
+shell-notify = { path = "../../crates/notify" }
 shell-widgets = { path = "../../crates/widgets" }
 tiny-skia = "0.12.0"
 

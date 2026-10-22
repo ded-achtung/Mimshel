@@ -23,6 +23,7 @@ use shell_x11::{Display, Event, Key, KeyPress, Popup};
 
 use crate::dock_ui::DockUi;
 use crate::menubar_ui::MenubarUi;
+use crate::notify_ui::NotifyUi;
 use tiny_skia::Pixmap;
 
 pub(crate) type Result<T> = shell_x11::Result<T>;
@@ -77,6 +78,8 @@ pub(crate) enum Msg {
     Tray(shell_dbus::TrayUpdate),
     /// Глобальное меню активного окна.
     AppMenu(shell_dbus::AppMenuUpdate),
+    /// Уведомление пришло или программа его закрыла.
+    Notify(shell_dbus::notify::NotifyEvent),
 }
 
 /// Настройки: файл из `SHELL_CONFIG` (для проверок) или конфиг macos-look.
@@ -177,6 +180,18 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     } else {
         None
     };
+    // Свои уведомления — вместо xfce4-notifyd (`SHELL_NOTIFY=1` — для проверки).
+    let notify = if daemon && (config.notify || std::env::var_os("SHELL_NOTIFY").is_some()) {
+        Some(NotifyUi::new(
+            &display,
+            all_apps.clone(),
+            config.menubar_height,
+            crate::status::read_dnd(),
+            tx.clone(),
+        )?)
+    } else {
+        None
+    };
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {
         let dock = DockUi::new(&display, &config, all_apps, tx.clone())?;
@@ -200,6 +215,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         terminal: config.terminal,
         dock,
         menubar,
+        notify,
     };
     ui.flush()?;
     match once {
@@ -242,6 +258,7 @@ struct Ui<'a> {
     terminal: Vec<String>,
     dock: Option<DockUi>,
     menubar: Option<MenubarUi>,
+    notify: Option<NotifyUi>,
 }
 
 impl Ui<'_> {
@@ -371,6 +388,9 @@ impl Ui<'_> {
         if let Some(menubar) = &mut self.menubar {
             menubar.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
+        if let Some(notify) = &mut self.notify {
+            notify.flush(self.display, &mut self.fonts)?;
+        }
         if let Some(dock) = &mut self.dock {
             dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
@@ -383,6 +403,9 @@ impl Ui<'_> {
         self.launchpad.set_apps(apps);
         if let Some(menubar) = &mut self.menubar {
             menubar.set_apps(self.display, all.clone());
+        }
+        if let Some(notify) = &mut self.notify {
+            notify.set_apps(all.clone());
         }
         if let Some(dock) = &mut self.dock {
             dock.set_apps(self.display, all);
@@ -406,6 +429,15 @@ impl Ui<'_> {
             Msg::Tick => {
                 if let Some(dock) = &mut self.dock {
                     dock.tick();
+                }
+                if let Some(notify) = &mut self.notify {
+                    notify.tick();
+                }
+                Ok(())
+            }
+            Msg::Notify(e) => {
+                if let Some(notify) = &mut self.notify {
+                    notify.notify_event(&mut self.icons, e);
                 }
                 Ok(())
             }
@@ -437,6 +469,9 @@ impl Ui<'_> {
                 if let Some(menubar) = &mut self.menubar {
                     menubar.set_dnd(on);
                 }
+                if let Some(notify) = &mut self.notify {
+                    notify.set_dnd(on);
+                }
                 Ok(())
             }
             Msg::AppMenu(update) => match &mut self.menubar {
@@ -456,6 +491,12 @@ impl Ui<'_> {
         // Одно событие может быть нужно и строке меню, и доку (например,
         // сменилось активное окно).
         let mut handled = false;
+        if let Some(notify) = &mut self.notify
+            && notify.wants(&ev)
+        {
+            notify.event(&mut self.fonts, ev);
+            return Ok(());
+        }
         if let Some(menubar) = &mut self.menubar
             && menubar.wants(self.display, &ev)
         {

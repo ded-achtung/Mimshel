@@ -995,6 +995,7 @@ dependencies = [
  "shell-icons",
  "shell-launcher",
  "shell-menubar",
+ "shell-notify",
  "shell-text",
  "shell-widgets",
  "shell-x11",
@@ -1057,6 +1058,16 @@ dependencies = [
  "shell-apps",
  "shell-core",
  "shell-icons",
+ "shell-text",
+ "shell-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "shell-notify"
+version = "0.1.0"
+dependencies = [
+ "shell-dbus",
  "shell-text",
  "shell-widgets",
  "tiny-skia",

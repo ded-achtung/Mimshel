@@ -1,8 +1,9 @@
 //! Связь с другими программами через D-Bus: трей (StatusNotifierItem и меню
-//! значков DBusMenu) и глобальное меню программ.
+//! значков DBusMenu), глобальное меню программ и уведомления.
 
 pub mod appmenu;
 pub mod menu;
+pub mod notify;
 pub mod registrar;
 pub mod tray;
 

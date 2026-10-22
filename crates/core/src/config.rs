@@ -46,6 +46,8 @@ pub struct Config {
     pub menubar_height: u32,
     pub menu_icon: String,
     pub clock_format: String,
+    /// Свои уведомления (`[notify] engine = shell`); иначе — xfce4-notifyd.
+    pub notify: bool,
 }
 
 impl Default for Config {
@@ -75,6 +77,7 @@ impl Default for Config {
             menubar_height: 28,
             menu_icon: "start-here".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
+            notify: false,
         }
     }
 }
@@ -126,6 +129,7 @@ impl Config {
         }
         c.dock = get("dock", "engine").is_some_and(|e| e == "shell");
         c.menubar = get("menubar", "engine").is_some_and(|e| e == "shell");
+        c.notify = get("notify", "engine").is_some_and(|e| e == "shell");
         if let Some(v) = num("panel", "height").filter(|&v| v >= 16) {
             c.menubar_height = v;
         }
