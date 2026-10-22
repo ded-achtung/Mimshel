@@ -4,6 +4,7 @@
 use shell_core::windows::WindowInfo;
 use tiny_skia::{FilterQuality, IntSize, Pixmap, PixmapPaint, Transform};
 use x11rb::connection::Connection;
+use x11rb::protocol::xproto::ImageFormat;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
 };
@@ -181,6 +182,32 @@ impl Display {
             u32::from(g.width) + l + r,
             u32::from(g.height) + top + b,
         ))
+    }
+
+    /// Снимок содержимого окна программы (без рамки). С композитором
+    /// (xfwm4) окно рисуется в своё внеэкранное место, поэтому снимок верен,
+    /// даже если окно закрыто другими. Свёрнутое окно не нарисовано — `None`.
+    pub fn capture_window(&self, w: Window) -> Option<Pixmap> {
+        let g = self.conn.get_geometry(w).ok()?.reply().ok()?;
+        let reply = self
+            .conn
+            .get_image(ImageFormat::Z_PIXMAP, w, 0, 0, g.width, g.height, !0)
+            .ok()?
+            .reply()
+            .ok()?;
+        let mut data = reply.data;
+        if data.len() != usize::from(g.width) * usize::from(g.height) * 4 {
+            return None;
+        }
+        // BGRX → RGBA. Прозрачность не берём: у многих окон в ней мусор.
+        for px in data.as_chunks_mut::<4>().0 {
+            px.swap(0, 2);
+            px[3] = 255;
+        }
+        Pixmap::from_vec(
+            data,
+            IntSize::from_wh(u32::from(g.width), u32::from(g.height))?,
+        )
     }
 
     /// Где указатель мыши на экране.

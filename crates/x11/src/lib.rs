@@ -184,6 +184,8 @@ impl Display {
         let events = EventMask::KEY_PRESS
             | EventMask::BUTTON_PRESS
             | EventMask::POINTER_MOTION
+            | EventMask::ENTER_WINDOW
+            | EventMask::LEAVE_WINDOW
             | EventMask::EXPOSURE;
         self.conn.create_window(
             32,

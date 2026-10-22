@@ -219,7 +219,7 @@ struct Ui<'a> {
 impl Ui<'_> {
     fn toggle(&mut self, panel: Panel) -> Result<()> {
         if let Some(dock) = &mut self.dock {
-            dock.close_menu(self.display)?;
+            dock.close_popups(self.display)?;
         }
         let was = self.shown;
         if was.is_some() {

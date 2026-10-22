@@ -8,11 +8,13 @@ mod hide;
 mod items;
 mod layout;
 mod menu;
+mod preview;
 
 pub use hide::{Rect, should_hide};
 pub use items::{Item, match_window};
 pub use layout::Slot;
 pub use menu::{Menu, MenuCommand, MenuEntry, MenuResult};
+pub use preview::{Preview, PreviewCard, THUMB_H, THUMB_W, thumbnail};
 
 use std::time::{Duration, Instant};
 
@@ -67,8 +69,8 @@ pub struct Dock {
     slide: Option<(f32, f32, Instant)>,
     /// Прыжки значков после запуска: ключ значка и начало.
     bounces: Vec<(String, Instant)>,
-    /// Открыто меню значка — подпись над значком не нужна.
-    menu_open: bool,
+    /// Над доком открыто меню или миниатюры — подпись над значком не нужна.
+    popup_open: bool,
     /// Перетаскиваемый значок.
     drag: Option<drag::Drag>,
 }
@@ -88,7 +90,7 @@ impl Dock {
             hidden: 0.0,
             slide: None,
             bounces: Vec::new(),
-            menu_open: false,
+            popup_open: false,
             drag: None,
         };
         d.rebuild();
@@ -303,9 +305,9 @@ impl Dock {
         }
     }
 
-    /// Открыто ли меню значка (тогда подпись над значком не рисуется).
-    pub fn set_menu_open(&mut self, open: bool) {
-        self.menu_open = open;
+    /// Над доком открыто меню или миниатюры (тогда подпись над значком не рисуется).
+    pub fn set_popup_open(&mut self, open: bool) {
+        self.popup_open = open;
     }
 
     /// Программа запущена (из дока, Spotlight или Launchpad) — её значок

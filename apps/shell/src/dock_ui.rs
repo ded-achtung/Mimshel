@@ -1,6 +1,6 @@
 //! Док на экране: окно-док во всю ширину у нижнего края, окна программ
-//! (список, активное окно, иконки), клики, меню значка, «умное» скрытие
-//! и анимация.
+//! (список, активное окно, иконки), клики, меню значка, перетаскивание,
+//! миниатюры окон, «умное» скрытие и анимация.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -11,7 +11,10 @@ use std::time::{Duration, Instant};
 
 use shell_apps::App;
 use shell_core::config::{Config, DockHide, set_ini_value};
-use shell_dock::{Action, Dock, Look, Menu, MenuCommand, MenuResult, Rect, should_hide};
+use shell_dock::{
+    Action, Dock, Look, Menu, MenuCommand, MenuResult, Preview, PreviewCard, Rect, THUMB_H,
+    THUMB_W, should_hide, thumbnail,
+};
 use shell_icons::Icons;
 use shell_text::Fonts;
 use shell_x11::{Display, DockWindow, Event, Popup, Property};
@@ -22,6 +25,11 @@ use crate::ui::{Msg, Result};
 const FRAME: Duration = Duration::from_millis(16);
 /// Насколько сдвинуть мышь с нажатой кнопкой, чтобы клик стал перетаскиванием.
 const DRAG_START: f32 = 6.0;
+/// Сколько держать мышь на значке, чтобы появились миниатюры окон.
+const PREVIEW_DELAY: Duration = Duration::from_millis(500);
+/// Мышь ушла и с дока, и с миниатюр — через сколько их закрыть (успеть
+/// довести мышь от значка до миниатюр).
+const PREVIEW_CLOSE: Duration = Duration::from_millis(300);
 
 pub struct DockUi {
     window: DockWindow,
@@ -44,6 +52,17 @@ pub struct DockUi {
     drag_popup: Popup,
     drag_at: (f32, f32),
     drag_dirty: bool,
+    /// Миниатюры окон над значком и их окно.
+    preview: Option<Preview>,
+    preview_popup: Popup,
+    preview_dirty: bool,
+    /// Значок под указателем и с какого момента.
+    hover: Option<(String, Instant)>,
+    /// После клика по значку миниатюры не открываются, пока мышь не уйдёт с него.
+    preview_blocked: bool,
+    over_preview: bool,
+    /// Когда мышь ушла с дока или миниатюр.
+    left_at: Option<Instant>,
     tx: Sender<Msg>,
     terminal: Vec<String>,
     screen: (u32, u32),
@@ -71,6 +90,13 @@ impl DockUi {
             drag_popup: d.create_popup("dock-drag")?,
             drag_at: (0.0, 0.0),
             drag_dirty: false,
+            preview: None,
+            preview_popup: d.create_popup("dock-preview")?,
+            preview_dirty: false,
+            hover: None,
+            preview_blocked: false,
+            over_preview: false,
+            left_at: None,
             tx,
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
@@ -113,7 +139,9 @@ impl DockUi {
             | Event::Motion { window, .. }
             | Event::Enter { window, .. }
             | Event::Leave { window }
-            | Event::Expose { window } => window == own || window == self.menu_popup.id(),
+            | Event::Expose { window } => {
+                window == own || window == self.menu_popup.id() || window == self.preview_popup.id()
+            }
             // Клавиатура у дока, только пока открыто меню.
             Event::Key(_) => self.menu.is_some(),
             Event::Property { window, .. } | Event::Configure { window } => {
@@ -134,31 +162,47 @@ impl DockUi {
         if self.menu.is_some() && !matches!(ev, Event::Property { .. } | Event::Configure { .. }) {
             return self.menu_event(d, fonts, ev);
         }
-        // Запоздалые события уже закрытого меню.
         if let Event::Button { window, .. }
+        | Event::Release { window, .. }
         | Event::Motion { window, .. }
+        | Event::Enter { window, .. }
+        | Event::Leave { window }
         | Event::Expose { window } = ev
-            && window == self.menu_popup.id()
         {
-            return Ok(());
+            if window == self.preview_popup.id() {
+                return self.preview_event(d, ev);
+            }
+            // Запоздалые события уже закрытого меню.
+            if window == self.menu_popup.id() {
+                return Ok(());
+            }
         }
         match ev {
             // Кнопка нажата на значке — может, это начало перетаскивания.
             Event::Motion { x, y, .. } if self.press.is_some() => {
                 self.press_motion(d, f32::from(x), f32::from(y));
             }
-            Event::Motion { x, .. } | Event::Enter { x, .. } => {
+            Event::Motion { x, y, .. } | Event::Enter { x, y, .. } => {
                 self.dock.set_pointer(Some(f32::from(x)));
                 self.update_hide(d);
+                let key = self
+                    .dock
+                    .item_at(f32::from(x), f32::from(y))
+                    .map(|i| self.dock.items()[i].key.clone());
+                self.set_hover(key, now);
             }
             // Пока кнопка нажата, мышь может уйти с дока — это не «ушла».
             Event::Leave { .. } if self.press.is_some() => return Ok(()),
             Event::Leave { .. } => {
                 self.dock.set_pointer(None);
                 self.update_hide(d);
+                self.set_hover(None, now);
             }
             Event::Button { x, y, button, .. } => {
                 let (x, y) = (f32::from(x), f32::from(y));
+                // Любой клик по доку убирает миниатюры.
+                self.close_preview(d)?;
+                self.preview_blocked = true;
                 let Some(i) = self.dock.item_at(x, y) else {
                     return Ok(());
                 };
@@ -208,6 +252,10 @@ impl DockUi {
             }
             Event::Property { what, .. } => match what {
                 Property::ClientList | Property::State | Property::Class | Property::Title => {
+                    // Окна поменялись — миниатюры устарели (откроются заново).
+                    if what == Property::ClientList {
+                        self.close_preview(d)?;
+                    }
                     self.refresh_windows(d)
                 }
                 Property::ActiveWindow => {
@@ -220,6 +268,188 @@ impl DockUi {
         }
         self.dirty = true;
         Ok(())
+    }
+
+    /// Значок под указателем сменился (`None` — мышь ушла с дока).
+    fn set_hover(&mut self, key: Option<String>, now: Instant) {
+        if self.hover.as_ref().map(|(k, _)| k) == key.as_ref() {
+            return;
+        }
+        self.preview_blocked = false;
+        match key {
+            Some(key) => {
+                self.hover = Some((key, now));
+                self.left_at = None;
+                self.wake(PREVIEW_CLOSE);
+                self.wake(PREVIEW_DELAY);
+            }
+            None => {
+                self.hover = None;
+                self.left_at = Some(now);
+                self.wake(PREVIEW_CLOSE);
+            }
+        }
+    }
+
+    /// События окна миниатюр.
+    fn preview_event(&mut self, d: &Display, ev: Event) -> Result<()> {
+        let Some(preview) = &mut self.preview else {
+            return Ok(());
+        };
+        match ev {
+            Event::Enter { x, y, .. } | Event::Motion { x, y, .. } => {
+                self.over_preview = true;
+                self.left_at = None;
+                if preview.motion(f32::from(x), f32::from(y)) {
+                    self.preview_dirty = true;
+                }
+            }
+            Event::Leave { .. } => {
+                self.over_preview = false;
+                preview.hover = None;
+                self.preview_dirty = true;
+                self.left_at = Some(Instant::now());
+                self.wake(PREVIEW_CLOSE);
+            }
+            Event::Button {
+                x, y, button: 1, ..
+            } => {
+                if let Some(i) = preview.card_at(f32::from(x), f32::from(y)) {
+                    let w = preview.cards[i].window;
+                    self.close_preview(d)?;
+                    self.preview_blocked = true;
+                    d.activate(w)?;
+                }
+            }
+            Event::Expose { .. } => self.preview_dirty = true,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Открыть, сменить или закрыть миниатюры — по тому, где мышь и сколько
+    /// она там.
+    fn update_preview(&mut self, d: &Display, icons: &mut Icons) -> Result<()> {
+        let now = Instant::now();
+        let current = self.preview.as_ref().map(|p| p.key.clone());
+        let busy = self.menu.is_some() || self.press.is_some() || self.dock.dragging();
+        let running = |key: &str| {
+            self.dock
+                .items()
+                .iter()
+                .any(|i| i.key == key && !i.windows.is_empty())
+        };
+        let want = if busy {
+            None
+        } else if self.over_preview {
+            current.clone()
+        } else if let Some((key, since)) = &self.hover {
+            // Миниатюры уже открыты — переходят на другой значок сразу.
+            let waited = current.is_some() || now.duration_since(*since) >= PREVIEW_DELAY;
+            if running(key) && waited && !self.preview_blocked {
+                Some(key.clone())
+            } else if now.duration_since(*since) < PREVIEW_CLOSE {
+                // Мышь задела соседний значок по пути к миниатюрам — не сразу.
+                current.clone()
+            } else {
+                None
+            }
+        } else if self
+            .left_at
+            .is_some_and(|t| now.duration_since(t) < PREVIEW_CLOSE)
+        {
+            current.clone()
+        } else {
+            None
+        };
+        if want == current {
+            return Ok(());
+        }
+        if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+            eprintln!("док: миниатюры {current:?} → {want:?}");
+        }
+        self.close_preview(d)?;
+        if let Some(key) = want {
+            self.open_preview(d, icons, &key)?;
+        }
+        Ok(())
+    }
+
+    fn open_preview(&mut self, d: &Display, icons: &mut Icons, key: &str) -> Result<()> {
+        let Some(index) = self.dock.items().iter().position(|i| i.key == key) else {
+            return Ok(());
+        };
+        let item = &self.dock.items()[index];
+        let mut windows = item.windows.clone();
+        windows.sort_unstable();
+        windows.truncate(Preview::fits(self.screen.0));
+        let app_icon = item
+            .app
+            .as_ref()
+            .and_then(|a| a.icon.as_deref())
+            .and_then(|n| icons.get(n, 64))
+            .cloned();
+        let cards = windows
+            .iter()
+            .map(|&w| PreviewCard {
+                window: w,
+                title: self
+                    .dock
+                    .window(w)
+                    .map(|i| i.title.clone())
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| item.name.clone()),
+                // Свёрнутое окно не нарисовано — вместо снимка иконка.
+                image: d
+                    .capture_window(w)
+                    .map(|p| thumbnail(&p, THUMB_W, THUMB_H))
+                    .or_else(|| app_icon.clone())
+                    .or_else(|| d.window_icon(w, 64)),
+            })
+            .collect();
+        let preview = Preview {
+            key: key.to_string(),
+            cards,
+            hover: None,
+        };
+        let Some((cx, icon_top)) = self.dock.anchor(index, self.dock.hidden_at(Instant::now()))
+        else {
+            return Ok(());
+        };
+        let (w, h) = preview.size();
+        let (sw, sh) = self.screen;
+        let window_top = sh as f32 - self.dock.window_height() as f32;
+        let x = (cx - w as f32 / 2.0).clamp(4.0, (sw as f32 - w as f32 - 4.0).max(4.0));
+        let y = (window_top + icon_top - h as f32 - 10.0).max(0.0);
+        self.preview_popup
+            .show_passive(d, x as i16, y as i16, w as u16, h as u16)?;
+        self.preview = Some(preview);
+        self.preview_dirty = true;
+        self.dock.set_popup_open(true);
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn close_preview(&mut self, d: &Display) -> Result<()> {
+        if self.preview.take().is_none() {
+            return Ok(());
+        }
+        self.preview_popup.hide_passive(d)?;
+        self.over_preview = false;
+        self.dock.set_popup_open(self.menu.is_some());
+        self.update_hide(d);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Разбудить службу через `delay` (проверить, не пора ли открыть или
+    /// закрыть миниатюры).
+    fn wake(&self, delay: Duration) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(delay + Duration::from_millis(5));
+            let _ = tx.send(Msg::Tick);
+        });
     }
 
     /// Мышь движется с нажатой на значке кнопкой.
@@ -297,6 +527,7 @@ impl DockUi {
     /// Открыть меню значка `index` над ним.
     fn open_menu(&mut self, d: &Display, fonts: &mut Fonts, index: usize) -> Result<()> {
         let now = Instant::now();
+        self.close_preview(d)?;
         let (Some(mut menu), Some((cx, icon_top))) = (
             self.dock.menu(index),
             self.dock.anchor(index, self.dock.hidden_at(now)),
@@ -312,18 +543,25 @@ impl DockUi {
             .show(d, x as i16, y as i16, w as u16, h as u16)?;
         self.menu = Some(menu);
         self.menu_dirty = true;
-        self.dock.set_menu_open(true);
+        self.dock.set_popup_open(true);
         self.dirty = true;
         Ok(())
     }
 
-    /// Закрыть меню (если открыто): например, перед открытием Spotlight.
-    pub fn close_menu(&mut self, d: &Display) -> Result<()> {
+    /// Закрыть меню и миниатюры (если открыты): например, перед открытием Spotlight.
+    pub fn close_popups(&mut self, d: &Display) -> Result<()> {
+        self.close_preview(d)?;
+        self.preview_blocked = true;
+        self.close_menu(d)
+    }
+
+    /// Закрыть меню (если открыто).
+    fn close_menu(&mut self, d: &Display) -> Result<()> {
         if self.menu.take().is_none() {
             return Ok(());
         }
         self.menu_popup.hide(d)?;
-        self.dock.set_menu_open(false);
+        self.dock.set_popup_open(false);
         self.sync_pointer(d);
         self.dirty = true;
         Ok(())
@@ -392,6 +630,13 @@ impl DockUi {
 
     /// Перерисовать, если что-то изменилось.
     pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        self.update_preview(d, icons)?;
+        if self.preview_dirty {
+            self.preview_dirty = false;
+            if let Some(preview) = &self.preview {
+                self.preview_popup.present(d, &preview.render(fonts))?;
+            }
+        }
         if self.dirty {
             self.dirty = false;
             self.redraw(d, fonts, icons)?;
@@ -478,8 +723,11 @@ impl DockUi {
             let (x, y, ww, hh) = d.frame_geometry(w)?;
             Some((Rect { x, y, w: ww, h: hh }, info.maximized))
         });
-        // Пока тащат значок или открыто меню, док не прячется.
-        let busy = self.dock.pointer().is_some() || self.dock.dragging() || self.menu.is_some();
+        // Пока тащат значок или открыто меню или миниатюры, док не прячется.
+        let busy = self.dock.pointer().is_some()
+            || self.dock.dragging()
+            || self.menu.is_some()
+            || self.preview.is_some();
         let hide = should_hide(self.hide, bar, active, busy);
         let now = Instant::now();
         self.dock.slide_to(hide, now);

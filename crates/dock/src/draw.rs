@@ -123,7 +123,7 @@ impl Dock {
         }
 
         // Подпись над значком под указателем (не при открытом меню).
-        if let Some((s, icon_top)) = hovered.filter(|_| !self.menu_open && dragged.is_none()) {
+        if let Some((s, icon_top)) = hovered.filter(|_| !self.popup_open && dragged.is_none()) {
             let name = &self.items[s.item].name;
             let (bw, bh) = tip_size(fonts, name);
             let bx = (s.center() - bw / 2.0)
