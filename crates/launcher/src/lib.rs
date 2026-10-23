@@ -18,7 +18,7 @@ pub use launchpad_draw::backdrop;
 pub use spotlight::{Action, Spotlight};
 
 use shell_apps::App;
-use shell_core::search::{Fields, Query, best};
+use shell_core::search::{Fields, Prepared, Query, best_prepared};
 
 /// Где искать для программы: названия, ключевые слова, описание и имя
 /// команды (переименованный ярлык «Блокнот» находится и по «mousepad»).
@@ -40,11 +40,17 @@ pub fn fields(app: &App) -> Fields<'_> {
     }
 }
 
+/// Поля всех программ, подготовленные для поиска один раз — при загрузке
+/// списка, а не на каждое нажатие клавиши.
+pub fn prepare_all(apps: &[App]) -> Vec<Prepared> {
+    apps.iter().map(|a| Prepared::new(&fields(a))).collect()
+}
+
 /// Номера программ, подходящих к тексту, лучшие первыми.
-pub(crate) fn rank(apps: &[App], text: &str) -> Vec<usize> {
+pub(crate) fn rank(prepared: &[Prepared], text: &str) -> Vec<usize> {
     let query = Query::new(text);
-    let indices: Vec<usize> = (0..apps.len()).collect();
-    best(&query, &indices, |&i| fields(&apps[i]))
+    let indices: Vec<usize> = (0..prepared.len()).collect();
+    best_prepared(&query, &indices, |&i| &prepared[i])
         .into_iter()
         .copied()
         .collect()

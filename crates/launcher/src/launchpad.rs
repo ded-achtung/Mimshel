@@ -68,6 +68,8 @@ impl Layout {
 
 pub struct Launchpad {
     apps: Vec<App>,
+    /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
+    prepared: Vec<shell_core::search::Prepared>,
     pub(crate) field: TextField,
     /// Что показано: номера программ в `apps` — все по алфавиту или найденные.
     shown: Vec<usize>,
@@ -80,8 +82,10 @@ pub struct Launchpad {
 
 impl Launchpad {
     pub fn new(apps: Vec<App>, screen: (u32, u32), grid: Grid) -> Launchpad {
+        let prepared = crate::prepare_all(&apps);
         let mut l = Launchpad {
             apps,
+            prepared,
             field: TextField::default(),
             shown: Vec::new(),
             page: 0,
@@ -95,6 +99,7 @@ impl Launchpad {
 
     /// Новый список программ (после установки или удаления).
     pub fn set_apps(&mut self, apps: Vec<App>) {
+        self.prepared = crate::prepare_all(&apps);
         self.apps = apps;
         self.search();
     }
@@ -297,7 +302,7 @@ impl Launchpad {
         self.shown = if self.field.is_empty() {
             (0..self.apps.len()).collect()
         } else {
-            crate::rank(&self.apps, self.field.text())
+            crate::rank(&self.prepared, self.field.text())
         };
         self.page = 0;
         // Во время поиска первая найденная программа выбрана сразу.

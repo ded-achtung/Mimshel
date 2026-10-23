@@ -20,6 +20,8 @@ pub enum Action {
 
 pub struct Spotlight {
     apps: Vec<App>,
+    /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
+    prepared: Vec<shell_core::search::Prepared>,
     pub(crate) field: TextField,
     /// Номера подходящих программ в `apps`, лучшие первыми.
     results: Vec<usize>,
@@ -30,8 +32,10 @@ pub struct Spotlight {
 
 impl Spotlight {
     pub fn new(apps: Vec<App>) -> Spotlight {
+        let prepared = crate::prepare_all(&apps);
         Spotlight {
             apps,
+            prepared,
             field: TextField::default(),
             results: Vec::new(),
             selected: 0,
@@ -41,6 +45,7 @@ impl Spotlight {
 
     /// Новый список программ (после установки или удаления).
     pub fn set_apps(&mut self, apps: Vec<App>) {
+        self.prepared = crate::prepare_all(&apps);
         self.apps = apps;
         self.search();
     }
@@ -186,7 +191,7 @@ impl Spotlight {
         self.results = if self.field.is_empty() {
             Vec::new()
         } else {
-            crate::rank(&self.apps, self.field.text())
+            crate::rank(&self.prepared, self.field.text())
         };
         self.selected = 0;
         self.scroll = 0;

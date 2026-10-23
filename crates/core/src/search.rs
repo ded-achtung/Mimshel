@@ -31,17 +31,23 @@ impl Query {
 
     /// Оценка совпадения: больше — лучше, `None` — не подходит.
     pub fn score(&self, fields: &Fields) -> Option<u32> {
-        let norm = |v: &[&str]| v.iter().map(|s| normalize(s)).collect::<Vec<_>>();
-        let f = [
-            norm(&fields.names),
-            norm(&fields.keywords),
-            norm(&fields.others),
-        ];
-        let direct = score_one(&self.variants[0], &f);
+        self.score_prepared(&Prepared::new(fields))
+    }
+
+    /// То же, что [`score`](Query::score), но по полям, подготовленным
+    /// заранее ([`Prepared`]) — для поиска, который выполняется на каждый
+    /// символ ввода.
+    pub fn score_prepared(&self, p: &Prepared) -> Option<u32> {
+        let direct = score_one(&self.variants[0], p);
+        // Лучшая оценка другой раскладки — 1000/2 = 500: если прямой поиск
+        // дал не меньше, второй вариант можно не считать.
+        if direct.is_some_and(|d| d >= 500) {
+            return direct;
+        }
         let swapped = self
             .variants
             .get(1)
-            .and_then(|q| score_one(q, &f))
+            .and_then(|q| score_one(q, p))
             .map(|s| s / 2);
         direct.max(swapped)
     }
@@ -56,6 +62,36 @@ pub struct Fields<'a> {
     pub keywords: Vec<&'a str>,
     /// Остальное: описание и т. п.
     pub others: Vec<&'a str>,
+}
+
+/// Поля, подготовленные для поиска один раз — при загрузке списка программ.
+/// Без подготовки каждый символ ввода заново нормализовал бы все поля всех
+/// программ: тысячи мелких строк на каждое нажатие клавиши.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Prepared {
+    /// Нормализованные названия.
+    pub names: Vec<String>,
+    /// Инициалы каждого названия («visual studio code» → «vsc»);
+    /// параллельны `names`.
+    pub initials: Vec<String>,
+    /// Нормализованные ключевые слова.
+    pub keywords: Vec<String>,
+    /// Нормализованное остальное: описание и т. п.
+    pub others: Vec<String>,
+}
+
+impl Prepared {
+    /// Нормализует поля и считает инициалы названий.
+    pub fn new(f: &Fields) -> Prepared {
+        let names: Vec<String> = f.names.iter().map(|s| normalize(s)).collect();
+        let initials = names.iter().map(|n| initials(n)).collect();
+        Prepared {
+            names,
+            initials,
+            keywords: f.keywords.iter().map(|s| normalize(s)).collect(),
+            others: f.others.iter().map(|s| normalize(s)).collect(),
+        }
+    }
 }
 
 /// Отбирает подходящие элементы и ставит лучшие вперёд. При равной оценке
@@ -73,31 +109,50 @@ pub fn best<'a, T>(
     found.into_iter().map(|(_, item)| item).collect()
 }
 
-fn score_one(q: &str, [names, keywords, others]: &[Vec<String>; 3]) -> Option<u32> {
+/// То же, что [`best`], но по заранее подготовленным полям ([`Prepared`]).
+pub fn best_prepared<'a, T>(
+    query: &Query,
+    items: &'a [T],
+    prepared: impl Fn(&'a T) -> &'a Prepared,
+) -> Vec<&'a T> {
+    let mut found: Vec<(u32, &T)> = items
+        .iter()
+        .filter_map(|item| query.score_prepared(prepared(item)).map(|s| (s, item)))
+        .collect();
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
+    found.into_iter().map(|(_, item)| item).collect()
+}
+
+fn score_one(q: &str, p: &Prepared) -> Option<u32> {
     if q.is_empty() {
         return None;
     }
     let q_words: Vec<&str> = words(q).collect();
-    let word_start = |f: &String| f.starts_with(q) || words(f).any(|w| w.starts_with(q));
+    let word_start = |v: &[String]| {
+        v.iter()
+            .any(|f| f.starts_with(q) || words(f).any(|w| w.starts_with(q)))
+    };
 
-    if let Some(best) = names
+    if let Some(best) = p
+        .names
         .iter()
-        .filter_map(|n| score_name(q, &q_words, n))
+        .zip(&p.initials)
+        .filter_map(|(n, ini)| score_name(q, &q_words, n, ini))
         .max()
     {
         return Some(best);
     }
-    if keywords.iter().any(word_start) {
+    if word_start(&p.keywords) {
         return Some(450);
     }
-    if others.iter().any(word_start) {
+    if word_start(&p.others) {
         return Some(400);
     }
     let everywhere = || {
-        names
+        p.names
             .iter()
-            .chain(keywords)
-            .chain(others)
+            .chain(&p.keywords)
+            .chain(&p.others)
             .map(String::as_str)
     };
     if q_words
@@ -106,14 +161,15 @@ fn score_one(q: &str, [names, keywords, others]: &[Vec<String>; 3]) -> Option<u3
     {
         return Some(300);
     }
-    if q.chars().count() >= 3 && keywords.iter().chain(others).any(|o| o.contains(q)) {
+    if q.chars().count() >= 3 && p.keywords.iter().chain(&p.others).any(|o| o.contains(q)) {
         return Some(200);
     }
     None
 }
 
-/// Совпадение с одним названием (оценки от 500 до 1000).
-fn score_name(q: &str, q_words: &[&str], name: &str) -> Option<u32> {
+/// Совпадение с одним названием (оценки от 500 до 1000). `ini` — первые
+/// буквы слов названия, посчитаны при подготовке.
+fn score_name(q: &str, q_words: &[&str], name: &str, ini: &str) -> Option<u32> {
     let long_enough = q.chars().count() >= 2;
     if name == q {
         return Some(1000);
@@ -130,7 +186,7 @@ fn score_name(q: &str, q_words: &[&str], name: &str) -> Option<u32> {
     {
         return Some(700);
     }
-    if long_enough && initials(name).starts_with(q) {
+    if long_enough && ini.starts_with(q) {
         return Some(600);
     }
     if long_enough && name.contains(q) {
@@ -265,5 +321,121 @@ mod tests {
             ..Fields::default()
         });
         assert_eq!(found, [&"Firefox", &"Files", &"Профиль Firefox"]);
+    }
+
+    #[test]
+    fn prepared_matches_fields() {
+        // Подготовленные поля обязаны давать те же оценки, что и разбор на
+        // месте, — включая путь, где второй вариант раскладки пропускается.
+        let cases: &[(&str, Fields<'static>)] = &[
+            ("fire", firefox()),
+            ("Firefox", firefox()),
+            ("fox", firefox()),
+            ("x", firefox()),
+            ("inter", firefox()),
+            ("браузер", firefox()),
+            ("fire веб", firefox()),
+            ("узер", firefox()),
+            ("tern", firefox()),
+            (
+                "ntrc",
+                Fields {
+                    names: vec!["Текстовый редактор"],
+                    ..Fields::default()
+                },
+            ),
+            (
+                "vsc",
+                Fields {
+                    names: vec!["Visual Studio Code"],
+                    ..Fields::default()
+                },
+            ),
+            (
+                "аштв",
+                Fields {
+                    names: vec!["Find Files"],
+                    ..Fields::default()
+                },
+            ),
+            (
+                "ЁЛКА",
+                Fields {
+                    names: vec!["елка"],
+                    ..Fields::default()
+                },
+            ),
+        ];
+        for (q, f) in cases {
+            let p = Prepared::new(f);
+            assert_eq!(
+                Query::new(q).score(f),
+                Query::new(q).score_prepared(&p),
+                "запрос {q:?}"
+            );
+        }
+        // Инициалы считаются при подготовке, один раз.
+        let p = Prepared::new(&Fields {
+            names: vec!["Visual Studio Code"],
+            ..Fields::default()
+        });
+        assert_eq!(p.initials, ["vsc"]);
+        assert_eq!(p.names, ["visual studio code"]);
+    }
+
+    /// Замер: поиск по большому списку на каждое нажатие. Пропущен в обычном
+    /// прогоне; запуск: `cargo test -p shell-core search_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore = "замер скорости"]
+    fn search_timing() {
+        // Название, ключевые слова и описание — как в настоящих .desktop.
+        let apps: Vec<(
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+        )> = (0..500)
+            .map(|i| {
+                (
+                    if i % 2 == 0 {
+                        "Текстовый редактор"
+                    } else {
+                        "Visual Studio Code"
+                    },
+                    &["internet", "web", "разработка"][..],
+                    &["Какое-то описание программы на двух языках"][..],
+                )
+            })
+            .collect();
+        let prepared: Vec<Prepared> = apps
+            .iter()
+            .map(|(n, k, o)| {
+                Prepared::new(&Fields {
+                    names: vec![n],
+                    keywords: k.to_vec(),
+                    others: o.to_vec(),
+                })
+            })
+            .collect();
+        let indices: Vec<usize> = (0..apps.len()).collect();
+        let q = Query::new("тек ред");
+        let start = std::time::Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(best(&q, &indices, |&i| {
+                let (n, k, o) = apps[i];
+                Fields {
+                    names: vec![n],
+                    keywords: k.to_vec(),
+                    others: o.to_vec(),
+                }
+            }));
+        }
+        let old = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(best_prepared(&q, &indices, |&i| &prepared[i]));
+        }
+        let new = start.elapsed();
+        println!("1000 запросов × 500 программ: было {old:?}, стало {new:?}");
+        assert!(new < old, "подготовка полей обязана ускорять поиск");
     }
 }
