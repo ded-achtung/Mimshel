@@ -79,6 +79,10 @@ pub fn apply(config: &Config, look: &Look, parts: &[&str]) -> Result<(), String>
     if want("notify") {
         plan.notify();
     }
+    // Значки — до перезапуска службы: тему она читает при запуске.
+    if want("icons") {
+        plan.icons();
+    }
     // Служба читает настройки при запуске — перезапускаем всегда.
     plan.service();
     for args in std::mem::take(&mut plan.later) {
@@ -93,9 +97,6 @@ pub fn apply(config: &Config, look: &Look, parts: &[&str]) -> Result<(), String>
     }
     if want("power") {
         power();
-    }
-    if want("icons") {
-        plan.icons();
     }
     Ok(())
 }
@@ -482,6 +483,9 @@ impl Plan<'_> {
 pub const OVERLAY_THEME: &str = "Colloid-shell";
 const OVERLAY_BASE: &str = "Colloid-Dark";
 const LOGO_SYMBOLIC_SVG: &str = include_str!("../data/shell-logo-symbolic.svg");
+/// Значки, которые надстройка берёт из других установленных наборов: (тема,
+/// начало имени). Значок сети nm-applet из Colloid неудобен — как в WhiteSur.
+const BORROWED: &[(&str, &str)] = &[("WhiteSur-dark", "nm-")];
 
 /// Свой знак меню (планета с кольцом вместо яблока) — в общую тему значков
 /// hicolor: его находят и своя строка меню, и панель Xfce.
@@ -496,6 +500,50 @@ pub fn logo_path() -> std::path::PathBuf {
 
 fn install_logo() {
     write(&logo_path(), LOGO_SVG);
+}
+
+/// Скопировать в надстройку `overlay` значки темы `src`, имена которых
+/// начинаются с `prefix` (ссылки — их содержимым). Вернуть папки, куда что-то
+/// легло, с описанием из `index.theme` темы-источника (размер, тип).
+fn borrow(src: &Path, prefix: &str, overlay: &Path) -> Vec<(String, String)> {
+    let index = read(&src.join("index.theme"));
+    let section = |name: &str| -> Option<String> {
+        let mut lines = index
+            .lines()
+            .skip_while(|l| l.trim() != format!("[{name}]"));
+        lines.next()?;
+        let body: Vec<&str> = lines
+            .take_while(|l| !l.trim_start().starts_with('['))
+            .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .collect();
+        Some(body.join("\n") + "\n")
+    };
+    let dirs = index
+        .lines()
+        .find_map(|l| l.strip_prefix("Directories="))
+        .unwrap_or("");
+    let mut out = Vec::new();
+    for sub in dirs.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+        let Ok(entries) = std::fs::read_dir(src.join(sub)) else {
+            continue;
+        };
+        let mut copied = false;
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.starts_with(prefix) {
+                continue;
+            }
+            // read идёт по ссылкам: копируем саму картинку.
+            if let Ok(svg) = std::fs::read_to_string(e.path()) {
+                write(&overlay.join(sub).join(&name), &svg);
+                copied = true;
+            }
+        }
+        if copied && let Some(body) = section(sub) {
+            out.push((sub.to_string(), body));
+        }
+    }
+    out
 }
 
 /// В ВМ — без автоматического сна: из него ВМ не просыпается.
@@ -532,15 +580,27 @@ impl Plan<'_> {
                 return;
             }
             let dir = self.paths.icons.join(OVERLAY_THEME);
+            let mut dirs = vec!["places/scalable".to_string()];
+            let mut sections = String::from(
+                "[places/scalable]\nContext=Places\nSize=48\nMinSize=8\nMaxSize=512\n\
+                 Type=Scalable\n",
+            );
+            for (theme, prefix) in BORROWED {
+                for (sub, section) in borrow(&self.paths.icons.join(theme), prefix, &dir) {
+                    if !dirs.contains(&sub) {
+                        sections.push_str(&format!("\n[{sub}]\n{section}"));
+                        dirs.push(sub);
+                    }
+                }
+            }
             write(
                 &dir.join("index.theme"),
                 &format!(
                     "[Icon Theme]\nName={OVERLAY_THEME}\n\
                      Comment=Colloid с правками shell (свой знак вместо яблока)\n\
                      Inherits={OVERLAY_BASE},hicolor,breeze\n\
-                     Directories=places/scalable\n\n\
-                     [places/scalable]\nContext=Places\nSize=48\nMinSize=8\nMaxSize=512\n\
-                     Type=Scalable\n"
+                     Directories={}\n\n{sections}",
+                    dirs.join(",")
                 ),
             );
             // Одна залитая фигура: GTK перекрашивает одноцветные значки,
