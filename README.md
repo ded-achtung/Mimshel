@@ -48,9 +48,10 @@ cargo test -p shell-x11 --test windows --locked -- --ignored
 и замер скорости фона Launchpad. Тесты не проверяют реальную блокировку экрана,
 оборудование Wi-Fi/Bluetooth и совместимость со всеми приложениями.
 
-Для работы нужен сеанс X11 с D-Bus; интеграция использует `pactl`, `upower`,
+Для работы нужен сеанс X11 с D-Bus; интеграция использует `pactl`,
 `xfconf-query`, `nmcli`, `bluetoothctl` и утилиты GNU coreutils, включая `timeout`.
-Для блокировки нужны i3lock-color и xss-lock. Шрифт и тема иконок задаются в конфиге;
+Батарея читается напрямую из файлов ядра `/sys/class/power_supply` — `upower`
+не нужен. Для блокировки нужны i3lock-color и xss-lock. Шрифт и тема иконок задаются в конфиге;
 по умолчанию — Inter и WhiteSur-dark-mac из окружения macos-look.
 
 ## Запуск и настройки

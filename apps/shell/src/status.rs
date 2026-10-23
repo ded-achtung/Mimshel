@@ -1,15 +1,20 @@
-//! Звук, батарея и «Не беспокоить» для строки меню — через программы
-//! системы: `pactl` (PipeWire/PulseAudio), `upower`, `xfconf-query`
-//! (уведомления Xfce). Каждая следит за изменениями сама (`pactl subscribe`,
-//! `upower --monitor`, `xfconf-query -m`), а мы читаем состояние заново и
-//! присылаем его службе.
+//! Звук, батарея и «Не беспокоить» для строки меню. Звук — через `pactl`
+//! (PipeWire/PulseAudio): одно обновление — два коротких запроса, изменения
+//! ловит `pactl subscribe`. Батарея — напрямую из файлов ядра
+//! `/sys/class/power_supply` (то же, что читает UPower, но без демона и без
+//! разбора текста): опрос раз в 30 с, сообщение — только при изменении.
+//! «Не беспокоить» — `xfconf-query` (уведомления Xfce), изменения ловит
+//! `xfconf-query -m`.
 
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use shell_menubar::status::{Battery, Sound, parse_mute, parse_sinks, parse_upower, parse_volume};
+use shell_menubar::status::{
+    Battery, Sound, SysBattery, parse_default_state, parse_sinks, sys_battery,
+};
 
 use crate::ui::Msg;
 
@@ -45,28 +50,56 @@ fn run(program: &str, args: &[&str]) {
 }
 
 pub fn read_sound() -> Option<Sound> {
-    let volume = parse_volume(&output("pactl", &["get-sink-volume", "@DEFAULT_SINK@"])?)?;
+    // Всё нужное есть в одном выводе `pactl list sinks`: громкость и mute
+    // устройства по умолчанию берутся из него же, вторым запросом — только
+    // имя устройства по умолчанию.
+    let list = output("pactl", &["list", "sinks"])?;
+    let default = output("pactl", &["get-default-sink"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let (volume, muted) = parse_default_state(&list, &default)?;
     Some(Sound {
         volume,
-        muted: parse_mute(&output("pactl", &["get-sink-mute", "@DEFAULT_SINK@"])?),
-        sinks: parse_sinks(&output("pactl", &["list", "sinks"]).unwrap_or_default()),
-        default: output("pactl", &["get-default-sink"])
-            .unwrap_or_default()
-            .trim()
-            .to_string(),
+        muted,
+        sinks: parse_sinks(&list),
+        default,
     })
 }
 
 pub fn read_battery() -> Option<Battery> {
-    // Сводное устройство есть и без батареи — сначала смотрим, есть ли она.
-    let devices = output("upower", &["-e"])?;
-    if !devices.lines().any(|d| d.contains("/battery_")) {
-        return None;
-    }
-    parse_upower(&output(
-        "upower",
-        &["-i", "/org/freedesktop/UPower/devices/DisplayDevice"],
-    )?)
+    sys_battery(&batteries_in(Path::new("/sys/class/power_supply")))
+}
+
+/// Батареи из каталога ядра: `type` = Battery, `present` ≠ 0. Заряд ядро
+/// отдаёт энергией (мкВт·ч) или зарядом (мкА·ч) — берём что есть, мощность
+/// идёт из той же семьи (`power_now` или `current_now`).
+fn batteries_in(root: &Path) -> Vec<SysBattery> {
+    let Ok(dir) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter_map(|e| {
+            let d = e.path();
+            let text = |f: &str| std::fs::read_to_string(d.join(f)).ok();
+            let num = |f: &str| text(f).and_then(|s| s.trim().parse::<u64>().ok());
+            if text("type").is_none_or(|t| t.trim() != "Battery") {
+                return None;
+            }
+            if text("present").is_some_and(|p| p.trim() == "0") {
+                return None;
+            }
+            Some(SysBattery {
+                status: text("status").unwrap_or_default().trim().to_string(),
+                now: num("energy_now").or_else(|| num("charge_now")),
+                full: num("energy_full")
+                    .or_else(|| num("charge_full"))
+                    .or_else(|| num("charge_full_design")),
+                power: num("power_now").or_else(|| num("current_now")),
+                capacity: num("capacity"),
+            })
+        })
+        .collect()
 }
 
 pub fn read_dnd() -> bool {
@@ -288,15 +321,25 @@ pub fn watch_sound(tx: Sender<Msg>) {
     );
 }
 
+/// Батарея меняется медленно, а inotify для файлов ядра не работает: вместо
+/// прежнего вечного наблюдателя `upower --monitor` опрашиваем `/sys` раз в
+/// 30 с и сообщаем только об изменениях. Ни демона, ни подпроцессов.
 pub fn watch_battery(tx: Sender<Msg>) {
-    watch(
-        "upower",
-        &["--monitor"],
-        |_| true,
-        read_battery,
-        Msg::Battery,
-        tx,
-    );
+    std::thread::spawn(move || {
+        let mut sent = false;
+        let mut last: Option<Battery> = None;
+        loop {
+            let now = read_battery();
+            if !sent || now != last {
+                sent = true;
+                last = now.clone();
+                if tx.send(Msg::Battery(now)).is_err() {
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    });
 }
 
 pub fn watch_dnd(tx: Sender<Msg>) {
@@ -330,5 +373,36 @@ mod tests {
             .unwrap();
         assert!(!out.status.success());
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn batteries_from_sys_fixture() {
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/power_supply"
+        ));
+        let bats = batteries_in(root);
+        // BAT0 — батарея; AC (Mains) и BAT1 (present: 0) — нет.
+        assert_eq!(bats.len(), 1);
+        assert_eq!(bats[0].status, "Discharging");
+        assert_eq!(bats[0].now, Some(2_050_000));
+        assert_eq!(bats[0].full, Some(5_000_000));
+        assert_eq!(bats[0].power, Some(800_000));
+        let b = sys_battery(&bats).unwrap();
+        assert_eq!(b.percent, 41);
+        assert_eq!(b.icon, "battery-level-40-symbolic");
+
+        // Семья «заряд/ток» вместо «энергия/мощность», файла present нет.
+        let root = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/power_supply_charge"
+        ));
+        let bats = batteries_in(root);
+        assert_eq!(bats.len(), 1);
+        assert_eq!(bats[0].now, Some(1_500_000));
+        assert_eq!(bats[0].full, Some(3_000_000));
+        let b = sys_battery(&bats).unwrap();
+        assert_eq!(b.percent, 50);
+        assert_eq!(b.state, "charging");
     }
 }

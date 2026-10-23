@@ -53,10 +53,12 @@ A normal test run skips the Xvfb test (run it with the separate command above)
 and the Launchpad background speed benchmark. The tests do not cover a real
 screen lock, Wi-Fi/Bluetooth hardware, or compatibility with every application.
 
-Running shell needs an X11 session with D-Bus; it uses `pactl`, `upower`,
+Running shell needs an X11 session with D-Bus; it uses `pactl`,
 `xfconf-query`, `nmcli`, `bluetoothctl` and GNU coreutils, including `timeout`.
-Locking needs i3lock-color and xss-lock. The font and icon theme are set in the
-config; the defaults are Inter and WhiteSur-dark-mac from the macos-look setup.
+The battery is read straight from the kernel files in `/sys/class/power_supply`
+— `upower` is not needed. Locking needs i3lock-color and xss-lock. The font and
+icon theme are set in the config; the defaults are Inter and WhiteSur-dark-mac
+from the macos-look setup.
 
 ## Running and settings
 

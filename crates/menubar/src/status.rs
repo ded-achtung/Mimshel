@@ -1,6 +1,6 @@
-//! Состояние системы для строки меню — звук и батарея — и разбор ответов
-//! программ, которые его сообщают (`pactl`, `upower`; их запускает служба,
-//! с `LC_ALL=C`, чтобы ответ был на одном языке).
+//! Состояние системы для строки меню — звук и батарея — и разбор того, что
+//! сообщают их источники: вывод `pactl` (служба запускает его с `LC_ALL=C`,
+//! чтобы ответ был на одном языке) и файлы ядра `/sys/class/power_supply`.
 
 /// Устройство вывода звука.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +63,40 @@ pub fn parse_sinks(text: &str) -> Vec<Sink> {
     out
 }
 
+/// Громкость и mute устройства по умолчанию из одного ответа `pactl list
+/// sinks` — всё нужное уже есть в этом выводе, отдельные запуски pactl на
+/// каждый вопрос не нужны. Если устройство `default` в выводе не нашлось
+/// (или имя не известно), берётся первое.
+pub fn parse_default_state(text: &str, default: &str) -> Option<(u32, bool)> {
+    let blocks: Vec<&str> = text.split("Sink #").skip(1).collect();
+    let block = if default.is_empty() {
+        blocks.first().copied()
+    } else {
+        blocks
+            .iter()
+            .find(|b| {
+                b.lines().any(|l| {
+                    l.trim()
+                        .strip_prefix("Name:")
+                        .is_some_and(|n| n.trim() == default)
+                })
+            })
+            .copied()
+            .or_else(|| blocks.first().copied())
+    }?;
+    let volume = block
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("Volume:"))
+        .and_then(parse_volume)?;
+    let muted = block
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("Mute:"))
+        .is_some_and(parse_mute);
+    Some((volume, muted))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u32,
@@ -105,28 +139,95 @@ fn human_time(t: &str) -> String {
     }
 }
 
-/// Батарея из ответа `upower -i …/DisplayDevice`. Нет батареи — `None`.
-pub fn parse_upower(text: &str) -> Option<Battery> {
-    let field = |key: &str| {
-        text.lines().find_map(|l| {
-            let (k, v) = l.split_once(':')?;
-            (k.trim() == key).then(|| v.trim().trim_matches('\'').to_string())
-        })
-    };
-    if field("present").as_deref() != Some("yes") {
+/// Показания одной батареи из `/sys/class/power_supply`. Заряд ядро отдаёт
+/// либо энергией (мкВт·ч), либо зарядом (мкА·ч), мощность — соответственно
+/// в мкВт или мкА; на проценты и время это не влияет, единицы сокращаются.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SysBattery {
+    /// Как пишет ядро: `Charging`, `Discharging`, `Full`, `Not charging`,
+    /// `Unknown`.
+    pub status: String,
+    /// Остаток заряда (`energy_now` или `charge_now`).
+    pub now: Option<u64>,
+    /// Полный заряд (`energy_full`, `charge_full` или `charge_full_design`).
+    pub full: Option<u64>,
+    /// Текущая мощность (`power_now` или `current_now`).
+    pub power: Option<u64>,
+    /// Процент от ядра — запасной вариант, когда заряда в единицах нет.
+    pub capacity: Option<u64>,
+}
+
+/// Сводная батарея из показаний ядра: несколько батарей складываются (как
+/// это делал DisplayDevice в UPower). Нет ни одной батареи — `None`.
+pub fn sys_battery(bats: &[SysBattery]) -> Option<Battery> {
+    let present: Vec<&SysBattery> = bats
+        .iter()
+        .filter(|b| b.now.is_some() || b.capacity.is_some())
+        .collect();
+    if present.is_empty() {
         return None;
     }
-    let percent = field("percentage")?
-        .trim_end_matches('%')
-        .split([',', '.'])
-        .next()?
-        .parse()
-        .ok()?;
+    let sum = |f: fn(&SysBattery) -> Option<u64>| present.iter().filter_map(|b| f(b)).sum::<u64>();
+    let (now, full, power) = (sum(|b| b.now), sum(|b| b.full), sum(|b| b.power));
+    let percent = (now * 100).checked_div(full).unwrap_or_else(|| {
+        // Заряда в единицах нет — средний процент из тех, что дало ядро.
+        let caps: Vec<u64> = present.iter().filter_map(|b| b.capacity).collect();
+        (caps.iter().sum::<u64>() / (caps.len() as u64).max(1)).min(100)
+    });
+    let percent = u32::try_from(percent).unwrap_or(100);
+    let any = |s: &str| present.iter().any(|b| b.status == s);
+    let state = if any("Discharging") {
+        "discharging"
+    } else if any("Charging") {
+        "charging"
+    } else if present.iter().all(|b| b.status == "Full") {
+        "fully-charged"
+    } else if any("Not charging") {
+        "pending-charge"
+    } else {
+        ""
+    };
     Some(Battery {
         percent,
-        state: field("state").unwrap_or_default(),
-        icon: field("icon-name").unwrap_or_else(|| "battery-symbolic".into()),
-        time: field("time to empty").or_else(|| field("time to full")),
+        state: state.to_string(),
+        icon: battery_icon(percent, state),
+        time: battery_time(state, now, full, power),
+    })
+}
+
+/// Имя значка как у UPower: уровень десятками, с `-charging` при зарядке.
+fn battery_icon(percent: u32, state: &str) -> String {
+    let tier = percent / 10 * 10;
+    match state {
+        "fully-charged" => "battery-full-charged-symbolic".to_string(),
+        "charging" if percent >= 100 => "battery-full-charging-symbolic".to_string(),
+        "charging" => format!("battery-level-{tier}-charging-symbolic"),
+        _ if tier == 0 => "battery-empty-symbolic".to_string(),
+        _ => format!("battery-level-{tier}-symbolic"),
+    }
+}
+
+/// Время до полного разряда или заряда в том же виде, в котором его выдавал
+/// UPower («2,5 hours») — [`human_time`] превращает его в «2,5 ч».
+fn battery_time(state: &str, now: u64, full: u64, power: u64) -> Option<String> {
+    if power == 0 {
+        return None;
+    }
+    let left = match state {
+        "discharging" => Some(now),
+        "charging" => full.checked_sub(now),
+        _ => None,
+    }?;
+    if left == 0 {
+        return None;
+    }
+    let secs = left * 3600 / power;
+    Some(if secs >= 3600 {
+        format!("{:.1} hours", secs as f64 / 3600.0).replace('.', ",")
+    } else if secs >= 60 {
+        format!("{} minutes", secs / 60)
+    } else {
+        format!("{secs} seconds")
     })
 }
 
@@ -158,19 +259,98 @@ mod tests {
     }
 
     #[test]
+    fn default_sink_state() {
+        // Один вывод `pactl list sinks` даёт и устройства, и громкость с
+        // mute устройства по умолчанию — отдельные запуски pactl не нужны.
+        let list = "Sink #56\n\tState: RUNNING\n\tName: alsa_output.analog\n\tMute: no\n\
+                    \tVolume: front-left: 45875 /  70% / -9.31 dB,\n\t        front-right: 45875 /  70% / -9.31 dB\n\
+                    \tBase Volume: 65536 / 100% / 0.00 dB\n\
+                    Sink #57\n\tName: hdmi\n\tMute: yes\n\tVolume: front-left: 65536 / 100% / 0.00 dB\n";
+        assert_eq!(parse_default_state(list, "hdmi"), Some((100, true)));
+        assert_eq!(
+            parse_default_state(list, "alsa_output.analog"),
+            Some((70, false))
+        );
+        // Устройство по умолчанию не найдено или не известно — первое.
+        assert_eq!(parse_default_state(list, "нет-такого"), Some((70, false)));
+        assert_eq!(parse_default_state(list, ""), Some((70, false)));
+        assert_eq!(parse_default_state("", "x"), None);
+    }
+
+    #[test]
     fn battery() {
-        let full = "  native-path:          BAT0\n  power supply:         yes\n    present:             yes\n    state:               fully-charged\n    percentage:          100%\n    icon-name:          'battery-full-charged-symbolic'\n";
-        let b = parse_upower(full).unwrap();
-        assert_eq!(b.percent, 100);
+        let one = [SysBattery {
+            status: "Discharging".into(),
+            now: Some(2_050_000),
+            full: Some(5_000_000),
+            power: Some(800_000),
+            capacity: Some(41),
+        }];
+        let b = sys_battery(&one).unwrap();
+        assert_eq!(b.percent, 41);
+        assert_eq!(b.state, "discharging");
+        assert_eq!(b.icon, "battery-level-40-symbolic");
+        // 2,05 М мкВт·ч / 0,8 М мкВт ≈ 2,56 ч → «2,6 hours» → «2,6 ч».
+        assert_eq!(b.state_text(), "От аккумулятора, осталось 2,6 ч");
+
+        let full = [SysBattery {
+            status: "Full".into(),
+            now: Some(100),
+            full: Some(100),
+            ..SysBattery::default()
+        }];
+        let b = sys_battery(&full).unwrap();
+        assert_eq!(b.state, "fully-charged");
         assert_eq!(b.icon, "battery-full-charged-symbolic");
         assert_eq!(b.state_text(), "Полностью заряжен");
 
-        let low = "    present:             yes\n    state:               discharging\n    time to empty:       2,5 hours\n    percentage:          41,5%\n    icon-name:          'battery-level-40-symbolic'\n";
-        let b = parse_upower(low).unwrap();
-        assert_eq!(b.percent, 41);
-        assert_eq!(b.state_text(), "От аккумулятора, осталось 2,5 ч");
+        let charging = [SysBattery {
+            status: "Charging".into(),
+            now: Some(40),
+            full: Some(100),
+            power: Some(60),
+            capacity: None,
+        }];
+        let b = sys_battery(&charging).unwrap();
+        assert_eq!(b.state, "charging");
+        assert_eq!(b.time.as_deref(), Some("1,0 hours"));
+        assert_eq!(b.icon, "battery-level-40-charging-symbolic");
+        assert_eq!(b.state_text(), "Заряжается, до полного 1,0 ч");
 
-        assert_eq!(parse_upower("    present:             no\n"), None);
-        assert_eq!(parse_upower(""), None);
+        // Две батареи складываются, как это делал DisplayDevice.
+        let two = [
+            SysBattery {
+                status: "Discharging".into(),
+                now: Some(30),
+                full: Some(100),
+                power: Some(30),
+                capacity: None,
+            },
+            SysBattery {
+                status: "Discharging".into(),
+                now: Some(50),
+                full: Some(100),
+                power: Some(30),
+                capacity: None,
+            },
+        ];
+        let b = sys_battery(&two).unwrap();
+        assert_eq!(b.percent, 40);
+        assert_eq!(b.time.as_deref(), Some("1,3 hours"));
+
+        // Запасной вариант: только процент от ядра.
+        let cap = [SysBattery {
+            status: "Unknown".into(),
+            capacity: Some(77),
+            ..SysBattery::default()
+        }];
+        let b = sys_battery(&cap).unwrap();
+        assert_eq!(b.percent, 77);
+        assert_eq!(b.state, "");
+        assert_eq!(b.icon, "battery-level-70-symbolic");
+        assert_eq!(b.state_text(), "Состояние неизвестно");
+
+        assert_eq!(sys_battery(&[]), None);
+        assert_eq!(sys_battery(&[SysBattery::default()]), None);
     }
 }
