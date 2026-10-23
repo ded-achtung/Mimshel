@@ -28,6 +28,8 @@ const LOG_LIMIT: u64 = 1024 * 1024;
 pub fn run() -> ! {
     if crate::ui::daemon_running() {
         eprintln!("Служба уже запущена.");
+        // И в журнал: запуск при входе или из shell apply иначе выходит молча.
+        log("служба уже запущена — второй сторож не нужен, выхожу");
         std::process::exit(0);
     }
     match shell_x11::ServerWatch::connect() {

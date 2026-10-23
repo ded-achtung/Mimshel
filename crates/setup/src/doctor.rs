@@ -114,18 +114,18 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "macos-look build-appmenu",
         );
     }
-    let theme_dir = paths.themes.join(&n.theme);
+    let theme_dir = paths.themes.join(&cfg.gtk_theme);
     add(
         "install",
-        &format!("тема {}", n.theme),
+        &format!("тема {}", cfg.gtk_theme),
         theme_dir.join("gtk-3.0").is_dir(),
-        "macos-look install",
+        "поставьте тему в ~/.themes",
     );
     add(
         "install",
-        &format!("оформление окон {}", n.theme),
+        &format!("оформление окон {}", cfg.gtk_theme),
         theme_dir.join("xfwm4").is_dir(),
-        "macos-look install",
+        "поставьте тему в ~/.themes",
     );
     add(
         "install",
@@ -141,16 +141,25 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     );
     add(
         "install",
-        &format!("курсор {}", n.cursor),
-        paths.icons.join(&n.cursor).is_dir(),
-        "macos-look install",
+        &format!("курсор {}", cfg.cursor_theme),
+        paths.icons.join(&cfg.cursor_theme).is_dir(),
+        "поставьте курсор в ~/.local/share/icons",
     );
-    let wallpaper = paths.wallpapers.join(format!("{}.jpg", n.wallpaper));
+    let (sw, sh) = crate::lock::screen_size();
+    let wallpaper = shell_wallpaper::Style::parse(&cfg.wallpaper).map_or_else(
+        || std::path::PathBuf::from(&cfg.wallpaper),
+        |st| {
+            home().join(format!(
+                ".local/share/shell/wallpapers/{}-{sw}x{sh}.png",
+                st.name()
+            ))
+        },
+    );
     add(
         "install",
-        &format!("обои {}", n.wallpaper),
+        &format!("обои {}", cfg.wallpaper),
         wallpaper.exists(),
-        "macos-look install",
+        "shell apply wallpaper",
     );
     add(
         "install",
@@ -163,9 +172,9 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     let xs = |p: &str| xget("xsettings", p);
     add(
         "look",
-        "тема GTK",
-        xs("/Net/ThemeName").as_deref() == Some(&n.theme),
-        "",
+        &format!("тема программ: {}", cfg.gtk_theme),
+        xs("/Net/ThemeName").as_deref() == Some(&cfg.gtk_theme),
+        "shell apply look",
     );
     add(
         "look",
@@ -187,9 +196,9 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     }
     add(
         "look",
-        "курсор",
-        xs("/Gtk/CursorThemeName").as_deref() == Some(&n.cursor),
-        "",
+        &format!("курсор: {}", cfg.cursor_theme),
+        xs("/Gtk/CursorThemeName").as_deref() == Some(&cfg.cursor_theme),
+        "shell apply look",
     );
     add(
         "look",
@@ -199,9 +208,9 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     );
     add(
         "look",
-        "тема окон",
-        xget("xfwm4", "/general/theme").as_deref() == Some(&n.theme),
-        "",
+        &format!("тема окон: {}", cfg.gtk_theme),
+        xget("xfwm4", "/general/theme").as_deref() == Some(&cfg.gtk_theme),
+        "shell apply look",
     );
     add(
         "look",
@@ -230,8 +239,9 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "тема для GTK4-программ",
         gtk4.is_symlink()
             && gtk4.exists()
-            && std::fs::read_link(&gtk4).is_ok_and(|t| t.to_string_lossy().contains(&n.theme)),
-        "",
+            && std::fs::read_link(&gtk4)
+                .is_ok_and(|t| t.to_string_lossy().contains(&cfg.gtk_theme)),
+        "shell apply look",
     );
 
     // Обои на каждом мониторе, где они заданы.
@@ -242,13 +252,13 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             &format!("/backdrop/screen0/{m}/workspace0/last-image"),
         )
     };
-    let mons: Vec<String> = monitors()
+    let mons: Vec<String> = crate::sys::monitors()
         .into_iter()
         .filter(|m| last_image(m).is_some())
         .collect();
     add(
         "wallpaper",
-        "обои на всех мониторах",
+        &format!("обои на всех мониторах: {}", cfg.wallpaper),
         !mons.is_empty()
             && mons
                 .iter()
@@ -627,28 +637,6 @@ pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
         }
     }
     (!parts.is_empty()).then_some(parts)
-}
-
-/// Мониторы: из xrandr и из настроек обоев Xfce.
-fn monitors() -> Vec<String> {
-    let mut found: Vec<String> = output_any(&["xrandr", "--listmonitors"])
-        .lines()
-        .skip(1)
-        .filter_map(|l| l.split_whitespace().last())
-        .map(|m| format!("monitor{m}"))
-        .collect();
-    for line in output_any(&["xfconf-query", "-c", "xfce4-desktop", "-l"]).lines() {
-        let parts: Vec<&str> = line.split('/').collect();
-        if parts.len() > 3 && parts[1] == "backdrop" && parts[3].starts_with("monitor") {
-            found.push(parts[3].to_string());
-        }
-    }
-    found.sort();
-    found.dedup();
-    if found.is_empty() {
-        found.push("monitor0".into());
-    }
-    found
 }
 
 /// Есть ли в списке запуска сеанса строка с такой командой.

@@ -191,6 +191,15 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      "Colloid-shell"` — наша надстройка (`shell apply icons`): вместо яблока в `start-here` — планета,
      значки сети `nm-*` — из WhiteSur-dark (просьба пользователя: Colloid-овский неудобен). Часть значков
      Colloid похожа на macOS (Safari, «Музыка», App Store, ⌘) — пользователь решил пока оставить.
+   - тема окон и программ — **Colloid-Dark** (`~/.themes`, собрана `install.sh -c dark --tweaks normal`:
+     обычные кнопки окна вместо «светофора»; нужен `sassc`, поставлен через pacman), курсор —
+     **Colloid-cursors** (из `cursors/` набора значков). `[look] gtk_theme`, `cursor_theme`;
+     `shell apply look` ставит xsettings, xfwm4, курсор для X11 (`icons/default/index.theme`) и ссылки
+     GTK4 в `~/.config/gtk-4.0` (чужие обычные файлы там не трогает).
+   - обои — **свои, рисует программа** (`crates/wallpaper`: `space` «Космос» — выбор пользователя,
+     `waves`, `aurora`; или путь к картинке в `[look] wallpaper`). `shell apply wallpaper` рисует под экран
+     в `~/.local/share/shell/wallpapers/ИМЯ-ШxВ.png` (~2–3 с, один раз) и ставит на все мониторы;
+     фон блокировки — из них же. `macos-look apply look/wallpaper` передают это в shell.
 7. **Окно настроек** — ползунки и переключатели вместо правки файла (как «Системные настройки»).
 
 ### Первая задача: Spotlight

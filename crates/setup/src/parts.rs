@@ -27,6 +27,8 @@ pub const APPLY_PARTS: &[&str] = &[
     "lock",
     "power",
     "icons",
+    "look",
+    "wallpaper",
     "service",
 ];
 
@@ -82,6 +84,12 @@ pub fn apply(config: &Config, look: &Look, parts: &[&str]) -> Result<(), String>
     // Значки — до перезапуска службы: тему она читает при запуске.
     if want("icons") {
         plan.icons();
+    }
+    if want("look") {
+        plan.look();
+    }
+    if want("wallpaper") {
+        plan.wallpaper();
     }
     // Служба читает настройки при запуске — перезапускаем всегда.
     plan.service();
@@ -381,7 +389,7 @@ impl Plan<'_> {
         }
         // Фон рисуем заранее: при блокировке он будет готов сразу.
         let (w, h) = crate::lock::screen_size();
-        let bg = crate::lock::background(self.look, w, h);
+        let bg = crate::lock::background(self.look, &self.config.wallpaper, w, h);
         println!("  фон: {}", bg.display());
         let bin = self.paths.shell_bin.display().to_string();
         xset(
@@ -563,7 +571,113 @@ fn power() {
     }
 }
 
+/// Файл обоев: свои (`space`, `waves`, `aurora`) рисуются под экран `w`×`h`
+/// один раз и хранятся в `~/.local/share/shell/wallpapers`; иначе — путь к
+/// картинке как есть. Нарисовать не вышло или файла нет — `None`.
+pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf> {
+    let Some(style) = shell_wallpaper::Style::parse(value) else {
+        let path = std::path::PathBuf::from(value);
+        return path.is_file().then_some(path);
+    };
+    let (w, h) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
+    let out = home().join(format!(
+        ".local/share/shell/wallpapers/{}-{w}x{h}.png",
+        style.name()
+    ));
+    if out.exists() {
+        return Some(out);
+    }
+    let png = shell_wallpaper::draw(style, w, h)?.encode_png().ok()?;
+    std::fs::create_dir_all(out.parent()?).ok()?;
+    let tmp = out.with_extension("png.tmp");
+    std::fs::write(&tmp, png).ok()?;
+    std::fs::rename(&tmp, &out).ok()?;
+    Some(out)
+}
+
 impl Plan<'_> {
+    /// Тема окон и программ (GTK, xfwm4, GTK4) и курсор.
+    fn look(&self) {
+        let c = self.config;
+        println!(
+            "▶ Оформление: окна {}, курсор {}",
+            c.gtk_theme, c.cursor_theme
+        );
+        let theme_dir = self.paths.themes.join(&c.gtk_theme);
+        if !theme_dir.join("index.theme").exists() && !theme_dir.join("gtk-3.0").is_dir() {
+            println!(
+                "✘ Нет темы {} в {} — поставьте её (Colloid: \
+                 https://github.com/vinceliuice/Colloid-gtk-theme)",
+                c.gtk_theme,
+                self.paths.themes.display()
+            );
+            return;
+        }
+        xset("xsettings", "/Net/ThemeName", "string", &c.gtk_theme);
+        xset("xfwm4", "/general/theme", "string", &c.gtk_theme);
+        xset(
+            "xsettings",
+            "/Gtk/CursorThemeName",
+            "string",
+            &c.cursor_theme,
+        );
+        // Курсор для X11 и программ не на GTK — тема «default».
+        write(
+            &self.paths.icons.join("default/index.theme"),
+            &format!("[Icon Theme]\nInherits={}\n", c.cursor_theme),
+        );
+        // Программы на GTK4 (libadwaita) берут оформление из ~/.config/gtk-4.0.
+        let gtk4 = home().join(".config/gtk-4.0");
+        for name in ["gtk.css", "gtk-dark.css", "assets"] {
+            let target = theme_dir.join("gtk-4.0").join(name);
+            if !target.exists() {
+                continue;
+            }
+            let link = gtk4.join(name);
+            if std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()) {
+                continue;
+            }
+            // Свой обычный файл человека не трогаем — только наши ссылки.
+            if link.exists() && !link.is_symlink() {
+                println!("⚠ {} — обычный файл, не трогаю", link.display());
+                continue;
+            }
+            let _ = std::fs::create_dir_all(&gtk4);
+            remove(&link);
+            if let Err(e) = std::os::unix::fs::symlink(&target, &link) {
+                println!("✘ Не связать {}: {e}", link.display());
+            }
+        }
+    }
+
+    /// Обои на все мониторы (и фон блокировки — из них же).
+    fn wallpaper(&self) {
+        let (w, h) = crate::lock::screen_size();
+        println!("▶ Обои: {} ({w}x{h})", self.config.wallpaper);
+        let Some(file) = wallpaper_file(&self.config.wallpaper, w, h) else {
+            println!(
+                "✘ Обои «{}» не нарисованы и не найдены",
+                self.config.wallpaper
+            );
+            return;
+        };
+        let file = file.display().to_string();
+        for m in crate::sys::monitors() {
+            let base = format!("/backdrop/screen0/{m}/workspace0");
+            xset(
+                "xfce4-desktop",
+                &format!("{base}/last-image"),
+                "string",
+                &file,
+            );
+            // 5 — растянуть с сохранением пропорций на весь экран.
+            xset("xfce4-desktop", &format!("{base}/image-style"), "int", "5");
+            xset("xfce4-desktop", &format!("{base}/color-style"), "int", "0");
+        }
+        let bg = crate::lock::background(self.look, &self.config.wallpaper, w, h);
+        println!("  фон блокировки: {}", bg.display());
+    }
+
     /// Тема значков для всех программ (xsettings) и, если выбрана наша
     /// надстройка над Colloid, — сама надстройка.
     fn icons(&self) {

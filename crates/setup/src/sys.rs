@@ -389,6 +389,28 @@ pub fn xkb_query(key: &str) -> String {
         .to_string()
 }
 
+/// Мониторы: из xrandr и из настроек обоев Xfce.
+pub fn monitors() -> Vec<String> {
+    let mut found: Vec<String> = output_any(&["xrandr", "--listmonitors"])
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split_whitespace().last())
+        .map(|m| format!("monitor{m}"))
+        .collect();
+    for line in output_any(&["xfconf-query", "-c", "xfce4-desktop", "-l"]).lines() {
+        let parts: Vec<&str> = line.split('/').collect();
+        if parts.len() > 3 && parts[1] == "backdrop" && parts[3].starts_with("monitor") {
+            found.push(parts[3].to_string());
+        }
+    }
+    found.sort();
+    found.dedup();
+    if found.is_empty() {
+        found.push("monitor0".into());
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

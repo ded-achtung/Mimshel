@@ -174,18 +174,24 @@ const BACKGROUND_VERSION: u32 = 1;
 /// Картинка фона под этот экран. Рисуется заранее (`shell apply lock`) или
 /// при блокировке, если обои, аватар, имя или экран поменялись. Не
 /// получилось — фон macos-look, иначе просто обои: блокировка важнее вида.
-pub fn background(look: &Look, w: i64, h: i64) -> PathBuf {
-    let wallpaper = crate::look::Paths::new()
+/// `wallpaper` — обои из настроек (`look.wallpaper`): свои по имени или путь.
+pub fn background(look: &Look, wallpaper: &str, w: i64, h: i64) -> PathBuf {
+    let sonoma = crate::look::Paths::new()
         .wallpapers
         .join(format!("{}.jpg", look.names().wallpaper));
     // Падение при рисовании не должно помешать заблокировать экран.
-    match std::panic::catch_unwind(|| draw_background(look, &wallpaper, w, h)) {
+    let drawn = std::panic::catch_unwind(|| {
+        let wallpaper = crate::parts::wallpaper_file(wallpaper, w, h)
+            .ok_or_else(|| "обои не нарисованы".to_string())?;
+        draw_background(look, &wallpaper, w, h)
+    });
+    match drawn {
         Ok(Ok(path)) => return path,
         Ok(Err(e)) => log(&format!("фон блокировки не нарисован: {e}")),
         Err(_) => log("фон блокировки: сбой при рисовании"),
     }
     let old = home().join(format!(".cache/macos-look/lock/bg-{w}x{h}.png"));
-    if old.exists() { old } else { wallpaper }
+    if old.exists() { old } else { sonoma }
 }
 
 /// Нарисовать фон (если готового с тем же ключом нет) и вернуть путь к нему.
@@ -256,13 +262,13 @@ pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<
 
 /// Заблокировать экран и держать блокировку, пока не введён верный пароль.
 /// Возвращает код выхода i3lock (0 — разблокировали паролем).
-pub fn supervise(look: &Look) -> i32 {
+pub fn supervise(look: &Look, wallpaper: &str) -> i32 {
     if running("i3lock") {
         return 0;
     }
     let (w, h) = screen_size();
     let l = Layout::new(w, h);
-    let bg = background(look, w, h);
+    let bg = background(look, wallpaper, w, h);
     let args = lock_args(&bg, &l, look.get("lock", "placeholder"), locker_patched());
     supervise_with(
         || {

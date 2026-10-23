@@ -76,7 +76,8 @@ fn main() {
         }
         Some("lock") if args.len() == 2 && args[1] == "--nofork" => {
             let look = shell_setup::look::Look::load();
-            std::process::exit(shell_setup::lock::supervise(&look))
+            let wallpaper = ui::load_config().wallpaper;
+            std::process::exit(shell_setup::lock::supervise(&look, &wallpaper))
         }
         Some("backup") if args.len() <= 2 => {
             std::process::exit(setup::backup(args.get(1).map(String::as_str)))

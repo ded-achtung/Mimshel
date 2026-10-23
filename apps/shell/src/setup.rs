@@ -20,6 +20,8 @@ const OWN: &[&str] = &[
     "lock",
     "power",
     "icons",
+    "look",
+    "wallpaper",
     "service",
 ];
 
@@ -150,6 +152,8 @@ pub fn set(key: &str, input: &str) -> i32 {
         "dock" if !config.dock => vec!["dock"],
         // Тема значков — для всех программ (xsettings), не только для shell.
         "look" if name == "icon_theme" => vec!["icons"],
+        "look" if name == "wallpaper" => vec!["wallpaper"],
+        "look" if name == "gtk_theme" || name == "cursor_theme" => vec!["look"],
         // Строка меню: и панель Xfce, и знак меню ставит apply menubar.
         "menubar" => vec!["menubar"],
         _ => vec!["service"],

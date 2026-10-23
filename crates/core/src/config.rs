@@ -28,6 +28,11 @@ pub struct Config {
     pub font: String,
     /// Тема иконок.
     pub icon_theme: String,
+    /// Тема окон и программ (GTK и xfwm4), курсор и обои: `space`, `waves`,
+    /// `aurora` — свои, нарисованные программой, или путь к картинке.
+    pub gtk_theme: String,
+    pub cursor_theme: String,
+    pub wallpaper: String,
     /// Команда терминала для программ с `Terminal=true`; программа идёт после неё.
     pub terminal: Vec<String>,
     /// Сетка Launchpad: столбцы, строки и размер иконки.
@@ -70,6 +75,9 @@ impl Default for Config {
         Config {
             font: "Inter".into(),
             icon_theme: "WhiteSur-dark-mac".into(),
+            gtk_theme: "Colloid-Dark".into(),
+            cursor_theme: "Colloid-cursors".into(),
+            wallpaper: "space".into(),
             terminal: vec!["xfce4-terminal".into(), "-x".into()],
             launchpad_columns: 7,
             launchpad_rows: 4,
@@ -273,6 +281,15 @@ impl Config {
         if let Some(v) = text("look", "font") {
             c.font = v;
         }
+        if let Some(v) = text("look", "gtk_theme") {
+            c.gtk_theme = v;
+        }
+        if let Some(v) = text("look", "cursor_theme") {
+            c.cursor_theme = v;
+        }
+        if let Some(v) = text("look", "wallpaper") {
+            c.wallpaper = v;
+        }
         if let Some(v) = text("look", "icon_theme") {
             c.icon_theme = v;
         }
@@ -363,9 +380,13 @@ spotlight = {p_spotlight}
 launchpad = {p_launchpad}
 
 [look]
-# Шрифт и тема иконок.
+# Шрифт, тема значков, тема окон, курсор и обои (space, waves, aurora —
+# свои, нарисованные программой, или путь к картинке). Применить: shell apply look wallpaper
 font = {font}
 icon_theme = {theme}
+gtk_theme = {gtk_theme}
+cursor_theme = {cursor_theme}
+wallpaper = {wallpaper}
 
 [menubar]
 # Высота в точках, значок главного меню (shell-logo — наша планета; имя в теме или путь к файлу),
@@ -396,6 +417,9 @@ terminal = {terminal}
 ",
             font = s(&self.font),
             theme = s(&self.icon_theme),
+            gtk_theme = s(&self.gtk_theme),
+            cursor_theme = s(&self.cursor_theme),
+            wallpaper = s(&self.wallpaper),
             height = self.menubar_height,
             menu_icon = s(&self.menu_icon),
             clock = s(&self.clock_format),
@@ -456,6 +480,15 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("parts.launchpad", "\"shell\" или \"rofi\""),
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),
+    (
+        "look.gtk_theme",
+        "тема окон и программ, например Colloid-Dark",
+    ),
+    ("look.cursor_theme", "курсор, например Colloid-cursors"),
+    (
+        "look.wallpaper",
+        "обои: space, waves, aurora или путь к картинке",
+    ),
     ("menubar.height", "высота строки меню, 16–128"),
     (
         "menubar.menu_icon",
@@ -499,7 +532,13 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 .ok_or_else(|| format!("нет части {name}"))?;
             words(&["shell", old])
         }
-        "look.font" | "look.icon_theme" | "menubar.menu_icon" | "menubar.clock_format" => {
+        "look.font"
+        | "look.icon_theme"
+        | "look.gtk_theme"
+        | "look.cursor_theme"
+        | "look.wallpaper"
+        | "menubar.menu_icon"
+        | "menubar.clock_format" => {
             if input.is_empty() {
                 Err("пустое значение".into())
             } else {
