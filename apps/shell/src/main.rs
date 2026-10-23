@@ -28,7 +28,7 @@ const HELP: &str = "\
                         нарисовать окно с этим текстом в картинку
   shell doctor [--fix]  проверить, что всё на месте; --fix — починить
   shell config          где файл настроек и что в нём можно менять
-  shell set КЛЮЧ ЗНАЧЕНИЕ
+  shell set [--no-apply] КЛЮЧ ЗНАЧЕНИЕ
                         поменять настройку и применить (например: shell set dock.icon_size 56,
                         shell set parts.dock plank — вернуть Plank)
   shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
@@ -58,8 +58,11 @@ fn main() {
         Some("doctor") if args.len() == 1 || (args.len() == 2 && args[1] == "--fix") => {
             std::process::exit(setup::doctor(args.len() == 2))
         }
+        Some("set") if args.len() >= 4 && args[1] == "--no-apply" => {
+            std::process::exit(setup::set(&args[2], &args[3..].join(" "), false))
+        }
         Some("set") if args.len() >= 3 => {
-            std::process::exit(setup::set(&args[1], &args[2..].join(" ")))
+            std::process::exit(setup::set(&args[1], &args[2..].join(" "), true))
         }
         Some("apply") => std::process::exit(setup::apply_cmd(&args[1..])),
         Some("config") => std::process::exit(setup::show_config()),

@@ -74,7 +74,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             font: "Inter".into(),
-            icon_theme: "WhiteSur-dark-mac".into(),
+            icon_theme: "Colloid-shell".into(),
             gtk_theme: "Colloid-Dark".into(),
             cursor_theme: "Colloid-cursors".into(),
             wallpaper: "space".into(),

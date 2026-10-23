@@ -27,6 +27,22 @@ const PACKAGES: &[&str] = &[
     "appmenu-gtk-module",
     "i3lock-color",
 ];
+/// Пакеты, которые ставит наш установщик (`install.sh`) — на машине без
+/// macos-look проверяются они.
+const OWN_PACKAGES: &[&str] = &[
+    "inter-font",
+    "zenity",
+    "xss-lock",
+    "xorg-xset",
+    "xorg-xrandr",
+    "xorg-xkbcomp",
+    "xorg-xinput",
+    "appmenu-gtk-module",
+    "i3lock-color",
+    "sassc",
+    "network-manager-applet",
+    "xfce4-taskmanager",
+];
 /// Глобальное меню — собирает `macos-look build-appmenu`.
 const APPMENU_PACKAGES: &[&str] = &[
     "vala-panel-appmenu-xfce",
@@ -88,8 +104,16 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "войдите в систему в окне ВМ",
     );
 
+    // Стоит ли macos-look: без него (новая установка через install.sh) его
+    // пакеты, WhiteSur, rofi и скрытие программ не нужны.
+    let ml = paths.tool.exists();
+    let (packages, appmenu, hint): (&[&str], &[&str], &str) = if ml {
+        (PACKAGES, APPMENU_PACKAGES, "macos-look install")
+    } else {
+        (OWN_PACKAGES, &[], "./install.sh в папке проекта")
+    };
     // Пакеты: одним вызовом pacman — установленные он печатает.
-    let all: Vec<&str> = PACKAGES.iter().chain(APPMENU_PACKAGES).copied().collect();
+    let all: Vec<&str> = packages.iter().chain(appmenu).copied().collect();
     let mut q = vec!["pacman", "-Q"];
     q.extend(&all);
     let installed = output_any(&q);
@@ -98,15 +122,10 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             .lines()
             .any(|l| l.split_whitespace().next() == Some(p))
     };
-    for p in PACKAGES {
-        add(
-            "install",
-            &format!("пакет {p}"),
-            have(p),
-            "macos-look install",
-        );
+    for p in packages {
+        add("install", &format!("пакет {p}"), have(p), hint);
     }
-    for p in APPMENU_PACKAGES {
+    for p in appmenu {
         add(
             "install",
             &format!("пакет {p}"),
@@ -127,18 +146,20 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         theme_dir.join("xfwm4").is_dir(),
         "поставьте тему в ~/.themes",
     );
-    add(
-        "install",
-        &format!("иконки {}", n.icons_base),
-        paths.icons.join(&n.icons_base).is_dir(),
-        "macos-look install",
-    );
-    add(
-        "look",
-        &format!("надстройка иконок {}", n.icons),
-        paths.icons.join(&n.icons).join("index.theme").exists(),
-        "",
-    );
+    if ml {
+        add(
+            "install",
+            &format!("иконки {}", n.icons_base),
+            paths.icons.join(&n.icons_base).is_dir(),
+            "macos-look install",
+        );
+        add(
+            "look",
+            &format!("надстройка иконок {}", n.icons),
+            paths.icons.join(&n.icons).join("index.theme").exists(),
+            "",
+        );
+    }
     add(
         "install",
         &format!("курсор {}", cfg.cursor_theme),
@@ -231,7 +252,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "look",
         "модуль меню не включён «на лету» (роняет программы)",
         xs("/Gtk/Modules").is_none(),
-        "macos-look apply look",
+        "shell apply look",
     );
     let gtk4 = home().join(".config/gtk-4.0/gtk.css");
     add(
@@ -272,13 +293,13 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "panel",
             "строка меню — shell: панель Xfce не запускается при входе",
             panel_session_slot(PANEL_OFF) && !panel_session_slot(&["xfce4-panel"]),
-            "macos-look apply panel",
+            "shell apply menubar",
         );
         add(
             "panel",
             "панель Xfce остановлена",
             !running("xfce4-panel"),
-            "macos-look apply panel",
+            "shell apply menubar",
         );
     } else {
         let ids = xget_list("xfce4-panel", "/panels/panel-1/plugin-ids");
@@ -303,7 +324,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "panel",
             "панель Xfce запускается при входе",
             !panel_session_slot(PANEL_OFF),
-            "macos-look apply panel",
+            "shell apply menubar",
         );
     }
 
@@ -322,20 +343,20 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "notify",
             "уведомления показывает shell",
             bus_owner("org.freedesktop.Notifications") == "shell",
-            "macos-look apply notify",
+            "shell apply notify",
         );
         add(
             "notify",
             "xfce4-notifyd не запускается (служба замаскирована)",
             masked,
-            "macos-look apply notify",
+            "shell apply notify",
         );
     } else {
         add(
             "notify",
             "xfce4-notifyd не замаскирован",
             !masked,
-            "macos-look apply notify",
+            "shell apply notify",
         );
     }
     add(
@@ -349,7 +370,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "panel",
             "nm-applet — значок современным способом (--indicator)",
             read(&paths.autostart.join("nm-applet.desktop")).contains("--indicator"),
-            "macos-look apply panel",
+            "shell apply menubar",
         );
     }
 
@@ -372,7 +393,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     }
     let launchpad = paths.applications.join("macos-launchpad.desktop");
     add("menu", "значок Launchpad", launchpad.exists(), "");
-    for app in look.hidden_apps() {
+    for app in look.hidden_apps().into_iter().filter(|_| ml) {
         if Path::new("/usr/share/applications")
             .join(format!("{app}.desktop"))
             .exists()
@@ -385,7 +406,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             );
         }
     }
-    for t in ["spotlight", "launchpad"] {
+    for t in ["spotlight", "launchpad"].into_iter().filter(|_| ml) {
         add(
             "menu",
             &format!("оформление {t}"),
@@ -517,7 +538,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "shell",
             "служба shell в сеансе рабочего стола (не по SSH)",
             guard.first().is_some_and(|&p| in_desktop_session(p)),
-            "macos-look apply menu из терминала рабочего стола или перезайдите в сеанс",
+            "shell apply service из терминала рабочего стола или перезайдите в сеанс",
         );
         if let Some(path) = config {
             let error = match std::fs::read_to_string(path) {
@@ -542,7 +563,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
                     "shell",
                     &format!("{what} принимает shell"),
                     bus_owner(name) == "shell",
-                    "macos-look apply menu",
+                    "shell apply service",
                 );
             }
         }
@@ -566,13 +587,13 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "dock",
             "док — shell, Plank не запущен",
             !running("plank"),
-            "macos-look apply dock",
+            "shell apply dock",
         );
         add(
             "dock",
             "автозапуск Plank выключен",
             !paths.autostart.join("plank.desktop").exists(),
-            "macos-look apply dock",
+            "shell apply dock",
         );
     } else {
         add("dock", "Plank запущен", running("plank"), "");

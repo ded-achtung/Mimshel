@@ -109,7 +109,9 @@ fn print_check(c: &Check) {
 }
 
 /// `shell set раздел.ключ значение`: записать в файл настроек и применить.
-pub fn set(key: &str, input: &str) -> i32 {
+/// `apply` = false (`shell set --no-apply`) — только записать: установщик
+/// пишет несколько настроек и применяет всё разом.
+pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     let value = match setting_value(key, input) {
         Ok(v) => v,
         Err(e) => {
@@ -135,14 +137,19 @@ pub fn set(key: &str, input: &str) -> i32 {
         return 1;
     }
     println!("✔ {key} = {}", input.trim());
+    if section == "parts"
+        && let Err(e) = set_macos_look_engine(name, input.trim())
+    {
+        println!("⚠ Не записать в конфиг macos-look: {e}");
+    }
+    if !apply {
+        return 0;
+    }
     let config = load_config();
     // Что применить: часть, которую переключили, или прежнюю программу, чьи
     // настройки поменялись (Plank, панель Xfce). Служба перезапускается всегда.
     let parts: Vec<&str> = match section {
         "parts" => {
-            if let Err(e) = set_macos_look_engine(name, input.trim()) {
-                println!("⚠ Не записать в конфиг macos-look: {e}");
-            }
             vec![if name == "spotlight" || name == "launchpad" {
                 "launchers"
             } else {

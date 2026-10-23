@@ -621,6 +621,27 @@ impl Plan<'_> {
             "string",
             &c.cursor_theme,
         );
+        xset("xsettings", "/Gtk/CursorThemeSize", "int", "24");
+        // Шрифт и сглаживание, как в macOS: мягкие края, лёгкая подгонка.
+        let font = format!("{} 10", c.font);
+        xset("xsettings", "/Gtk/FontName", "string", &font);
+        xset("xsettings", "/Xft/Antialias", "int", "1");
+        xset("xsettings", "/Xft/HintStyle", "string", "hintslight");
+        xset("xsettings", "/Xft/RGBA", "string", "rgb");
+        // Меню программ — в строке меню. Модуль appmenu подключается при входе
+        // (GTK_MODULES); через xsettings /Gtk/Modules — нельзя, роняет
+        // запущенные программы (урок 4).
+        xreset("xsettings", "/Gtk/Modules");
+        xset("xsettings", "/Gtk/ShellShowsMenubar", "bool", "true");
+        // Терминалу нужна своя строка меню — иначе отдавать наверх нечего.
+        xset("xfce4-terminal", "/misc-menubar-default", "bool", "true");
+        // Окна: заголовок по центру, кнопки слева, тени и прозрачность.
+        let title = format!("{} Semi-Bold 10", c.font);
+        xset("xfwm4", "/general/title_font", "string", &title);
+        xset("xfwm4", "/general/title_alignment", "string", "center");
+        xset("xfwm4", "/general/button_layout", "string", "CHM|");
+        xset("xfwm4", "/general/use_compositing", "bool", "true");
+        xset("xfwm4", "/general/show_dock_shadow", "bool", "false");
         // Курсор для X11 и программ не на GTK — тема «default».
         write(
             &self.paths.icons.join("default/index.theme"),

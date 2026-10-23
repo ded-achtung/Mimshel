@@ -202,6 +202,17 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      фон блокировки — из них же. `macos-look apply look/wallpaper` передают это в shell.
 7. **Окно настроек** — ползунки и переключатели вместо правки файла (как «Системные настройки»).
 
+### Установка на другую машину (23.10.2026, для ноутбука пользователя)
+`install.sh` в корне — EndeavourOS/Arch с Xfce (X11), без macos-look: пакеты (`pacman -Syu --needed`),
+i3lock-color из AUR с заплаткой `packaging/i3lock-color-mac-field.patch` (перенесена из macos-look),
+Colloid (значки, курсор, тема окон `-c dark --tweaks normal`), `cargo build --release --locked`,
+`shell backup pered-shell`, `shell set --no-apply …` (части и оформление), `shell apply`, `doctor`.
+Повторный запуск безопасен. `shell apply look` теперь ставит и шрифт, сглаживание, заголовок и кнопки
+окна слева, тени, `ShellShowsMenubar`, строку меню терминала (раньше — macos-look). `doctor` без
+macos-look проверяет пакеты установщика и не требует WhiteSur, rofi, скрытых программ. **Не перенесено:**
+скрытие и переименование программ в Launchpad («Проводник», «Блокнот», скрытые xterm…).
+Полностью установщик проверен только по частям (в ВМ: шаги после сборки, сборка i3lock-color `makepkg -o`).
+
 ### Первая задача: Spotlight
 Изучить: поведение Spotlight на Mac (поиск по мере ввода, порядок результатов, стрелки,
 Enter, Esc, клик мимо), стандарт Desktop Entry (Name/Name[ru], Exec и его коды %f %u…,

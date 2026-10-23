@@ -1,0 +1,80 @@
+diff -ru a/i3lock.c b/i3lock.c
+--- a/i3lock.c	2026-10-21 16:56:39.540405203 +0300
++++ b/i3lock.c	2026-10-21 16:56:39.600342927 +0300
+@@ -460,6 +460,16 @@
+  * cold-boot attacks.
+  *
+  */
++/* macos-look: число введённых символов (а не байт UTF-8) — для точек в поле
++ * пароля. Только считает, сам пароль никуда не передаёт. */
++int password_glyphs(void) {
++    int n = 0;
++    for (int i = 0; i < input_position; i++)
++        if ((password[i] & 0xC0) != 0x80)
++            n++;
++    return n;
++}
++
+ static void clear_password_memory(void) {
+ #ifdef HAVE_EXPLICIT_BZERO
+     /* Use explicit_bzero(3) which was explicitly designed not to be
+diff -ru a/unlock_indicator.c b/unlock_indicator.c
+--- a/unlock_indicator.c	2026-10-21 16:56:39.541402129 +0300
++++ b/unlock_indicator.c	2026-10-21 17:07:29.276909504 +0300
+@@ -47,6 +47,8 @@
+ /* The current position in the input buffer. Useful to determine if any
+  * characters of the password have already been entered or not. */
+ extern int input_position;
++int password_glyphs(void);
++const char *macos_look_field = "macos-look-field-v3";
+ 
+ /* The lock window. */
+ extern xcb_window_t win;
+@@ -342,7 +344,7 @@
+ 
+     // convert text to glyphs.
+     cairo_status_t status;
+-    cairo_glyph_t* glyphs;
++    cairo_glyph_t* glyphs = NULL;  /* macos-look: был не инициализирован */
+     int nglyphs = 0,
+         len = 0,
+         start = 0,
+@@ -402,6 +404,7 @@
+         y = text.y + text.size * lineno;
+         if (len > is_cc) {
+             cairo_glyph_free(glyphs);
++            glyphs = NULL;  /* macos-look: иначе при ошибке разбора — двойное освобождение */
+         }
+         nglyphs = 0;
+         start += len;
+@@ -968,6 +971,30 @@
+         }
+     }
+ 
++    /* macos-look: поле пароля как на Mac. Пока ничего не введено, greeter-текст
++     * служит подсказкой («Введите пароль»); при вводе он заменяется точками по
++     * числу символов. На проверку пароля это не влияет. */
++    if (draw_data.greeter_text.show && input_position > 0) {
++        char *p = draw_data.greeter_text.str;
++        size_t room = sizeof(draw_data.greeter_text.str) - 1, used = 0;
++        memset(p, 0, sizeof(draw_data.greeter_text.str));  /* без хвоста старого текста */
++        int glyphs = password_glyphs();
++        /* не выходить за поле: сколько точек влезает, считает macos-look */
++        static int max_dots = -1;
++        if (max_dots < 0) {
++            const char *e = getenv("MACOS_LOOK_MAX_DOTS");
++            max_dots = e ? atoi(e) : 0;
++        }
++        if (max_dots > 0 && glyphs > max_dots)
++            glyphs = max_dots;
++        for (int i = 0; i < glyphs && used + 6 <= room; i++) {
++            if (i) { memcpy(p + used, " ", 3); used += 3; }  /* узкий пробел */
++            memcpy(p + used, "●", 3); used += 3;              /* ● */
++        }
++        p[used] = 0;
++        draw_data.greeter_text.color = (rgba_t){1.0, 1.0, 1.0, 1.0};
++    }
++
+     // initialize positioning vars
+     double screen_x = 0, screen_y = 0,
+            width = 0, height = 0;

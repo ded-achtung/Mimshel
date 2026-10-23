@@ -27,6 +27,22 @@ environment. Installing packages, themes, icons and the cursor, the wallpaper,
 and hiding or renaming applications are still done by it. This is not a
 standalone desktop installer.
 
+## Installing
+
+You need EndeavourOS or Arch Linux with the Xfce desktop (an X11 session). In an
+Xfce terminal:
+
+```sh
+git clone https://github.com/ded-achtung/shell.git
+cd shell && ./install.sh
+```
+
+The installer asks for your sudo password. It installs the packages, builds the
+i3lock-color lock screen with our patch (`packaging/`), installs the Colloid icons,
+window theme and cursor, builds shell into `~/.local/bin/shell` and turns all of its
+parts on. It saves a copy of your settings first: `~/.local/bin/shell restore`
+brings them back. Log out and back in afterwards. Running it again is safe.
+
 ## Building and testing
 
 Tested with Rust 1.99.1. The rendering tests need system fonts (for example the
