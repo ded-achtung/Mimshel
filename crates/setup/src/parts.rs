@@ -104,6 +104,7 @@ impl Plan<'_> {
 
     fn menubar(&mut self) {
         tray_apps(&self.paths);
+        install_logo();
         if self.config.menubar {
             println!("▶ Строка меню (своя, shell)");
             panel_at_login(false);
@@ -469,6 +470,21 @@ impl Plan<'_> {
             );
         }
     }
+}
+
+/// Свой знак меню (планета с кольцом вместо яблока) — в общую тему значков
+/// hicolor: его находят и своя строка меню, и панель Xfce.
+pub const LOGO_NAME: &str = "shell-logo";
+const LOGO_SVG: &str = include_str!("../data/shell-logo.svg");
+
+pub fn logo_path() -> std::path::PathBuf {
+    home().join(format!(
+        ".local/share/icons/hicolor/scalable/apps/{LOGO_NAME}.svg"
+    ))
+}
+
+fn install_logo() {
+    write(&logo_path(), LOGO_SVG);
 }
 
 /// В ВМ — без автоматического сна: из него ВМ не просыпается.

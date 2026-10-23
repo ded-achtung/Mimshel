@@ -92,7 +92,7 @@ impl Default for Config {
             spotlight: false,
             launchpad: false,
             menubar_height: 28,
-            menu_icon: "start-here".into(),
+            menu_icon: "shell-logo".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
             notify: false,
         }
@@ -368,7 +368,7 @@ font = {font}
 icon_theme = {theme}
 
 [menubar]
-# Высота в точках, иконка меню яблока (имя в теме или путь к файлу),
+# Высота в точках, значок главного меню (shell-logo — наша планета; имя в теме или путь к файлу),
 # формат часов как у команды date: %a — день недели, %-d — число, %b — месяц.
 height = {height}
 menu_icon = {menu_icon}
@@ -457,7 +457,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),
     ("menubar.height", "высота строки меню, 16–128"),
-    ("menubar.menu_icon", "иконка меню яблока"),
+    (
+        "menubar.menu_icon",
+        "значок главного меню: shell-logo (планета) или имя из темы",
+    ),
     ("menubar.clock_format", "формат часов, как у date"),
     ("dock.apps", "программы через запятую"),
     ("dock.icon_size", "размер значков, 16–256"),

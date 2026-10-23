@@ -147,7 +147,8 @@ pub fn set(key: &str, input: &str) -> i32 {
             }]
         }
         "dock" if !config.dock => vec!["dock"],
-        "menubar" if !config.menubar => vec!["menubar"],
+        // Строка меню: и панель Xfce, и знак меню ставит apply menubar.
+        "menubar" => vec!["menubar"],
         _ => vec!["service"],
     };
     run_apply(&config, &parts)

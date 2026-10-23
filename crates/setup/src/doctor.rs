@@ -285,6 +285,14 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         );
     }
 
+    if cfg.menu_icon == crate::parts::LOGO_NAME {
+        add(
+            "panel",
+            "знак меню (планета) на месте",
+            crate::parts::logo_path().exists(),
+            "shell apply menubar",
+        );
+    }
     let masked = output_any(&["systemctl", "--user", "is-enabled", "xfce4-notifyd.service"]).trim()
         == "masked";
     if cfg.notify {
