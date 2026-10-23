@@ -330,6 +330,22 @@ pub fn remove(path: &Path) {
 /// Все раскладки из настроек загружены в X (после выхода панели Xfce её модуль
 /// раскладки иногда оставляет одну — урок 15).
 pub fn keyboard_ok() -> bool {
+    // Общая раскладка X повторяет клавиатуру последнего нажатия, а у
+    // виртуальной клавиатуры XTEST (нажатия от программ, xdotool) после
+    // входа раскладка по умолчанию. Поэтому смотрим настоящие клавиатуры.
+    keyboards_ok(false)
+}
+
+/// Все раскладки есть и у виртуальной клавиатуры XTEST. После входа у неё
+/// только `us` (урок 18), и одно программное нажатие делает общую раскладку
+/// `us` — значок раскладки в строке меню пропадает.
+pub fn virtual_keyboard_ok() -> bool {
+    keyboards_ok(true)
+}
+
+/// Все раскладки из настроек у настоящих (`virtual_kbd` = false) или у
+/// виртуальных клавиатур. Не удалось узнать устройства — общая раскладка.
+fn keyboards_ok(virtual_kbd: bool) -> bool {
     let want = xkb_query("layout");
     let display = std::env::var("DISPLAY")
         .ok()
@@ -345,10 +361,7 @@ pub fn keyboard_ok() -> bool {
             .filter(|c| !c.is_empty())
             .all(|c| line.contains(c))
     };
-    // Общая раскладка X повторяет клавиатуру последнего нажатия, а у
-    // виртуальной клавиатуры XTEST (нажатия от программ, xdotool) после
-    // входа раскладка по умолчанию. Поэтому смотрим настоящие клавиатуры.
-    let ids = real_keyboards(&output_any(&["xinput", "list", "--short"]));
+    let ids = keyboards(&output_any(&["xinput", "list", "--short"]), virtual_kbd);
     if ids.is_empty() {
         return has_all(&["xkbcomp", "-xkb", &display, "-"]);
     }
@@ -356,11 +369,11 @@ pub fn keyboard_ok() -> bool {
         .all(|id| has_all(&["xkbcomp", "-i", id, "-xkb", &display, "-"]))
 }
 
-/// Номера настоящих клавиатур из `xinput list --short`: подчинённые
-/// клавиатуры, кроме виртуальной XTEST.
-fn real_keyboards(list: &str) -> Vec<String> {
+/// Номера клавиатур из `xinput list --short`: подчинённые настоящие или
+/// (`virtual_kbd`) виртуальные XTEST.
+fn keyboards(list: &str, virtual_kbd: bool) -> Vec<String> {
     list.lines()
-        .filter(|l| l.contains("slave  keyboard") && !l.contains("XTEST"))
+        .filter(|l| l.contains("slave  keyboard") && l.contains("XTEST") == virtual_kbd)
         .filter_map(|l| l.split("id=").nth(1)?.split_whitespace().next())
         .map(str::to_string)
         .collect()
@@ -381,12 +394,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn real_keyboards_skip_xtest() {
+    fn real_and_virtual_keyboards() {
         let list = "⎣ Virtual core keyboard                   \tid=3\t[master keyboard (2)]\n\
             \x20   ↳ Virtual core XTEST keyboard             \tid=5\t[slave  keyboard (3)]\n\
             \x20   ↳ Power Button                            \tid=9\t[slave  keyboard (3)]\n\
             \x20   ↳ AT Translated Set 2 keyboard            \tid=11\t[slave  keyboard (3)]\n\
             ⎡ Virtual core pointer                    \tid=2\t[master pointer  (3)]\n";
-        assert_eq!(real_keyboards(list), ["9", "11"]);
+        assert_eq!(keyboards(list, false), ["9", "11"]);
+        assert_eq!(keyboards(list, true), ["5"]);
     }
 }

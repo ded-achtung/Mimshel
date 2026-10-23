@@ -600,6 +600,22 @@ fn keep_keyboard_layouts() {
     if keyboard_ok() {
         return;
     }
+    restore_layouts();
+    println!("⚠ Раскладки клавиатуры восстановлены после остановки панели");
+}
+
+/// Вернуть все раскладки виртуальной клавиатуре XTEST, если у неё их нет
+/// (после входа — урок 18). Служба делает это при запуске; `true` — вернула.
+pub fn fix_virtual_keyboard() -> bool {
+    if crate::sys::virtual_keyboard_ok() {
+        return false;
+    }
+    restore_layouts();
+    true
+}
+
+/// Применить раскладки из настроек X заново (`setxkbmap` — всем клавиатурам).
+fn restore_layouts() {
     let rules = xkb_query("rules");
     let model = xkb_query("model");
     let layout = xkb_query("layout");
@@ -619,7 +635,6 @@ fn keep_keyboard_layouts() {
         args.extend(["-option", opt]);
     }
     run(&args);
-    println!("⚠ Раскладки клавиатуры восстановлены после остановки панели");
 }
 
 /// Значки трея — современным способом (StatusNotifierItem): его понимают и

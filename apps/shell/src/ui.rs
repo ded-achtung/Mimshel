@@ -163,6 +163,14 @@ pub fn run(once: Option<Panel>) -> Result<()> {
 
     if daemon {
         listen(tx.clone())?;
+        // У виртуальной клавиатуры после входа одна раскладка (урок 18): одно
+        // нажатие от программы — и значок раскладки пропадал. Вернуть все;
+        // строка меню сама заметит смену клавиатуры.
+        std::thread::spawn(|| {
+            if shell_setup::parts::fix_virtual_keyboard() {
+                eprintln!("Раскладки виртуальной клавиатуры восстановлены");
+            }
+        });
     }
     let display = Arc::new(Display::connect()?);
     {

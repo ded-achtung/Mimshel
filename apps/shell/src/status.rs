@@ -321,9 +321,10 @@ pub fn watch_sound(tx: Sender<Msg>) {
     );
 }
 
-/// Батарея меняется медленно, а inotify для файлов ядра не работает: вместо
-/// прежнего вечного наблюдателя `upower --monitor` опрашиваем `/sys` раз в
-/// 30 с и сообщаем только об изменениях. Ни демона, ни подпроцессов.
+/// inotify для файлов ядра не работает: вместо прежнего вечного наблюдателя
+/// `upower --monitor` опрашиваем `/sys` раз в 5 с и сообщаем только об
+/// изменениях. Прочитать несколько маленьких файлов почти ничего не стоит, а
+/// подключённая зарядка видна почти сразу (с 30 с ждать было долго).
 pub fn watch_battery(tx: Sender<Msg>) {
     std::thread::spawn(move || {
         let mut sent = false;
@@ -337,7 +338,7 @@ pub fn watch_battery(tx: Sender<Msg>) {
                     return;
                 }
             }
-            std::thread::sleep(Duration::from_secs(30));
+            std::thread::sleep(Duration::from_secs(5));
         }
     });
 }
