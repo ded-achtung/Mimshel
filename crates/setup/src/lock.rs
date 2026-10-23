@@ -35,6 +35,25 @@ pub fn screen_size() -> (i64, i64) {
         .unwrap_or((1920, 1080))
 }
 
+/// Наш файл, который перекрывает системный запуск заставки Xfce через D-Bus.
+/// Автозапуск заставки отключён, но D-Bus поднимает её по первому обращению
+/// к `org.xfce.ScreenSaver` — и она блокирует экран сама, своим окном пароля
+/// (по своему таймеру и перед сном), мимо нашей команды. Файл в домашней
+/// папке главнее `/usr/share/dbus-1/services`; удалить — вернётся как было.
+pub fn screensaver_service() -> PathBuf {
+    home().join(".local/share/dbus-1/services/org.xfce.ScreenSaver.service")
+}
+
+/// Пометка в этом файле: его создал shell (и откат может его удалить).
+pub const SCREENSAVER_MARK: &str = "# shell: заставка Xfce не запускается";
+
+/// Содержимое файла: имя то же, запуск — пустая команда.
+pub fn screensaver_service_text() -> String {
+    format!(
+        "{SCREENSAVER_MARK} (shell apply lock)\n[D-BUS Service]\nName=org.xfce.ScreenSaver\nExec=/bin/false\n"
+    )
+}
+
 /// Версия рисования фона: поменялась — старые картинки перерисовываются.
 const BACKGROUND_VERSION: u32 = 2;
 

@@ -143,6 +143,18 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
         kill("xss-lock");
         kill("shell daemon");
         run(&["systemctl", "--user", "unmask", "xfce4-notifyd.service"]);
+        let service = crate::lock::screensaver_service();
+        if read(&service).contains(crate::lock::SCREENSAVER_MARK) {
+            remove_file(&service)?;
+            run(&[
+                "dbus-send",
+                "--session",
+                "--type=method_call",
+                "--dest=org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus.ReloadConfig",
+            ]);
+        }
         spawn(&["xfce4-screensaver"]);
     }
     let ours = [

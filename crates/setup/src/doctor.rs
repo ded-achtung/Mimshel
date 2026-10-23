@@ -479,6 +479,12 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         paths.autostart.join("xfce4-screensaver.desktop").exists() && !running("xfce4-screensaver"),
         "",
     );
+    add(
+        "lock",
+        "заставку Xfce не запустит D-Bus (иначе блокирует она, своим окном)",
+        read(&crate::lock::screensaver_service()).contains("Exec=/bin/false"),
+        "shell apply lock",
+    );
     let (w, h) = crate::lock::screen_size();
     add(
         "lock",

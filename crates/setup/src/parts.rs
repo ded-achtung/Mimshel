@@ -440,6 +440,20 @@ impl Plan<'_> {
                  {MANAGED_MARK}\n"
             ),
         );
+        // …и по требованию через D-Bus (как xfce4-notifyd) — тоже закрыть.
+        write(
+            &crate::lock::screensaver_service(),
+            &crate::lock::screensaver_service_text(),
+        );
+        // dbus-broker (шина в Arch) сам папки служб не перечитывает.
+        run(&[
+            "dbus-send",
+            "--session",
+            "--type=method_call",
+            "--dest=org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus.ReloadConfig",
+        ]);
         kill("xfce4-screensaver");
         // Работающий xss-lock не перезапускаем: запущенный не из сеанса (по
         // SSH), он не получит «заблокировать сеанс» рабочего стола (урок 3).
