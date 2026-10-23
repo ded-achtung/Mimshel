@@ -169,10 +169,22 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     );
     add(
         "look",
-        "иконки",
-        xs("/Net/IconThemeName").as_deref() == Some(&n.icons),
-        "",
+        &format!("значки: {}", cfg.icon_theme),
+        xs("/Net/IconThemeName").as_deref() == Some(&cfg.icon_theme),
+        "shell apply icons",
     );
+    if cfg.icon_theme == crate::parts::OVERLAY_THEME {
+        add(
+            "look",
+            "надстройка значков: знак вместо яблока Apple",
+            paths
+                .icons
+                .join(crate::parts::OVERLAY_THEME)
+                .join("places/scalable/start-here.svg")
+                .exists(),
+            "shell apply icons",
+        );
+    }
     add(
         "look",
         "курсор",

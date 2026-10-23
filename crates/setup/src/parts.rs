@@ -26,6 +26,7 @@ pub const APPLY_PARTS: &[&str] = &[
     "launchers",
     "lock",
     "power",
+    "icons",
     "service",
 ];
 
@@ -92,6 +93,9 @@ pub fn apply(config: &Config, look: &Look, parts: &[&str]) -> Result<(), String>
     }
     if want("power") {
         power();
+    }
+    if want("icons") {
+        plan.icons();
     }
     Ok(())
 }
@@ -472,6 +476,13 @@ impl Plan<'_> {
     }
 }
 
+/// Надстройка над Colloid: наши правки значков поверх набора, обновления
+/// Colloid их не затирают. Сейчас — знак главного меню вместо яблока Apple
+/// (`start-here` в Colloid — яблоко).
+pub const OVERLAY_THEME: &str = "Colloid-shell";
+const OVERLAY_BASE: &str = "Colloid-Dark";
+const LOGO_SYMBOLIC_SVG: &str = include_str!("../data/shell-logo-symbolic.svg");
+
 /// Свой знак меню (планета с кольцом вместо яблока) — в общую тему значков
 /// hicolor: его находят и своя строка меню, и панель Xfce.
 pub const LOGO_NAME: &str = "shell-logo";
@@ -505,6 +516,45 @@ fn power() {
 }
 
 impl Plan<'_> {
+    /// Тема значков для всех программ (xsettings) и, если выбрана наша
+    /// надстройка над Colloid, — сама надстройка.
+    fn icons(&self) {
+        let theme = &self.config.icon_theme;
+        println!("▶ Значки: {theme}");
+        if theme == OVERLAY_THEME {
+            let base = self.paths.icons.join(OVERLAY_BASE);
+            if !base.join("index.theme").exists() {
+                println!(
+                    "✘ Нет набора {OVERLAY_BASE} в {} — поставьте Colloid: \
+                     https://github.com/vinceliuice/Colloid-icon-theme",
+                    self.paths.icons.display()
+                );
+                return;
+            }
+            let dir = self.paths.icons.join(OVERLAY_THEME);
+            write(
+                &dir.join("index.theme"),
+                &format!(
+                    "[Icon Theme]\nName={OVERLAY_THEME}\n\
+                     Comment=Colloid с правками shell (свой знак вместо яблока)\n\
+                     Inherits={OVERLAY_BASE},hicolor,breeze\n\
+                     Directories=places/scalable\n\n\
+                     [places/scalable]\nContext=Places\nSize=48\nMinSize=8\nMaxSize=512\n\
+                     Type=Scalable\n"
+                ),
+            );
+            // Одна залитая фигура: GTK перекрашивает одноцветные значки,
+            // заливая все фигуры, — маски и линии при этом ломаются.
+            for name in ["start-here", "start-here-symbolic"] {
+                write(
+                    &dir.join(format!("places/scalable/{name}.svg")),
+                    LOGO_SYMBOLIC_SVG,
+                );
+            }
+        }
+        xset("xsettings", "/Net/IconThemeName", "string", theme);
+    }
+
     /// Меню яблока: ярлыки `shell action …` и файл меню freedesktop с их
     /// порядком и разделителями (его читают и своя строка меню, и панель Xfce).
     fn apple_menu(&self) {
