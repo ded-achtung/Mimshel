@@ -1066,10 +1066,14 @@ fn clock(format: &str) -> (String, u64) {
 /// Обновлять часы в начале каждой минуты.
 fn watch_clock(format: String, tx: Sender<Msg>) {
     std::thread::spawn(move || {
+        // Один запуск `date` в минуту: предыдущий ответ сообщает, сколько
+        // секунд прошло в текущей минуте, — по ним и спим до границы.
+        let (_, mut secs) = clock(&format);
         loop {
-            let (_, secs) = clock(&format);
             std::thread::sleep(Duration::from_secs(60 - secs.min(59)) + Duration::from_millis(50));
-            if tx.send(Msg::Clock(clock(&format).0)).is_err() {
+            let (text, s) = clock(&format);
+            secs = s;
+            if tx.send(Msg::Clock(text)).is_err() {
                 return;
             }
         }
