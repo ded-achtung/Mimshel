@@ -178,7 +178,11 @@ pub fn sys_battery(bats: &[SysBattery], on_ac: Option<bool>) -> Option<Battery> 
     let percent = u32::try_from(percent).unwrap_or(100);
     let any = |s: &str| present.iter().any(|b| b.status == s);
     let full_now = present.iter().all(|b| b.status == "Full");
-    let state = if any("Charging") {
+    // Питание отключили — разряд, даже если аккумулятор ещё с полсекунды
+    // пишет «Charging» (так в VirtualBox: блок питания меняется первым).
+    let state = if on_ac == Some(false) && !full_now {
+        "discharging"
+    } else if any("Charging") {
         "charging"
     } else if full_now {
         "fully-charged"
@@ -388,7 +392,16 @@ mod tests {
             sys_battery(&stale, Some(false)).unwrap().state,
             "discharging"
         );
-        // Заряжается — молния, что бы ни было с питанием.
+        // Только что отключили, а аккумулятор ещё пишет «Charging» — разряд.
+        let unplugged = [SysBattery {
+            status: "Charging".into(),
+            ..lag[0].clone()
+        }];
+        assert_eq!(
+            sys_battery(&unplugged, Some(false)).unwrap().state,
+            "discharging"
+        );
+        // Заряжается при подключённом питании или когда ядро о питании молчит — молния.
         let ch = [SysBattery {
             status: "Charging".into(),
             ..lag[0].clone()
