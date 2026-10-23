@@ -7,6 +7,7 @@
 //! (`org.xfce.thunar`: Finder в `apps/`, папка в `preferences/`), поэтому при
 //! равных условиях папки `apps/…` идут первыми — нам нужны значки программ.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -71,6 +72,10 @@ pub struct Icons {
     /// Где искать иконки вне тем (`/usr/share/pixmaps`).
     pixmaps: Vec<PathBuf>,
     cache: HashMap<(String, u32), Option<Pixmap>>,
+    /// Есть ли папка темы (проверяется один раз): в hicolor 649 папок, и
+    /// почти все они есть не в каждом месте поиска — без памяти о них поиск
+    /// недостающего значка спрашивал диск о тысячах файлов.
+    folders: RefCell<HashMap<PathBuf, bool>>,
 }
 
 impl Icons {
@@ -126,6 +131,7 @@ impl Icons {
             bases,
             pixmaps,
             cache: HashMap::new(),
+            folders: RefCell::new(HashMap::new()),
         }
     }
 
@@ -150,18 +156,34 @@ impl Icons {
             .find(|p| p.is_file())
     }
 
+    /// Забыть прочитанное содержимое папок: значки могли добавиться (поставили
+    /// программу) или пропасть.
+    pub fn refresh(&mut self) {
+        self.folders.get_mut().clear();
+        self.cache.clear();
+    }
+
+    /// Есть ли папка (с памятью: каждая проверяется один раз).
+    fn folder_exists(&self, dir: &Path) -> bool {
+        *self
+            .folders
+            .borrow_mut()
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| dir.is_dir())
+    }
+
     fn find_in_theme(&self, theme: &Theme, name: &str, size: u32) -> Option<PathBuf> {
         let file = |dir: &Dir| {
-            self.bases
-                .iter()
-                .flat_map(|b| {
-                    ["png", "svg"].map(|e| {
-                        b.join(&theme.name)
-                            .join(&dir.path)
-                            .join(format!("{name}.{e}"))
-                    })
-                })
-                .find(|p| p.is_file())
+            self.bases.iter().find_map(|b| {
+                let folder = b.join(&theme.name).join(&dir.path);
+                if !self.folder_exists(&folder) {
+                    return None;
+                }
+                ["png", "svg"]
+                    .iter()
+                    .map(|e| folder.join(format!("{name}.{e}")))
+                    .find(|p| p.is_file())
+            })
         };
         if let Some(p) = theme
             .dirs

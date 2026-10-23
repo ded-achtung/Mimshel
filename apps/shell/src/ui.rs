@@ -157,8 +157,18 @@ fn grid(config: &Config) -> Grid {
 /// `None` — работать службой и ждать команд.
 pub fn run(once: Option<Panel>) -> Result<()> {
     let start = Instant::now();
+    // Время шагов запуска — в журнал: долгий запуск после загрузки ВМ иначе
+    // не разобрать.
+    let mut steps: Vec<(&str, std::time::Duration)> = Vec::new();
+    let mut last = start;
+    let mut step = |name: &'static str| {
+        let now = Instant::now();
+        steps.push((name, now - last));
+        last = now;
+    };
     let daemon = once.is_none();
     let config = load_config();
+    step("настройки");
     let (tx, rx) = mpsc::channel();
 
     if daemon {
@@ -173,6 +183,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         });
     }
     let display = Arc::new(Display::connect()?);
+    step("экран");
     {
         let display = display.clone();
         let tx = tx.clone();
@@ -188,6 +199,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     let settings = Settings::from_env();
     let all_apps = shell_apps::load_all(&settings);
     let apps = visible(&all_apps);
+    step("программы");
     let mut icons = Icons::new(&config.icon_theme);
     if daemon {
         watch_apps(settings, tx.clone());
@@ -197,6 +209,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             icons.get(name, config.launchpad_icon);
         }
     }
+    step("значки");
     // Своя строка меню — только у службы и только если выбрана вместо панели
     // Xfce (`SHELL_MENUBAR=1` — включить для проверки, не трогая настройки).
     let menubar = if daemon && (config.menubar || std::env::var_os("SHELL_MENUBAR").is_some()) {
@@ -209,6 +222,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     } else {
         None
     };
+    step("строка меню");
     // Свои уведомления — вместо xfce4-notifyd (`SHELL_NOTIFY=1` — для проверки).
     let notify = if daemon && (config.notify || std::env::var_os("SHELL_NOTIFY").is_some()) {
         if menubar.is_none() {
@@ -224,6 +238,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     } else {
         None
     };
+    step("уведомления");
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {
         let dock = DockUi::new(&display, &config, all_apps, tx.clone())?;
@@ -232,6 +247,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     } else {
         None
     };
+    step("док");
     let (sw, sh) = display.screen_size();
     let mut ui = Ui {
         display: &display,
@@ -250,8 +266,16 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         notify,
     };
     ui.flush()?;
+    step("шрифты и окна");
     match once {
-        None => eprintln!("Служба готова за {:?}", start.elapsed()),
+        None => {
+            eprintln!("Служба готова за {:?}", start.elapsed());
+            let line: Vec<String> = steps
+                .iter()
+                .map(|(name, d)| format!("{name} {:.2} с", d.as_secs_f32()))
+                .collect();
+            eprintln!("  по шагам: {}", line.join(", "));
+        }
         Some(panel) => {
             ui.toggle(panel)?;
             eprintln!("Окно открыто за {:?}", start.elapsed());
@@ -437,6 +461,8 @@ impl Ui<'_> {
     }
 
     fn set_apps(&mut self, all: Vec<App>) -> Result<()> {
+        // Новые программы могли принести свои значки.
+        self.icons.refresh();
         let apps = visible(&all);
         self.spotlight.set_apps(apps.clone());
         self.launchpad.set_apps(apps);
