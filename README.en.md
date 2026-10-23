@@ -13,9 +13,9 @@ cosmic-text, X11 through x11rb and D-Bus through zbus. Wayland is not supported.
   layout, and Launchpad.
 - Dock: pinning and reordering icons, window grouping, window previews, Trash.
 - Menu bar: global menu (GTK and DBusMenu), StatusNotifierItem tray, keyboard
-  layout, clock, volume, battery and Control Center. The legacy XEmbed tray is
+  layout, clock with a calendar, volume, battery and Control Center. The legacy XEmbed tray is
   not implemented.
-- Notification banners and history, Do Not Disturb.
+- Notification banners and history (click the bell), Do Not Disturb.
 - TOML settings, `doctor` diagnostics, switching each part between shell and the
   original Xfce components.
 - A watchdog for the service, and i3lock-color started under a lock watchdog;

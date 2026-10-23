@@ -19,8 +19,8 @@ use shell_dbus::{
 use shell_icons::Icons;
 use shell_menubar::status::{Battery, Sound};
 use shell_menubar::{
-    AppleItem, Bar, ControlAction, ControlPanel, ControlState, Part, SoundAction, SoundPanel,
-    apple_menu,
+    AppleItem, Bar, CalendarAction, CalendarPanel, ControlAction, ControlPanel, ControlState, Part,
+    SoundAction, SoundPanel, apple_menu,
 };
 use shell_text::Fonts;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
@@ -90,6 +90,10 @@ pub struct MenubarUi {
     sound_panel: Option<SoundPanel>,
     /// Пункт управления (в том же всплывающем окне).
     control_panel: Option<ControlPanel>,
+    /// Календарь по щелчку на часах.
+    calendar: Option<CalendarPanel>,
+    /// Названия месяцев и дней на языке системы (читаются один раз).
+    calendar_names: Option<shell_menubar::Names>,
     popup: Popup,
     popup_x: i16,
     popup_dirty: bool,
@@ -126,6 +130,8 @@ impl MenubarUi {
             menu: None,
             sound_panel: None,
             control_panel: None,
+            calendar: None,
+            calendar_names: None,
             popup: d.create_popup("menubar-menu")?,
             popup_x: 0,
             popup_dirty: false,
@@ -174,10 +180,10 @@ impl MenubarUi {
         self.dirty = true;
     }
 
-    /// Подсветить часы, пока открыт центр уведомлений.
+    /// Подсветить колокольчик, пока открыт центр уведомлений.
     pub fn set_center_open(&mut self, open: bool) {
-        let want = open.then_some(Part::Clock);
-        let other = self.bar.open.is_some_and(|p| p != Part::Clock);
+        let want = open.then_some(Part::Bell);
+        let other = self.bar.open.is_some_and(|p| p != Part::Bell);
         if !other && self.bar.open != want {
             self.bar.open = want;
             self.dirty = true;
@@ -252,7 +258,10 @@ impl MenubarUi {
     }
 
     fn popup_open(&self) -> bool {
-        self.menu.is_some() || self.sound_panel.is_some() || self.control_panel.is_some()
+        self.menu.is_some()
+            || self.sound_panel.is_some()
+            || self.control_panel.is_some()
+            || self.calendar.is_some()
     }
 
     /// Это событие для строки меню?
@@ -291,6 +300,10 @@ impl MenubarUi {
                     let action = panel.motion(x, y);
                     self.control_action(d, action)?;
                 }
+                if let Some(panel) = &mut self.calendar {
+                    let action = panel.motion(x, y);
+                    self.calendar_action(d, action)?;
+                }
             }
             Event::Button { window, x, y, .. } if window == popup => {
                 let (x, y) = (f32::from(x), f32::from(y));
@@ -303,6 +316,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.control_panel {
                     let action = panel.press(x, y);
                     self.control_action(d, action)?;
+                } else if let Some(panel) = &mut self.calendar {
+                    let action = panel.press(x, y);
+                    self.calendar_action(d, action)?;
                 }
             }
             Event::Release { window, .. } if window == popup => {
@@ -346,6 +362,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.control_panel {
                     let action = panel.key(k.key);
                     self.control_action(d, action)?;
+                } else if let Some(panel) = &mut self.calendar {
+                    let action = panel.key(k.key);
+                    self.calendar_action(d, action)?;
                 }
             }
             Event::Expose { window } if window == popup => self.popup_dirty = true,
@@ -385,6 +404,12 @@ impl MenubarUi {
                     if self.popup_open() && !matches!(button, 4 | 5) {
                         self.close_popup(d)?;
                     }
+                    // Правая кнопка по колокольчику — «Не беспокоить» и настройки.
+                    if button == 3
+                        && let Some((Part::Bell, px)) = part
+                    {
+                        self.open_bell(d, fonts, px)?;
+                    }
                     return Ok(());
                 }
                 // Щелчок при открытом меню: по той же части — закрыть, по
@@ -394,15 +419,15 @@ impl MenubarUi {
                     self.close_popup(d)?;
                 }
                 match part {
-                    // Часы — центр уведомлений (его рисует служба уведомлений;
-                    // повторный щелчок закрывает его там же).
-                    Some((Part::Clock, _)) => {
+                    // Колокольчик — центр уведомлений (его рисует служба
+                    // уведомлений; повторный щелчок закрывает его там же).
+                    Some((Part::Bell, _)) => {
                         let _ = self.tx.send(Msg::ToggleCenter);
                     }
                     Some((p, _)) if Some(p) == was => {}
+                    Some((Part::Clock, px)) => self.open_calendar(d, px)?,
                     Some((Part::Apple, px)) => self.open_apple(d, fonts, px)?,
                     Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,
-                    Some((Part::Bell, px)) => self.open_bell(d, fonts, px)?,
                     Some((Part::Volume, px)) => self.open_sound(d, px)?,
                     Some((Part::Control, px)) => self.open_control(d, px)?,
                     Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
@@ -612,6 +637,27 @@ impl MenubarUi {
             entry("Настройки уведомлений…", Cmd::NotifySettings, false, true),
         ];
         self.open_menu(d, fonts, Part::Bell, "bell".into(), x, entries)
+    }
+
+    fn open_calendar(&mut self, d: &Display, x: f32) -> Result<()> {
+        let names = self
+            .calendar_names
+            .get_or_insert_with(calendar_names)
+            .clone();
+        let (today, text) = today();
+        let panel = CalendarPanel::new(today, text, names);
+        let size = panel.size();
+        self.calendar = Some(panel);
+        self.show_popup(d, Part::Clock, x, size)
+    }
+
+    fn calendar_action(&mut self, d: &Display, action: CalendarAction) -> Result<()> {
+        match action {
+            CalendarAction::Nothing => {}
+            CalendarAction::Redraw => self.popup_dirty = true,
+            CalendarAction::Close => self.close_popup(d)?,
+        }
+        Ok(())
     }
 
     fn open_control(&mut self, d: &Display, x: f32) -> Result<()> {
@@ -850,6 +896,7 @@ impl MenubarUi {
         if self.menu.take().is_some()
             | self.sound_panel.take().is_some()
             | self.control_panel.take().is_some()
+            | self.calendar.take().is_some()
         {
             self.popup.hide(d)?;
             self.bar.open = None;
@@ -950,6 +997,8 @@ impl MenubarUi {
                     h as u16,
                 )?;
                 self.popup.present(d, &panel.render(fonts, icons))?;
+            } else if let Some(panel) = &self.calendar {
+                self.popup.present(d, &panel.render(fonts))?;
             }
         }
         Ok(())
@@ -1051,6 +1100,91 @@ fn run(command: &[String]) {
 
 /// Часы по формату `date` (на языке сеанса) и сколько секунд прошло в
 /// нынешней минуте.
+/// Вывод `date` с языком сеанса (`input` — строки для `-f -`).
+fn date(args: &[&str], input: &str) -> String {
+    use std::io::Write;
+    let child = Command::new("date")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return String::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input.as_bytes());
+    }
+    child
+        .wait_with_output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default()
+}
+
+/// С большой буквы («октябрь» → «Октябрь»).
+fn capitalize(s: &str) -> String {
+    let mut c = s.trim().chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
+/// Названия месяцев и дней недели на языке системы; не вышло — русские.
+fn calendar_names() -> shell_menubar::Names {
+    let mut names = shell_menubar::Names::default();
+    let months: Vec<String> = date(
+        &["-f", "-", "+%OB"],
+        &(1..=12)
+            .map(|m| format!("2026-{m:02}-01\n"))
+            .collect::<String>(),
+    )
+    .lines()
+    .map(capitalize)
+    .collect();
+    if let Ok(m) = <[String; 12]>::try_from(months) {
+        names.months = m;
+    }
+    // 7.12.2026 — понедельник.
+    let days: Vec<String> = date(
+        &["-f", "-", "+%a"],
+        &(7..=13)
+            .map(|d| format!("2026-12-{d:02}\n"))
+            .collect::<String>(),
+    )
+    .lines()
+    .map(capitalize)
+    .collect();
+    if let Ok(d) = <[String; 7]>::try_from(days) {
+        names.weekdays = d;
+    }
+    // locale: 1 — неделя с воскресенья, 2 — с понедельника.
+    if let Ok(out) = Command::new("locale").arg("first_weekday").output() {
+        names.monday_first = String::from_utf8_lossy(&out.stdout).trim() != "1";
+    }
+    names
+}
+
+/// Сегодня: дата и она же словами («Пятница, 23 октября»).
+fn today() -> (shell_menubar::Date, String) {
+    let out = date(&["+%Y %m %d|%A, %-d %B"], "");
+    let (nums, text) = out.trim().split_once('|').unwrap_or(("", ""));
+    let n: Vec<u32> = nums.split(' ').filter_map(|v| v.parse().ok()).collect();
+    let today = match n[..] {
+        [y, m, d] => shell_menubar::Date {
+            year: y as i32,
+            month: m,
+            day: d,
+        },
+        _ => shell_menubar::Date {
+            year: 1970,
+            month: 1,
+            day: 1,
+        },
+    };
+    (today, capitalize(text))
+}
+
 fn clock(format: &str) -> (String, u64) {
     let out = Command::new("date")
         .arg(format!("+%S|{format}"))

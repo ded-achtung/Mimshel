@@ -5,11 +5,13 @@
 //! стоит, и рисование в картинку.
 
 mod apple;
+mod calendar;
 mod control;
 mod sound;
 pub mod status;
 
 pub use apple::{AppleItem, apple_menu, parse_menu};
+pub use calendar::{CalendarAction, CalendarPanel, Date, Names};
 pub use control::{ControlAction, ControlPanel, ControlState, Network, Tile};
 pub use sound::{Row, SoundAction, SoundPanel};
 

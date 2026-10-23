@@ -69,6 +69,11 @@ impl Fonts {
             &mut self.cache,
             Color::rgba(r, g, b, a),
             |gx, gy, gw, gh, color| {
+                // cosmic-text отдаёт в прозрачности только покрытие края буквы,
+                // прозрачность цвета теряется — домножаем на неё сами (иначе
+                // «приглушённый» текст выходит ярко-белым).
+                let alpha = (u32::from(color.a()) * u32::from(a) / 255) as u8;
+                let color = Color::rgba(color.r(), color.g(), color.b(), alpha);
                 for py in oy + gy..oy + gy + gh as i32 {
                     for px in ox + gx..ox + gx + gw as i32 {
                         if px >= 0 && py >= 0 && px < w && py < h {
@@ -149,5 +154,23 @@ mod tests {
             .filter(|(i, p)| i % w > 102 && p[3] > 0)
             .count();
         assert_eq!(beyond, 0);
+    }
+
+    #[test]
+    fn color_alpha_dims_text() {
+        let mut fonts = Fonts::new("Inter");
+        let brightest = |fonts: &mut Fonts, alpha: u8| {
+            let mut pm = Pixmap::new(80, 30).unwrap();
+            pm.fill(tiny_skia::Color::BLACK);
+            let style = Style {
+                color: [255, 255, 255, alpha],
+                ..STYLE
+            };
+            fonts.draw(&mut pm, "Пн 28", &style, 2.0, 2.0, None);
+            pm.pixels().iter().map(|p| p.red()).max().unwrap()
+        };
+        assert!(brightest(&mut fonts, 255) > 240);
+        let dim = brightest(&mut fonts, 70);
+        assert!((50..=80).contains(&dim), "приглушённый текст: {dim}");
     }
 }

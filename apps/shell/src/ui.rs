@@ -81,7 +81,7 @@ pub(crate) enum Msg {
     AppMenu(shell_dbus::AppMenuUpdate),
     /// Уведомление пришло или программа его закрыла.
     Notify(shell_dbus::notify::NotifyEvent),
-    /// Щёлкнули по часам — открыть или закрыть центр уведомлений.
+    /// Щёлкнули по колокольчику — открыть или закрыть центр уведомлений.
     ToggleCenter,
 }
 
@@ -425,7 +425,7 @@ impl Ui<'_> {
         }
         if let Some(notify) = &mut self.notify {
             notify.flush(self.display, &mut self.fonts)?;
-            // Часы в строке меню подсвечены, пока открыт центр уведомлений.
+            // Колокольчик в строке меню подсвечен, пока открыт центр уведомлений.
             if let Some(menubar) = &mut self.menubar {
                 menubar.set_center_open(notify.center_open());
             }
