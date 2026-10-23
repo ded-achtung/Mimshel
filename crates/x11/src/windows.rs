@@ -30,6 +30,25 @@ impl Display {
         Ok(())
     }
 
+    /// Получать события о появлении и перестановке любых окон на экране и о
+    /// смене его размера ([`Event::Mapped`], [`Event::Configure`]) — для экрана
+    /// блокировки, который должен оставаться поверх всего. Добавляет к уже
+    /// выбранным событиям корневого окна (урок 11).
+    pub fn watch_stacking(&self) -> Result<()> {
+        let mine = self
+            .conn
+            .get_window_attributes(self.root)?
+            .reply()?
+            .your_event_mask;
+        let mask = mine | EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY;
+        self.conn.change_window_attributes(
+            self.root,
+            &ChangeWindowAttributesAux::new().event_mask(mask),
+        )?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// Получать события об изменениях окна программы (свёрнуто, заголовок,
     /// иконка, перемещение). Набор событий окна у нашего соединения один на
     /// всех (урок 11 в CLAUDE.md): подписка заменила бы события, которые уже

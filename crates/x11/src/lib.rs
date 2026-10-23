@@ -19,9 +19,9 @@ use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xkb::ConnectionExt as _;
 use x11rb::protocol::xproto::{
-    AtomEnum, ColormapAlloc, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux,
-    EventMask, GrabMode, GrabStatus, ImageFormat, InputFocus, PropMode, StackMode, VisualClass,
-    Window, WindowClass,
+    AtomEnum, ChangeWindowAttributesAux, ColormapAlloc, ConfigureWindowAux, ConnectionExt as _,
+    CreateGCAux, CreateWindowAux, EventMask, GrabMode, GrabStatus, ImageFormat, InputFocus,
+    PropMode, StackMode, VisualClass, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -135,6 +135,10 @@ pub enum Event {
     },
     /// Окно сдвинулось или поменяло размер (корневое — сменился размер экрана).
     Configure {
+        window: u32,
+    },
+    /// Окно появилось на экране (приходит после [`Display::watch_stacking`]).
+    Mapped {
         window: u32,
     },
     /// Включилась раскладка с этим номером (с 0).
@@ -392,6 +396,7 @@ impl Display {
                 }
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
+            XEvent::MapNotify(e) => Event::Mapped { window: e.window },
             XEvent::XkbStateNotify(e) => Event::KeyboardGroup(u8::from(e.group)),
             XEvent::XkbNamesNotify(_) | XEvent::XkbNewKeyboardNotify(_) => Event::KeyboardLayouts,
             XEvent::MappingNotify(_) => {
@@ -417,6 +422,9 @@ pub struct Popup {
     window: Window,
     gc: u32,
 }
+
+/// Цвет окна блокировки до первого кадра: непрозрачный тёмный (ARGB).
+const LOCK_BACKGROUND: u32 = 0xFF1C_1C20;
 
 impl Popup {
     /// Показывает окно в заданном месте и забирает себе клавиатуру и мышь.
@@ -483,7 +491,16 @@ impl Popup {
     /// блокировки должен в этом случае выйти, чтобы сторож запустил его снова).
     pub fn show_lock(&self, d: &Display, w: u16, h: u16) -> Result<bool> {
         self.set_geometry(d, 0, 0, w, h)?;
+        // Непрозрачный тёмный фон окна: сервер закрашивает им окно сам в
+        // момент показа. Иначе окно с прозрачностью до первого кадра программы
+        // (а фон рисуется секунды) пустое — то есть прозрачное, и рабочий стол
+        // с уведомлениями виден сквозь «заблокированный» экран.
+        d.conn.change_window_attributes(
+            self.window,
+            &ChangeWindowAttributesAux::new().background_pixel(LOCK_BACKGROUND),
+        )?;
         d.conn.map_window(self.window)?;
+        d.conn.clear_area(false, self.window, 0, 0, 0, 0)?;
         d.conn.configure_window(
             self.window,
             &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
@@ -493,9 +510,52 @@ impl Popup {
         d.conn
             .set_input_focus(InputFocus::NONE, d.root, CURRENT_TIME)?;
         d.conn.flush()?;
-        let grabbed = self.regrab(d)?;
+        self.regrab(d)
+    }
+
+    /// Поднять окно поверх всех.
+    pub fn raise(&self, d: &Display) -> Result<()> {
+        d.conn.configure_window(
+            self.window,
+            &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+        )?;
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// Проверить и вернуть себе захват клавиатуры. `true` — захват наш
+    /// (уже был или только что забрали заново). Вызывается периодически:
+    /// другая программа может снять захват, и экран блокировки обязан его
+    /// вернуть (или уступить место новому — через сторожа).
+    pub fn regrab(&self, d: &Display) -> Result<bool> {
+        // Успех — только SUCCESS: повторный захват своим же соединением даёт
+        // его же. ALREADY_GRABBED значит, что клавиатуру держит ДРУГАЯ
+        // программа и нажатия уходят ей. Её захват может скоро кончиться
+        // (меню, Spotlight) — несколько коротких попыток, дальше решает
+        // вызывающий (экран блокировки повторит, не убирая окна).
+        let mut keyboard = false;
+        for _ in 0..5 {
+            let status = d
+                .conn
+                .grab_keyboard(
+                    false,
+                    self.window,
+                    CURRENT_TIME,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )?
+                .reply()?
+                .status;
+            if status == GrabStatus::SUCCESS {
+                keyboard = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Мышь — чтобы щелчки не уходили окнам, оказавшимся поверх.
         let mask = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
-        for _ in 0..50 {
+        let mut pointer = false;
+        for _ in 0..5 {
             let status = d
                 .conn
                 .grab_pointer(
@@ -510,41 +570,13 @@ impl Popup {
                 )?
                 .reply()?
                 .status;
-            if status == GrabStatus::SUCCESS || status == GrabStatus::ALREADY_GRABBED {
+            if status == GrabStatus::SUCCESS {
+                pointer = true;
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(grabbed)
-    }
-
-    /// Проверить и вернуть себе захват клавиатуры. `true` — захват наш
-    /// (уже был или только что забрали заново). Вызывается периодически:
-    /// другая программа может снять захват, и экран блокировки обязан его
-    /// вернуть (или уступить место новому — через сторожа).
-    pub fn regrab(&self, d: &Display) -> Result<bool> {
-        // Пока кто-то держит клавиатуру (например, служба оболочки открывает
-        // Spotlight поверх блокировки — такого быть не должно, но вдруг),
-        // ответ «заморожено» — пробуем ещё раз немного позже.
-        for _ in 0..100 {
-            let status = d
-                .conn
-                .grab_keyboard(
-                    false,
-                    self.window,
-                    CURRENT_TIME,
-                    GrabMode::ASYNC,
-                    GrabMode::ASYNC,
-                )?
-                .reply()?
-                .status;
-            match status {
-                GrabStatus::SUCCESS | GrabStatus::ALREADY_GRABBED => return Ok(true),
-                GrabStatus::FROZEN => std::thread::sleep(Duration::from_millis(20)),
-                _ => return Ok(false),
-            }
-        }
-        Ok(false)
+        Ok(keyboard && pointer)
     }
 
     /// Прячет окно, не трогая захват клавиатуры и мыши.

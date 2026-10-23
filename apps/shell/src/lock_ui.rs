@@ -54,13 +54,20 @@ fn locked_run() -> shell_x11::Result<i32> {
     // 1. Закрыть экран и забрать ввод — раньше всего остального.
     let popup = display.create_popup("lock-screen")?;
     let dark = dark_frame(u32::from(w), u32::from(h));
-    popup.present(&display, &dark)?;
-    if !popup.show_lock(&display, w, h)? {
-        return Err("не удалось захватить клавиатуру".into());
+    // Захват не вышел (клавиатуру держит другая программа) — не уходим:
+    // окно уже закрыло экран, захват повторяется каждый шаг цикла.
+    let grabbed = popup.show_lock(&display, w, h)?;
+    if !grabbed {
+        log("клавиатура или мышь заняты другой программой — повторяю захват");
     }
+    popup.present(&display, &dark)?;
+    // Следить за окнами, появляющимися поверх (уведомления, всплывающие
+    // окна), и за сменой размера экрана (подключили монитор).
+    display.watch_stacking()?;
 
     // 2. Фон (кеш или рисуется заново) и шрифты — экран уже закрыт.
     let mut ui = LockUi::new(Arc::clone(&display), &config, &layout, &popup, dark);
+    ui.grabbed = grabbed;
     ui.redraw()?;
 
     // 3. События — в отдельном потоке; основной цикл по таймауту обновляет
@@ -113,6 +120,10 @@ struct LockUi<'a> {
     minute: u64,
     placeholder: String,
     last_regrab: Instant,
+    /// Клавиатура и мышь сейчас у нас.
+    grabbed: bool,
+    /// Обои из настроек — нарисовать фон заново, если сменится размер экрана.
+    wallpaper: String,
     user: String,
 }
 
@@ -124,10 +135,7 @@ impl<'a> LockUi<'a> {
         popup: &'a Popup,
         dark: Pixmap,
     ) -> LockUi<'a> {
-        let (w, h) = (layout.w as u32, layout.h as u32);
-        let bg = shell_setup::lock::background(&config.wallpaper, layout.w, layout.h)
-            .and_then(|path| shell_icons::render_file(&path, w, h, shell_icons::Fit::Cover))
-            .unwrap_or(dark);
+        let bg = background(&config.wallpaper, layout).unwrap_or(dark);
         let user = std::env::var("USER")
             .ok()
             .filter(|u| !u.is_empty())
@@ -154,6 +162,8 @@ impl<'a> LockUi<'a> {
             minute: u64::MAX,
             placeholder: config.lock_placeholder.clone(),
             last_regrab: Instant::now(),
+            grabbed: true,
+            wallpaper: config.wallpaper.clone(),
             user,
         };
         ui.update_clock();
@@ -179,6 +189,8 @@ impl<'a> LockUi<'a> {
 
     /// `Some(код)` — пора выходить (0 — верный пароль).
     fn event(&mut self, ev: Event) -> shell_x11::Result<Option<i32>> {
+        let me = self.popup.id();
+        let root = self.display.root();
         match ev {
             Event::Key(k) => self.key(k),
             Event::Expose { .. } => {
@@ -187,8 +199,38 @@ impl<'a> LockUi<'a> {
                 }
                 Ok(None)
             }
+            // Сменился размер экрана (подключили монитор) — закрыть его весь.
+            Event::Configure { window } if window == root => {
+                self.resize()?;
+                Ok(None)
+            }
+            // Другое окно появилось или переставлено — наше снова наверх:
+            // иначе уведомление или всплывающее окно показалось бы поверх
+            // блокировки вместе со своим текстом.
+            Event::Mapped { window } | Event::Configure { window } if window != me => {
+                self.popup.raise(&self.display)?;
+                Ok(None)
+            }
             _ => Ok(None),
         }
+    }
+
+    /// Экран сменил размер: окно на весь новый экран, фон и раскладка заново.
+    fn resize(&mut self) -> shell_x11::Result<()> {
+        let (w, h) = self.display.screen_size();
+        let layout = Layout::new(i64::from(w), i64::from(h));
+        if layout.w == self.layout.w && layout.h == self.layout.h {
+            return Ok(());
+        }
+        log(&format!("экран блокировки: новый размер {w}x{h}"));
+        // Сначала закрыть весь экран тёмным, потом — полный вид.
+        let dark = dark_frame(u32::from(w), u32::from(h));
+        self.popup.set_geometry(&self.display, 0, 0, w, h)?;
+        self.popup.present(&self.display, &dark)?;
+        self.popup.raise(&self.display)?;
+        self.layout = layout;
+        self.bg = background(&self.wallpaper, &self.layout).unwrap_or(dark);
+        self.redraw()
     }
 
     fn key(&mut self, k: KeyPress) -> shell_x11::Result<Option<i32>> {
@@ -253,6 +295,10 @@ impl<'a> LockUi<'a> {
         self.display.sync()?;
         let password: String = self.password.iter().collect();
         let ok = authenticate(&self.user, &password);
+        // Копию тоже стереть: память строки вернётся в общий запас программы.
+        let mut bytes = password.into_bytes();
+        bytes.fill(0);
+        drop(bytes);
         self.clear_password();
         if ok {
             log("пароль верный — разблокировано");
@@ -289,14 +335,22 @@ impl<'a> LockUi<'a> {
         if redraw {
             self.redraw()?;
         }
-        // Захват клавиатуры мог снять другой процесс: вернуть себе; не
-        // выходит — выйти, сторож запустит экран заново и он захватит снова.
-        if self.last_regrab.elapsed() >= REGRAB {
+        // На всякий случай — наверх и каждый шаг, не только по событиям.
+        self.popup.raise(&self.display)?;
+        // Захват мог снять другой процесс: вернуть себе. Не выходит — НЕ
+        // уходить (окно ушло бы с экрана, и стол открылся бы до перезапуска),
+        // а держать экран закрытым и пробовать каждый шаг.
+        if !self.grabbed || self.last_regrab.elapsed() >= REGRAB {
             self.last_regrab = Instant::now();
-            if !self.popup.regrab(&self.display)? {
-                log("захват клавиатуры потерян — перезапуск");
-                return Ok(Some(1));
+            let now = self.popup.regrab(&self.display)?;
+            if now != self.grabbed {
+                log(if now {
+                    "захват клавиатуры и мыши снова наш"
+                } else {
+                    "захват клавиатуры или мыши потерян — экран остаётся, пробую вернуть"
+                });
             }
+            self.grabbed = now;
         }
         Ok(None)
     }
@@ -365,6 +419,13 @@ fn volume(args: &[&str]) {
     let _ = cmd.status();
 }
 
+/// Фон экрана блокировки под этот размер (обои, аватар, имя, поле).
+fn background(wallpaper: &str, layout: &Layout) -> Option<Pixmap> {
+    let (w, h) = (u32::try_from(layout.w).ok()?, u32::try_from(layout.h).ok()?);
+    shell_setup::lock::background(wallpaper, layout.w, layout.h)
+        .and_then(|path| shell_icons::render_file(&path, w, h, shell_icons::Fit::Cover))
+}
+
 /// Ровный тёмный кадр — закрыть экран, пока грузится остальное.
 fn dark_frame(w: u32, h: u32) -> Pixmap {
     let mut pm =
@@ -384,9 +445,7 @@ pub fn snapshot(text: &str, file: &str) -> shell_x11::Result<()> {
         (u32::from(w), u32::from(h))
     });
     let layout = Layout::new(i64::from(w), i64::from(h));
-    let bg = shell_setup::lock::background(&config.wallpaper, layout.w, layout.h)
-        .and_then(|path| shell_icons::render_file(&path, w, h, shell_icons::Fit::Cover))
-        .unwrap_or_else(|| dark_frame(w, h));
+    let bg = background(&config.wallpaper, &layout).unwrap_or_else(|| dark_frame(w, h));
     let mut fonts = Fonts::new(&config.font);
     let (time, date) = clock();
     let wrong = text.starts_with('!');
