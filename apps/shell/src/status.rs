@@ -2,8 +2,9 @@
 //! (PipeWire/PulseAudio): одно обновление — два коротких запроса, изменения
 //! ловит `pactl subscribe`. Батарея — напрямую из файлов ядра
 //! `/sys/class/power_supply` (то же, что читает UPower, но без демона и без
-//! разбора текста): перечитываем по событиям ядра (`udevadm monitor`) и раз
-//! в 30 с, сообщение — только при изменении.
+//! разбора текста): по событиям ядра (`udevadm monitor`), по смене
+//! подключения питания (сверка раз в секунду) и раз в 30 с; сообщение —
+//! только при изменении.
 //! «Не беспокоить» — `xfconf-query` (уведомления Xfce), изменения ловит
 //! `xfconf-query -m`.
 
@@ -68,8 +69,48 @@ pub fn read_sound() -> Option<Sound> {
     })
 }
 
+const POWER_SUPPLY: &str = "/sys/class/power_supply";
+
 pub fn read_battery() -> Option<Battery> {
-    sys_battery(&batteries_in(Path::new("/sys/class/power_supply")))
+    let root = Path::new(POWER_SUPPLY);
+    sys_battery(&batteries_in(root), on_line_power(root))
+}
+
+/// Подключено ли питание: есть ли среди источников (блок питания, USB) хоть
+/// один с `online` = 1. Таких источников нет — `None`.
+fn on_line_power(root: &Path) -> Option<bool> {
+    let mut found = None;
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        let d = e.path();
+        let text = |f: &str| std::fs::read_to_string(d.join(f)).ok();
+        if text("type").is_none_or(|t| t.trim() == "Battery") {
+            continue;
+        }
+        let Some(online) = text("online") else {
+            continue;
+        };
+        found = Some(found.unwrap_or(false) || online.trim() == "1");
+    }
+    found
+}
+
+/// Что меняется сразу при подключении и отключении зарядки: `online` блоков
+/// питания и `status` батарей. Читать — несколько крошечных файлов.
+fn power_signature(root: &Path) -> String {
+    let mut sig = String::new();
+    if let Ok(dir) = std::fs::read_dir(root) {
+        let mut dirs: Vec<_> = dir.flatten().map(|e| e.path()).collect();
+        dirs.sort();
+        for d in dirs {
+            for f in ["online", "status"] {
+                if let Ok(v) = std::fs::read_to_string(d.join(f)) {
+                    sig.push_str(v.trim());
+                    sig.push('|');
+                }
+            }
+        }
+    }
+    sig
 }
 
 /// Батареи из каталога ядра: `type` = Battery, `present` ≠ 0. Заряд ядро
@@ -333,11 +374,12 @@ pub fn watch_sound(tx: Sender<Msg>) {
     );
 }
 
-/// Батарея — из файлов ядра; когда перечитывать, говорит само ядро: о
-/// подключении и отключении зарядки и о смене состояния батареи оно сразу
-/// присылает событие (`udevadm monitor` его печатает). Проценты меняются
-/// медленно, и о них ядро сообщает не всегда — их догоняем опросом раз в
-/// 30 с. Службе уходит только то, что изменилось.
+/// Батарея — из файлов ядра. Когда перечитывать: по событию ядра
+/// (`udevadm monitor` — подключили или отключили зарядку) сразу; там, где
+/// событий нет (в VirtualBox их нет), раз в секунду сверяются только
+/// `online` и `status` — подключение видно через секунду; проценты меняются
+/// медленно и перечитываются раз в 30 с. Службе уходит только то, что
+/// изменилось.
 pub fn watch_battery(tx: Sender<Msg>) {
     let (ping_tx, ping_rx) = mpsc::channel::<()>();
     spawn_watcher(
@@ -347,18 +389,33 @@ pub fn watch_battery(tx: Sender<Msg>) {
         ping_tx,
     );
     std::thread::spawn(move || {
+        let root = Path::new(POWER_SUPPLY);
         let mut last = read_battery();
+        let mut sig = power_signature(root);
+        let mut since_full = std::time::Instant::now();
         if tx.send(Msg::Battery(last.clone())).is_err() {
             return;
         }
         loop {
-            // Событие — сразу (после короткого затишья: при отключении зарядки
-            // их приходит несколько подряд), иначе — по истечении 30 с.
-            match ping_rx.recv_timeout(BATTERY_POLL) {
-                Ok(()) => while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {},
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            let changed = match ping_rx.recv_timeout(POWER_CHECK) {
+                Ok(()) => {
+                    // При отключении событий приходит несколько подряд.
+                    while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
+                    true
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let now = power_signature(root);
+                    let moved = now != sig;
+                    sig = now;
+                    moved || since_full.elapsed() >= BATTERY_POLL
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            };
+            if !changed {
+                continue;
             }
+            since_full = std::time::Instant::now();
+            sig = power_signature(root);
             let now = read_battery();
             if now != last {
                 last = now.clone();
@@ -370,7 +427,9 @@ pub fn watch_battery(tx: Sender<Msg>) {
     });
 }
 
-/// Как часто перечитывать батарею без событий ядра (ради процентов).
+/// Как часто сверять, подключено ли питание (если ядро не прислало событие).
+const POWER_CHECK: Duration = Duration::from_secs(1);
+/// Как часто перечитывать батарею целиком (ради процентов).
 const BATTERY_POLL: Duration = Duration::from_secs(30);
 
 pub fn watch_dnd(tx: Sender<Msg>) {
@@ -412,6 +471,8 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/testdata/power_supply"
         ));
+        assert_eq!(on_line_power(root), Some(true), "AC: online = 1");
+        assert!(power_signature(root).contains("Discharging"));
         let bats = batteries_in(root);
         // BAT0 — батарея; AC (Mains) и BAT1 (present: 0) — нет.
         assert_eq!(bats.len(), 1);
@@ -419,7 +480,7 @@ mod tests {
         assert_eq!(bats[0].now, Some(2_050_000));
         assert_eq!(bats[0].full, Some(5_000_000));
         assert_eq!(bats[0].power, Some(800_000));
-        let b = sys_battery(&bats).unwrap();
+        let b = sys_battery(&bats, None).unwrap();
         assert_eq!(b.percent, 41);
         assert_eq!(b.icon, "battery-level-40-symbolic");
 
@@ -432,7 +493,7 @@ mod tests {
         assert_eq!(bats.len(), 1);
         assert_eq!(bats[0].now, Some(1_500_000));
         assert_eq!(bats[0].full, Some(3_000_000));
-        let b = sys_battery(&bats).unwrap();
+        let b = sys_battery(&bats, None).unwrap();
         assert_eq!(b.percent, 50);
         assert_eq!(b.state, "charging");
     }

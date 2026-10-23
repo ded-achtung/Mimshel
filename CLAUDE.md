@@ -87,7 +87,10 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      наблюдателями (`pactl subscribe`, `xfconf-query -m`) — `apps/shell/src/status.rs`. Батарея
      (23.10.2026) — из `/sys/class/power_supply`, без upower: перечитывается сразу по событиям ядра
      (`udevadm monitor --kernel --subsystem-match=power_supply` — зарядка подключена/отключена,
-     смена состояния) и раз в 30 с ради процентов; в ВМ нет `power_now` — без оставшегося времени.
+     смена состояния); в VirtualBox таких событий нет — раз в секунду сверяются `online` блока питания и
+     `status` батареи; проценты — раз в 30 с. Подключено питание, а аккумулятор не заряжается (или
+     ещё не переключился) — значок с вилкой `battery-level-NN-plugged-in`, «От сети, не заряжается».
+     В ВМ нет `power_now` — без оставшегося времени.
    - 3в **сделано** (22.10.2026): трей StatusNotifierItem — `crates/dbus` (zbus 5, blocking):
      служба занимает `org.kde.StatusNotifierWatcher` (если свободно — панель Xfce его держит, пока
      запущена), читает значки и меню (DBusMenu), передаёт щелчки. Значки `Passive` не показываем

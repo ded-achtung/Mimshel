@@ -118,7 +118,7 @@ impl Battery {
             ("charging", None) => "Заряжается".into(),
             ("discharging", Some(t)) => format!("От аккумулятора, осталось {t}"),
             ("discharging", None) => "От аккумулятора".into(),
-            ("pending-charge", _) => "Ожидает зарядки".into(),
+            ("pending-charge", _) => "От сети, не заряжается".into(),
             ("empty", _) => "Разряжен".into(),
             _ => "Состояние неизвестно".into(),
         }
@@ -158,8 +158,9 @@ pub struct SysBattery {
 }
 
 /// Сводная батарея из показаний ядра: несколько батарей складываются (как
-/// это делал DisplayDevice в UPower). Нет ни одной батареи — `None`.
-pub fn sys_battery(bats: &[SysBattery]) -> Option<Battery> {
+/// это делал DisplayDevice в UPower). `on_ac` — подключено ли питание (блок
+/// питания или USB; `None` — ядро не сообщает). Нет ни одной батареи — `None`.
+pub fn sys_battery(bats: &[SysBattery], on_ac: Option<bool>) -> Option<Battery> {
     let present: Vec<&SysBattery> = bats
         .iter()
         .filter(|b| b.now.is_some() || b.capacity.is_some())
@@ -176,12 +177,22 @@ pub fn sys_battery(bats: &[SysBattery]) -> Option<Battery> {
     });
     let percent = u32::try_from(percent).unwrap_or(100);
     let any = |s: &str| present.iter().any(|b| b.status == s);
-    let state = if any("Discharging") {
-        "discharging"
-    } else if any("Charging") {
+    let full_now = present.iter().all(|b| b.status == "Full");
+    let state = if any("Charging") {
         "charging"
-    } else if present.iter().all(|b| b.status == "Full") {
+    } else if full_now {
         "fully-charged"
+    } else if on_ac == Some(true) {
+        // Питание подключено, но аккумулятор не заряжается: держит заряд
+        // (ноутбук ограничивает зарядку) или ещё не переключился — сразу
+        // после подключения он пару секунд пишет «Discharging».
+        if percent >= 100 {
+            "fully-charged"
+        } else {
+            "pending-charge"
+        }
+    } else if any("Discharging") || on_ac == Some(false) {
+        "discharging"
     } else if any("Not charging") {
         "pending-charge"
     } else {
@@ -202,6 +213,8 @@ fn battery_icon(percent: u32, state: &str) -> String {
         "fully-charged" => "battery-full-charged-symbolic".to_string(),
         "charging" if percent >= 100 => "battery-full-charging-symbolic".to_string(),
         "charging" => format!("battery-level-{tier}-charging-symbolic"),
+        // Подключено к сети, но не заряжается — вилка вместо молнии.
+        "pending-charge" => format!("battery-level-{tier}-plugged-in-symbolic"),
         _ if tier == 0 => "battery-empty-symbolic".to_string(),
         _ => format!("battery-level-{tier}-symbolic"),
     }
@@ -286,7 +299,7 @@ mod tests {
             power: Some(800_000),
             capacity: Some(41),
         }];
-        let b = sys_battery(&one).unwrap();
+        let b = sys_battery(&one, None).unwrap();
         assert_eq!(b.percent, 41);
         assert_eq!(b.state, "discharging");
         assert_eq!(b.icon, "battery-level-40-symbolic");
@@ -299,7 +312,7 @@ mod tests {
             full: Some(100),
             ..SysBattery::default()
         }];
-        let b = sys_battery(&full).unwrap();
+        let b = sys_battery(&full, None).unwrap();
         assert_eq!(b.state, "fully-charged");
         assert_eq!(b.icon, "battery-full-charged-symbolic");
         assert_eq!(b.state_text(), "Полностью заряжен");
@@ -311,7 +324,7 @@ mod tests {
             power: Some(60),
             capacity: None,
         }];
-        let b = sys_battery(&charging).unwrap();
+        let b = sys_battery(&charging, None).unwrap();
         assert_eq!(b.state, "charging");
         assert_eq!(b.time.as_deref(), Some("1,0 hours"));
         assert_eq!(b.icon, "battery-level-40-charging-symbolic");
@@ -334,7 +347,7 @@ mod tests {
                 capacity: None,
             },
         ];
-        let b = sys_battery(&two).unwrap();
+        let b = sys_battery(&two, None).unwrap();
         assert_eq!(b.percent, 40);
         assert_eq!(b.time.as_deref(), Some("1,3 hours"));
 
@@ -344,13 +357,56 @@ mod tests {
             capacity: Some(77),
             ..SysBattery::default()
         }];
-        let b = sys_battery(&cap).unwrap();
+        let b = sys_battery(&cap, None).unwrap();
         assert_eq!(b.percent, 77);
         assert_eq!(b.state, "");
         assert_eq!(b.icon, "battery-level-70-symbolic");
         assert_eq!(b.state_text(), "Состояние неизвестно");
 
-        assert_eq!(sys_battery(&[]), None);
-        assert_eq!(sys_battery(&[SysBattery::default()]), None);
+        assert_eq!(sys_battery(&[], None), None);
+
+        // Питание подключено, а аккумулятор ещё пишет «Discharging» или
+        // «Not charging» — вилка, не разряд.
+        let lag = [SysBattery {
+            status: "Discharging".into(),
+            now: Some(74),
+            full: Some(100),
+            power: Some(10),
+            capacity: None,
+        }];
+        let b = sys_battery(&lag, Some(true)).unwrap();
+        assert_eq!(b.state, "pending-charge");
+        assert_eq!(b.icon, "battery-level-70-plugged-in-symbolic");
+        assert_eq!(b.state_text(), "От сети, не заряжается");
+        assert_eq!(b.time, None);
+        // Отключили — разряд, даже если ядро ещё не обновило состояние.
+        let stale = [SysBattery {
+            status: "Unknown".into(),
+            ..lag[0].clone()
+        }];
+        assert_eq!(
+            sys_battery(&stale, Some(false)).unwrap().state,
+            "discharging"
+        );
+        // Заряжается — молния, что бы ни было с питанием.
+        let ch = [SysBattery {
+            status: "Charging".into(),
+            ..lag[0].clone()
+        }];
+        assert_eq!(
+            sys_battery(&ch, Some(true)).unwrap().icon,
+            "battery-level-70-charging-symbolic"
+        );
+        let full = [SysBattery {
+            status: "Not charging".into(),
+            now: Some(100),
+            full: Some(100),
+            ..SysBattery::default()
+        }];
+        assert_eq!(
+            sys_battery(&full, Some(true)).unwrap().state,
+            "fully-charged"
+        );
+        assert_eq!(sys_battery(&[SysBattery::default()], None), None);
     }
 }
