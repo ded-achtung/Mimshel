@@ -1,156 +1,23 @@
-//! Экран блокировки (`shell lock`). Пароль проверяет i3lock-color (PAM) —
-//! надёжная готовая программа; свою блокировку не пишем (урок 1: на X11
-//! падение блокировщика снимает блокировку). Здесь — сторож: он запускает
-//! i3lock и, если тот вышел без верного пароля (упал, не захватил
-//! клавиатуру), сразу запускает снова. Сторож ничего не рисует и почти ничего
-//! не делает — падать ему не с чего.
+//! Сторож экрана блокировки (`shell lock`). Сам экран рисует и пароль
+//! проверяет отдельный процесс (`shell lock-screen`, PAM): на X11 падение
+//! блокировщика снимает блокировку (урок 1), поэтому сторож перезапускает
+//! экран при любом выходе без верного пароля. Сторож ничего не рисует и
+//! почти ничего не делает — падать ему не с чего.
 //!
-//! Вид — как у macos-look: фон с аватаром и овальным полем, сверху дата и
-//! крупное время, индикатор ввода — кольцо справа в поле. Положения считаем
-//! сами: i3lock не умеет складывать в координатах (урок 7).
+//! Вид — как был при macos-look: фон с аватаром и овальным полем, сверху
+//! дата и крупное время, кольцо состояния справа в поле (`crates/lock`).
 
 use std::io::Write;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use shell_lock::{Layout, round};
+use shell_lock::Layout;
 
-use crate::look::Look;
-use crate::sys::{command, home, running, succeeds, which};
+use crate::sys::{command, home, running, succeeds};
 
-/// Метка в i3lock, собранном с заплаткой macos-look (подсказка в поле
-/// сменяется точками ● при вводе).
-pub const LOCKER_MARK: &[u8] = b"macos-look-field-v3";
-
-/// Команда i3lock: картинка фона, часы, кольцо ввода, подсказка в поле
-/// (`placeholder`, только у собранного с заплаткой — иначе она на фоне).
-pub fn lock_args(bg: &Path, l: &Layout, placeholder: &str, patched: bool) -> Vec<String> {
-    let (white, clear) = ("ffffffff", "00000000");
-    let mut a: Vec<String> = [
-        "i3lock",
-        "--image",
-        &bg.to_string_lossy(),
-        "--ignore-empty-password",
-        "--show-failed-attempts",
-        "--pass-media-keys",
-        "--pass-volume-keys",
-        "--pointer",
-        "default",
-        // Часы: дата мелко над крупным временем.
-        "--clock",
-        "--force-clock",
-        "--time-str",
-        "%H:%M",
-        "--date-str",
-        "%A, %-d %B",
-        "--time-font",
-        "Inter",
-        "--date-font",
-        "Inter",
-        "--layout-font",
-        "Inter",
-        "--time-size",
-        &l.px(104.0),
-        "--date-size",
-        &l.px(23.0),
-        "--time-color",
-        "ffffffe0",
-        "--date-color",
-        "ffffffd0",
-        "--time-pos",
-        &format!("{}:{}", l.w.div_euclid(2), l.time_y),
-        "--date-pos",
-        &format!("{}:{}", l.w.div_euclid(2), l.date_y),
-        // Индикатор ввода — маленькое кольцо справа в поле, как стрелка на Mac.
-        "--indicator",
-        "--radius",
-        &l.px(9.0),
-        "--ring-width",
-        &l.px(2.0),
-        "--ind-pos",
-        &format!("{}:{}", l.ind_x, l.ind_y),
-        "--inside-color",
-        clear,
-        "--ring-color",
-        "ffffff55",
-        "--line-color",
-        clear,
-        "--separator-color",
-        clear,
-        "--keyhl-color",
-        white,
-        "--bshl-color",
-        "ff9f0aff",
-        "--insidever-color",
-        clear,
-        "--ringver-color",
-        "0a84ffff",
-        "--insidewrong-color",
-        clear,
-        "--ringwrong-color",
-        "ff453aff",
-        "--verif-text",
-        "",
-        "--noinput-text",
-        "",
-        "--lock-text",
-        "",
-        "--lockfailed-text",
-        "",
-        "--wrong-text",
-        "Неверный пароль",
-        "--wrong-font",
-        "Inter",
-        "--wrong-size",
-        &l.px(13.0),
-        "--wrong-color",
-        "ffffffd0",
-        "--wrong-pos",
-        &format!(
-            "{}:{}",
-            l.w.div_euclid(2),
-            l.pill_y + l.pill_h + round(30.0 * l.s)
-        ),
-        "--modif-pos",
-        "-100:-100",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    if patched {
-        a.extend(
-            [
-                "--greeter-text",
-                placeholder,
-                "--greeter-font",
-                "Inter",
-                "--greeter-size",
-                &l.px(13.5),
-                "--greeter-color",
-                "ffffff9e",
-                "--greeter-align",
-                "1",
-                "--greeter-pos",
-                &format!(
-                    "{}:{}",
-                    l.pill_x + round(14.0 * l.s),
-                    l.pill_y + l.pill_h.div_euclid(2) + round(5.0 * l.s)
-                ),
-            ]
-            .iter()
-            .map(|s| s.to_string()),
-        );
-    }
-    a
-}
-
-/// Собран ли i3lock с заплаткой.
-pub fn locker_patched() -> bool {
-    which("i3lock")
-        .and_then(|p| std::fs::read(p).ok())
-        .is_some_and(|b| b.windows(LOCKER_MARK.len()).any(|w| w == LOCKER_MARK))
-}
+/// Экран блокировки в списке процессов (команда `shell lock-screen`).
+const LOCK_SCREEN: &str = "shell lock-screen";
 
 /// Размер экрана из xrandr.
 pub fn screen_size() -> (i64, i64) {
@@ -169,33 +36,32 @@ pub fn screen_size() -> (i64, i64) {
 }
 
 /// Версия рисования фона: поменялась — старые картинки перерисовываются.
-const BACKGROUND_VERSION: u32 = 1;
+const BACKGROUND_VERSION: u32 = 2;
 
 /// Картинка фона под этот экран. Рисуется заранее (`shell apply lock`) или
-/// при блокировке, если обои, аватар, имя или экран поменялись. Не
-/// получилось — фон macos-look, иначе просто обои: блокировка важнее вида.
+/// при блокировке, если обои, аватар, имя или экран поменялись. `None` —
+/// нарисовать не удалось и готового нет: экран блокировки обойдётся тёмным
+/// фоном (блокировка важнее вида).
 /// `wallpaper` — обои из настроек (`look.wallpaper`): свои по имени или путь.
-pub fn background(look: &Look, wallpaper: &str, w: i64, h: i64) -> PathBuf {
-    let sonoma = crate::look::Paths::new()
-        .wallpapers
-        .join(format!("{}.jpg", look.names().wallpaper));
+pub fn background(wallpaper: &str, w: i64, h: i64) -> Option<PathBuf> {
     // Падение при рисовании не должно помешать заблокировать экран.
     let drawn = std::panic::catch_unwind(|| {
         let wallpaper = crate::parts::wallpaper_file(wallpaper, w, h)
             .ok_or_else(|| "обои не нарисованы".to_string())?;
-        draw_background(look, &wallpaper, w, h)
+        draw_background(&wallpaper, w, h)
     });
     match drawn {
-        Ok(Ok(path)) => return path,
+        Ok(Ok(path)) => return Some(path),
         Ok(Err(e)) => log(&format!("фон блокировки не нарисован: {e}")),
         Err(_) => log("фон блокировки: сбой при рисовании"),
     }
-    let old = home().join(format!(".cache/macos-look/lock/bg-{w}x{h}.png"));
-    if old.exists() { old } else { sonoma }
+    // Годится кеш прошлой блокировки (прежние обои лучше, чем ничего).
+    let cached = home().join(format!(".cache/shell/lock/bg-{w}x{h}.png"));
+    cached.exists().then_some(cached)
 }
 
 /// Нарисовать фон (если готового с тем же ключом нет) и вернуть путь к нему.
-pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, String> {
+pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, String> {
     let dir = home().join(".cache/shell/lock");
     let out = dir.join(format!("bg-{w}x{h}.png"));
     let stamp = dir.join(format!("bg-{w}x{h}.key"));
@@ -205,8 +71,6 @@ pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<
         .filter(|u| !u.is_empty())
         .or_else(|| home().file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    let patched = locker_patched();
-    let placeholder = look.get("lock", "placeholder");
     let mtime = |p: &Path| {
         std::fs::metadata(p)
             .and_then(|m| m.modified())
@@ -215,7 +79,7 @@ pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<
             .map_or(0, |d| d.as_nanos())
     };
     let key = format!(
-        "{w}|{h}|{}|{}|{}|{user}|{placeholder}|{patched}|{BACKGROUND_VERSION}",
+        "{w}|{h}|{}|{}|{}|{user}|{BACKGROUND_VERSION}",
         wallpaper.display(),
         mtime(wallpaper),
         mtime(&face),
@@ -245,8 +109,6 @@ pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<
             wallpaper: wall,
             face,
             user: &user,
-            // Собранный с заплаткой i3lock пишет подсказку сам (и прячет её при вводе).
-            placeholder: (!patched).then_some(placeholder),
         },
         &mut fonts,
     )
@@ -261,28 +123,20 @@ pub fn draw_background(look: &Look, wallpaper: &Path, w: i64, h: i64) -> Result<
 }
 
 /// Заблокировать экран и держать блокировку, пока не введён верный пароль.
-/// Возвращает код выхода i3lock (0 — разблокировали паролем).
-pub fn supervise(look: &Look, wallpaper: &str) -> i32 {
-    if running("i3lock") {
+/// `exe` — наша программа (запускается как `shell lock-screen`).
+/// Возвращает код выхода экрана блокировки (0 — разблокировали паролем).
+pub fn supervise(exe: &Path) -> i32 {
+    // Экран уже показан (например, блокировка по бездействию и команда из
+    // меню одновременно) — второй не нужен.
+    if running(LOCK_SCREEN) {
         return 0;
     }
-    let (w, h) = screen_size();
-    let l = Layout::new(w, h);
-    let bg = background(look, wallpaper, w, h);
-    let args = lock_args(&bg, &l, look.get("lock", "placeholder"), locker_patched());
     supervise_with(
-        || {
-            command(&args[0])
-                .args(&args[1..])
-                .arg("--nofork")
-                .env("LC_TIME", look.get("lock", "date_locale"))
-                .env("MACOS_LOOK_MAX_DOTS", l.max_dots().to_string())
-                .status()
-        },
+        || command(&exe.to_string_lossy()).arg("lock-screen").status(),
         || succeeds(&["xset", "q"]),
         |restarts, how| {
             log(&format!(
-                "блокировка: i3lock завершился {how} без пароля — перезапуск #{restarts}"
+                "блокировка: экран завершился {how} без пароля — перезапуск #{restarts}"
             ));
             // Первый перезапуск — сразу. При постоянной ошибке запуска
             // ограничиваем нагрузку, но не бросаем попытки заблокировать экран.
@@ -322,7 +176,7 @@ fn supervise_with(
 }
 
 /// Журнал блокировки: `~/.local/state/shell/lock.log`.
-fn log(msg: &str) {
+pub fn log(msg: &str) {
     let path = home().join(".local/state/shell/lock.log");
     let _ = std::fs::create_dir_all(home().join(".local/state/shell"));
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -370,56 +224,5 @@ mod tests {
             |_, _| panic!("сеанс завершён — перезапуск не нужен"),
         );
         assert_eq!(result, 1);
-    }
-
-    /// Эталон — команда, которую для тех же экранов составляет macos-look
-    /// (`testdata/`, по аргументу в строке).
-    #[test]
-    fn same_as_macos_look() {
-        let cases = [
-            (
-                1278,
-                798,
-                include_str!("../testdata/i3lock-1278x798.txt"),
-                true,
-            ),
-            (
-                2560,
-                1440,
-                include_str!("../testdata/i3lock-2560x1440.txt"),
-                true,
-            ),
-            (
-                1920,
-                1080,
-                include_str!("../testdata/i3lock-1920x1080.txt"),
-                true,
-            ),
-            (
-                1278,
-                798,
-                include_str!("../testdata/i3lock-1278x798-plain.txt"),
-                false,
-            ),
-            (
-                2560,
-                1440,
-                include_str!("../testdata/i3lock-2560x1440-plain.txt"),
-                false,
-            ),
-            (
-                1920,
-                1080,
-                include_str!("../testdata/i3lock-1920x1080-plain.txt"),
-                false,
-            ),
-        ];
-        for (w, h, want, patched) in cases {
-            let l = Layout::new(w, h);
-            let got = lock_args(Path::new("/bg.png"), &l, "Введите пароль", patched);
-            assert_eq!(format!("{}\n", got.join("\n")), want, "{w}x{h}");
-        }
-        assert_eq!(Layout::new(1278, 798).max_dots(), 11);
-        assert_eq!(Layout::new(1920, 1080).max_dots(), 11);
     }
 }

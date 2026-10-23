@@ -4,6 +4,7 @@ mod config_store;
 mod dock_ui;
 mod guard;
 mod ipc;
+mod lock_ui;
 mod menubar_ui;
 mod notify_ui;
 mod setup;
@@ -33,7 +34,10 @@ const HELP: &str = "\
                         shell set parts.dock plank — вернуть Plank)
   shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
                         (без частей — все)
-  shell lock            заблокировать экран (i3lock-color; упадёт без пароля — запустится снова)
+  shell lock            заблокировать экран (свой экран блокировки; упадёт без пароля —
+                        сторож запустит снова)
+  shell snapshot lock ТЕКСТ ФАЙЛ.png
+                        нарисовать экран блокировки в картинку (проверка вида)
   shell action ДЕЙСТВИЕ пункт меню яблока: about settings forcequit sleep restart shutdown lock logout
   shell backup [ПОМЕТКА] сохранить настройки Xfce, Plank и shell
   shell backups         список копий
@@ -78,10 +82,9 @@ fn main() {
                 .status();
         }
         Some("lock") if args.len() == 2 && args[1] == "--nofork" => {
-            let look = shell_setup::look::Look::load();
-            let wallpaper = ui::load_config().wallpaper;
-            std::process::exit(shell_setup::lock::supervise(&look, &wallpaper))
+            std::process::exit(shell_setup::lock::supervise(&guard::own_exe()))
         }
+        Some("lock-screen") => std::process::exit(lock_ui::run()),
         Some("backup") if args.len() <= 2 => {
             std::process::exit(setup::backup(args.get(1).map(String::as_str)))
         }
@@ -95,6 +98,9 @@ fn main() {
             if !ui::ask_daemon(panel) {
                 exit_on_error(ui::run(Some(panel)));
             }
+        }
+        Some("snapshot") if args.len() == 4 && args[1] == "lock" => {
+            exit_on_error(lock_ui::snapshot(&args[2], &args[3]))
         }
         Some("snapshot") if args.len() == 4 && ui::Panel::parse(&args[1]).is_some() => {
             let panel = ui::Panel::parse(&args[1]).expect("проверено выше");
@@ -116,7 +122,7 @@ fn exit_on_error(result: shell_x11::Result<()>) {
 
 fn load() -> Vec<shell_apps::App> {
     let start = Instant::now();
-    let apps = shell_apps::load(&shell_apps::Settings::from_env());
+    let apps = shell_apps::load(&ui::app_settings(&ui::load_config()));
     eprintln!(
         "Прочитано программ: {} за {:?}",
         apps.len(),
@@ -143,7 +149,7 @@ fn search(text: &str) {
 }
 
 fn watch() {
-    let settings = shell_apps::Settings::from_env();
+    let settings = ui::app_settings(&ui::load_config());
     let mut watcher = match shell_apps::Watcher::new(&settings) {
         Ok(w) => w,
         Err(e) => {

@@ -20,8 +20,8 @@ use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xkb::ConnectionExt as _;
 use x11rb::protocol::xproto::{
     AtomEnum, ColormapAlloc, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux,
-    EventMask, GrabMode, GrabStatus, ImageFormat, PropMode, StackMode, VisualClass, Window,
-    WindowClass,
+    EventMask, GrabMode, GrabStatus, ImageFormat, InputFocus, PropMode, StackMode, VisualClass,
+    Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -282,6 +282,34 @@ impl Display {
         Ok(())
     }
 
+    /// Вернуть фокус активному окну (после экрана блокировки, который уводил
+    /// фокус в корневое окно). Нет активного окна — фокус корню, но он
+    /// следует за указателем.
+    pub fn restore_focus(&self) -> Result<()> {
+        let reply = self
+            .conn
+            .get_property(
+                false,
+                self.root,
+                self.atoms._NET_ACTIVE_WINDOW,
+                AtomEnum::WINDOW,
+                0,
+                1,
+            )?
+            .reply()?;
+        let active = reply
+            .value32()
+            .and_then(|mut v| v.next())
+            .filter(|&w| w != 0 && w != u32::MAX);
+        self.conn.set_input_focus(
+            InputFocus::POINTER_ROOT,
+            active.unwrap_or(self.root),
+            CURRENT_TIME,
+        )?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// Перечитывает таблицу клавиш. Смену раскладок (setxkbmap, настройки Xfce)
     /// сервер сообщает событиями XKB, а не `MappingNotify`, поэтому проще
     /// перечитывать при каждом открытии окна — это один короткий запрос.
@@ -449,6 +477,76 @@ impl Popup {
         Ok(())
     }
 
+    /// Показывает окно на весь экран и забирает клавиатуру и мышь насовсем —
+    /// для экрана блокировки. `false` — клавиатуру забрать не удалось: окно
+    /// остаётся показанным, но ввод может перехватить кто-то другой (экран
+    /// блокировки должен в этом случае выйти, чтобы сторож запустил его снова).
+    pub fn show_lock(&self, d: &Display, w: u16, h: u16) -> Result<bool> {
+        self.set_geometry(d, 0, 0, w, h)?;
+        d.conn.map_window(self.window)?;
+        d.conn.configure_window(
+            self.window,
+            &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+        )?;
+        // Как i3lock: фокус — корневому окну, чтобы нажатия не уходили окнам
+        // программ, даже если захват клавиатуры на мгновение пропадёт.
+        d.conn
+            .set_input_focus(InputFocus::NONE, d.root, CURRENT_TIME)?;
+        d.conn.flush()?;
+        let grabbed = self.regrab(d)?;
+        let mask = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
+        for _ in 0..50 {
+            let status = d
+                .conn
+                .grab_pointer(
+                    false,
+                    self.window,
+                    mask,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                    NONE,
+                    NONE,
+                    CURRENT_TIME,
+                )?
+                .reply()?
+                .status;
+            if status == GrabStatus::SUCCESS || status == GrabStatus::ALREADY_GRABBED {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(grabbed)
+    }
+
+    /// Проверить и вернуть себе захват клавиатуры. `true` — захват наш
+    /// (уже был или только что забрали заново). Вызывается периодически:
+    /// другая программа может снять захват, и экран блокировки обязан его
+    /// вернуть (или уступить место новому — через сторожа).
+    pub fn regrab(&self, d: &Display) -> Result<bool> {
+        // Пока кто-то держит клавиатуру (например, служба оболочки открывает
+        // Spotlight поверх блокировки — такого быть не должно, но вдруг),
+        // ответ «заморожено» — пробуем ещё раз немного позже.
+        for _ in 0..100 {
+            let status = d
+                .conn
+                .grab_keyboard(
+                    false,
+                    self.window,
+                    CURRENT_TIME,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )?
+                .reply()?
+                .status;
+            match status {
+                GrabStatus::SUCCESS | GrabStatus::ALREADY_GRABBED => return Ok(true),
+                GrabStatus::FROZEN => std::thread::sleep(Duration::from_millis(20)),
+                _ => return Ok(false),
+            }
+        }
+        Ok(false)
+    }
+
     /// Прячет окно, не трогая захват клавиатуры и мыши.
     pub fn hide_passive(&self, d: &Display) -> Result<()> {
         d.conn.unmap_window(self.window)?;
@@ -611,6 +709,9 @@ impl Keymap {
             key::End | key::KP_End => Key::End,
             key::Page_Up | key::KP_Page_Up => Key::PageUp,
             key::Page_Down | key::KP_Page_Down => Key::PageDown,
+            key::XF86_AudioRaiseVolume => Key::VolumeUp,
+            key::XF86_AudioLowerVolume => Key::VolumeDown,
+            key::XF86_AudioMute | key::XF86_AudioMicMute => Key::VolumeMute,
             _ => match Keysym::new(sym).key_char() {
                 Some(c) if !c.is_control() => {
                     // Caps Lock меняет регистр букв (и наоборот при зажатом Shift).

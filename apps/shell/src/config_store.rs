@@ -56,6 +56,14 @@ impl Store {
             }
             atomic_write(&self.path, &text)?;
         }
+        // Файлы, созданные до раздела [lock]: переносим блокировку, скрытие и
+        // переименование программ из прежнего конфига (или значений по умолчанию).
+        if !config::has_lock(&text) {
+            let base = legacy.cloned().unwrap_or_default();
+            text = config::add_lock_settings(&text, &base)
+                .ok_or_else(|| io::Error::other("не удалось перенести настройки блокировки"))?;
+            atomic_write(&self.path, &text)?;
+        }
         self.remember(&text);
         Ok(Config::from_toml(&text))
     }
@@ -74,6 +82,14 @@ impl Store {
                 for (name, ..) in config::PARTS {
                     config.set_part(name, legacy.part(name) == Some(true));
                 }
+            }
+            if !config::has_lock(&text) {
+                let base = legacy.cloned().unwrap_or_default();
+                config.lock_placeholder = base.lock_placeholder;
+                config.lock_idle = base.lock_idle;
+                config.lock_screen_off = base.lock_screen_off;
+                config.hide_apps = base.hide_apps;
+                config.rename_apps = base.rename_apps;
             }
             config
         } else {

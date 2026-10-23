@@ -50,6 +50,10 @@ pub struct Settings {
     pub desktops: Vec<String>,
     /// Папки, где ищутся программы из `TryExec`.
     pub path: Vec<PathBuf>,
+    /// Идентификаторы ярлыков, скрытые из Launchpad и Spotlight (`[apps] hide`).
+    pub hide: Vec<String>,
+    /// Названия программ: (идентификатор ярлыка, новое название) — `[apps] rename`.
+    pub rename: Vec<(String, String)>,
 }
 
 impl Settings {
@@ -83,6 +87,8 @@ impl Settings {
             path: var("PATH")
                 .map(|p| std::env::split_paths(&p).collect())
                 .unwrap_or_default(),
+            hide: Vec::new(),
+            rename: Vec::new(),
         }
     }
 }
@@ -118,8 +124,29 @@ pub fn load_all(settings: &Settings) -> Vec<App> {
         }
     }
 
+    // Названия и скрытие из настроек (`[apps] rename`, `[apps] hide`) — в памяти,
+    // без копий ярлыков: переименованное видно везде, скрытое остаётся доку.
+    for app in &mut apps {
+        if let Some((_, name)) = settings
+            .rename
+            .iter()
+            .find(|(id, _)| id_matches(&app.id, id))
+        {
+            app.name = name.clone();
+        }
+        if settings.hide.iter().any(|id| id_matches(&app.id, id)) {
+            app.no_display = true;
+        }
+    }
+
     apps.sort_by_cached_key(|a| (a.name.to_lowercase(), a.id.clone()));
     apps
+}
+
+/// Совпадает ли идентификатор ярлыка (`thunar.desktop`, `папка-app.desktop`)
+/// с именем из настроек (`thunar`, `папка-app`).
+fn id_matches(id: &str, name: &str) -> bool {
+    id == name || id.strip_suffix(".desktop").is_some_and(|stem| stem == name)
 }
 
 /// Все `*.desktop` в папке и вложенных папках вместе с идентификаторами.
@@ -227,6 +254,8 @@ mod tests {
             locale: Locale::parse("ru_RU.UTF-8"),
             desktops: vec!["XFCE".into()],
             path: vec!["/usr/bin".into(), "/bin".into()],
+            hide: vec![],
+            rename: vec![],
         }
     }
 
@@ -261,6 +290,36 @@ mod tests {
         dir.write("kde/konsole.desktop", &app("Konsole", ""));
         let apps = load(&settings(&[&dir]));
         assert_eq!(apps[0].id, "kde-konsole.desktop");
+    }
+
+    #[test]
+    fn hide_and_rename_from_settings() {
+        let dir = TempDir::new("hide-rename");
+        dir.write("files.desktop", &app("Files", ""));
+        dir.write("xterm.desktop", &app("XTerm", ""));
+        dir.write("kde/konsole.desktop", &app("Konsole", ""));
+        let mut s = settings(&[&dir]);
+        s.hide = vec!["xterm".into()];
+        s.rename = vec![
+            ("files".into(), "Проводник".into()),
+            ("kde-konsole".into(), "Консоль".into()),
+        ];
+
+        // Скрытое не видно в Launchpad/Spotlight, переименованное — под новым
+        // именем и на своём месте по алфавиту.
+        let apps = load(&s);
+        assert_eq!(names(&apps), ["Консоль", "Проводник"]);
+        // Доку скрытое остаётся (окна программы нужно узнавать).
+        let all = load_all(&s);
+        assert_eq!(names(&all), ["XTerm", "Консоль", "Проводник"]);
+        assert!(all[0].no_display);
+        // Поиск по прежнему названию остаётся (name_untranslated не меняется).
+        assert_eq!(apps[1].name_untranslated, "Files");
+        // Без настроек — как в ярлыках.
+        assert_eq!(
+            names(&load(&settings(&[&dir]))),
+            ["Files", "Konsole", "XTerm"]
+        );
     }
 
     #[test]

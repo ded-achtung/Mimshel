@@ -156,6 +156,8 @@ mod tests {
             locale: None,
             desktops: vec![],
             path: vec![],
+            hide: vec![],
+            rename: vec![],
         };
         let mut w = Watcher::new(&settings).unwrap();
         let (tx, rx) = mpsc::channel();

@@ -1,7 +1,10 @@
-//! Экран блокировки: фон для i3lock-color в стиле Sonoma — обои, внизу
-//! круглый аватар, имя и овальное поле ввода «матовое стекло». Часы, дату и
-//! кольцо ввода i3lock рисует поверх сам. Пароль проверяет i3lock (PAM);
-//! здесь только картинка, без окон и файлов — её можно проверить в PNG.
+//! Экран блокировки в стиле Sonoma. Фон ([`draw`]) — обои, внизу круглый
+//! аватар, имя и овальное поле ввода «матовое стекло»; поверх него кадр
+//! ([`frame`]) — часы, дата, подсказка, точки ● вместо пароля и кольцо
+//! состояния. Всё рисуется в картинку без окон и файлов — вид можно
+//! проверить в PNG. Пароль проверяет сам экран блокировки (PAM) в
+//! `apps/shell` (`shell lock-screen`); сторож `shell lock` перезапускает
+//! его, если тот вышел без верного пароля (урок 1 в CLAUDE.md).
 
 mod layout;
 
@@ -11,15 +14,36 @@ use shell_text::{Fonts, Style};
 use shell_widgets::shape::{circle, paint, rounded};
 use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint, Stroke, Transform};
 
-/// Что нарисовать.
+/// Что нарисовать на фоне.
 pub struct Scene<'a> {
     /// Обои, уже растянутые на весь экран (`None` — тёмный фон).
     pub wallpaper: Option<Pixmap>,
     /// Аватар размером `avatar`×`avatar` (`None` — кружок с первой буквой имени).
     pub face: Option<Pixmap>,
     pub user: &'a str,
-    /// Подсказка в поле, если её не рисует сам i3lock (он без заплатки).
-    pub placeholder: Option<&'a str>,
+}
+
+/// Состояние поля пароля (что рисовать поверх фона).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Ожидание ввода.
+    Idle,
+    /// Пароль проверяется.
+    Verifying,
+    /// Пароль неверный.
+    Wrong,
+}
+
+/// Кадр экрана блокировки поверх фона.
+pub struct Frame<'a> {
+    /// Крупное время и дата под ним (уже отформатированные).
+    pub time: &'a str,
+    pub date: &'a str,
+    /// Подсказка в поле (видна, пока ничего не набрано).
+    pub placeholder: &'a str,
+    /// Сколько символов пароля набрано (столько же точек ●).
+    pub typed: usize,
+    pub phase: Phase,
 }
 
 /// Фон экрана блокировки размером `l.w`×`l.h`.
@@ -79,16 +103,116 @@ pub fn draw(l: &Layout, scene: Scene, fonts: &mut Fonts) -> Option<Pixmap> {
         l.name_y as f32 + text_shift(&name),
         None,
     );
-    if let Some(text) = scene.placeholder {
-        let hint = Style {
-            size: (13.5 * s).round(),
-            color: [255, 255, 255, 158],
+    Some(pm)
+}
+
+/// Кадр экрана блокировки: копия фона `bg` с часами, датой, полем пароля
+/// и кольцом состояния поверх.
+pub fn frame(l: &Layout, bg: &Pixmap, f: &Frame, fonts: &mut Fonts) -> Option<Pixmap> {
+    let mut pm = bg.clone();
+    let s = l.s as f32;
+
+    // Дата (мелко) и время (крупно) — по центру, как рисовал i3lock:
+    // координата y у него была базовой линией текста.
+    let date = Style {
+        size: (23.0 * s).round(),
+        color: [255, 255, 255, 208],
+        weight: 400,
+    };
+    let time = Style {
+        size: (104.0 * s).round(),
+        color: [255, 255, 255, 224],
+        weight: 400,
+    };
+    let mut center = |fonts: &mut Fonts, text: &str, style: &Style, baseline: i64| {
+        let w = fonts.measure(text, style);
+        fonts.draw(
+            &mut pm,
+            text,
+            style,
+            (l.w as f32 / 2.0 - w / 2.0).round(),
+            baseline as f32 - baseline_shift(style),
+            None,
+        );
+    };
+    center(fonts, f.date, &date, l.date_y);
+    center(fonts, f.time, &time, l.time_y);
+
+    let (px, py, ph) = (l.pill_x as f32, l.pill_y as f32, l.pill_h as f32);
+    let hint = Style {
+        size: (13.5 * s).round(),
+        color: [255, 255, 255, 158],
+        weight: 400,
+    };
+    let middle = py + (ph - hint.line_height()) / 2.0;
+    let left = px + (14.0 * s).round();
+    if f.typed == 0 {
+        if f.phase == Phase::Idle {
+            fonts.draw(&mut pm, f.placeholder, &hint, left, middle, None);
+        }
+    } else {
+        // Точки ● вместо пароля; в поле помещается столько, сколько влезает
+        // до кольца справа (остальные набранные символы не показываются).
+        let dots = Style {
+            size: hint.size,
+            color: [255, 255, 255, 255],
             weight: 400,
         };
-        let y = py + (ph - hint.line_height()) / 2.0;
-        fonts.draw(&mut pm, text, &hint, px + (14.0 * s).round(), y, None);
+        let room = l.pill_w as f32 - 14.0 * s - 34.0 * s;
+        let mut n = f.typed;
+        while n > 1 && fonts.measure(&"●".repeat(n), &dots) > room {
+            n -= 1;
+        }
+        fonts.draw(&mut pm, &"●".repeat(n), &dots, left, middle, None);
+    }
+
+    // Кольцо справа в поле — как кнопка-стрелка на Mac: белое в покое,
+    // синее при проверке, красное при неверном пароле.
+    let ring_color = match f.phase {
+        Phase::Idle => [255, 255, 255, 85],
+        Phase::Verifying => [0x0a, 0x84, 0xff, 255],
+        Phase::Wrong => [0xff, 0x45, 0x3a, 255],
+    };
+    if let Some(ring) = circle(l.ind_x as f32, l.ind_y as f32, (9.0 * s).round().max(2.0)) {
+        let stroke = Stroke {
+            width: (2.0 * s).round().max(1.0),
+            ..Stroke::default()
+        };
+        pm.stroke_path(
+            &ring,
+            &paint(ring_color),
+            &stroke,
+            Transform::identity(),
+            None,
+        );
+    }
+
+    if f.phase == Phase::Wrong {
+        let wrong = Style {
+            size: (13.0 * s).round(),
+            color: [255, 255, 255, 208],
+            weight: 400,
+        };
+        let text = "Неверный пароль";
+        let w = fonts.measure(text, &wrong);
+        fonts.draw(
+            &mut pm,
+            text,
+            &wrong,
+            (l.w as f32 / 2.0 - w / 2.0).round(),
+            (l.pill_y + l.pill_h + round(30.0 * l.s)) as f32 - baseline_shift(&wrong),
+            None,
+        );
     }
     Some(pm)
+}
+
+/// На сколько выше базовой линии начинается строка [`Style`]: запас над
+/// буквами в строке cosmic-text плюс высота больших букв (≈0,73 размера).
+/// Положения часов и подписей когда-то подбирались для i3lock, у которого
+/// координата y была базовой линией текста.
+fn baseline_shift(style: &Style) -> f32 {
+    (style.line_height() - style.size) / 2.0 + style.size * 0.73
 }
 
 /// ImageMagick ставит текст верхом букв на заданную строку, наш текст —
@@ -226,10 +350,10 @@ fn box_pass(
 mod tests {
     use super::*;
 
-    #[test]
-    fn background_has_pill_avatar_and_name() {
-        let l = Layout::new(640, 400);
-        let mut wall = Pixmap::new(640, 400).unwrap();
+    fn background_at(w: i64, h: i64) -> (Layout, Pixmap) {
+        let l = Layout::new(w, h);
+        let (uw, uh) = (w as u32, h as u32);
+        let mut wall = Pixmap::new(uw, uh).unwrap();
         wall.fill(tiny_skia::Color::from_rgba8(0, 100, 200, 255));
         let mut fonts = Fonts::new("Inter");
         let pm = draw(
@@ -238,11 +362,20 @@ mod tests {
                 wallpaper: Some(wall),
                 face: None,
                 user: "ded",
-                placeholder: Some("Введите пароль"),
             },
             &mut fonts,
         )
         .unwrap();
+        (l, pm)
+    }
+
+    fn background() -> (Layout, Pixmap) {
+        background_at(640, 400)
+    }
+
+    #[test]
+    fn background_has_pill_avatar_and_name() {
+        let (l, pm) = background();
         assert_eq!((pm.width(), pm.height()), (640, 400));
         // Обои затемнены на 12 %.
         let corner = pm.pixel(0, 0).unwrap();
@@ -264,6 +397,94 @@ mod tests {
             .flat_map(|y| (300..340).map(move |x| (x, y)))
             .any(|(x, y)| pm.pixel(x, y).unwrap().red() > 200);
         assert!(white, "имя видно");
+    }
+
+    #[test]
+    fn frame_shows_clock_placeholder_dots_and_states() {
+        // Экран побольше: на 640×400 поле и буквы слишком мелкие для проверок.
+        let (l, bg) = background_at(1280, 800);
+        let mut fonts = Fonts::new("Inter");
+        let base = Frame {
+            time: "22:33",
+            date: "пятница, 23 октября",
+            placeholder: "Введите пароль",
+            typed: 0,
+            phase: Phase::Idle,
+        };
+        // Пиксель изменился относительно фона (нарисован текст или кольцо).
+        let changed = |pm: &Pixmap, x: i64, y: i64| {
+            let p = pm.pixel(x as u32, y as u32).unwrap();
+            let b = bg.pixel(x as u32, y as u32).unwrap();
+            [p.red(), p.green(), p.blue()]
+                .into_iter()
+                .zip([b.red(), b.green(), b.blue()])
+                .any(|(a, b)| (i32::from(a) - i32::from(b)).abs() > 24)
+        };
+        let count = |pm: &Pixmap, xs: std::ops::Range<i64>, ys: std::ops::Range<i64>| {
+            ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
+                .filter(|&(x, y)| changed(pm, x, y))
+                .count()
+        };
+        // Часы и дата нарисованы вокруг своих позиций.
+        let pm = frame(&l, &bg, &base, &mut fonts).unwrap();
+        assert!(
+            count(&pm, 0..l.w, l.time_y - 90..l.time_y + 5) > 100,
+            "время"
+        );
+        assert!(count(&pm, 0..l.w, l.date_y - 25..l.date_y + 5) > 50, "дата");
+        // Подсказка в поле видна.
+        let hint = count(
+            &pm,
+            l.pill_x + 2..l.pill_x + l.pill_w - 20,
+            l.pill_y..l.pill_y + l.pill_h,
+        );
+        assert!(hint > 20, "подсказка: {hint}");
+
+        // Набранный пароль — точки вместо подсказки.
+        let typed = Frame { typed: 4, ..base };
+        let pm = frame(&l, &bg, &typed, &mut fonts).unwrap();
+        let dots = count(
+            &pm,
+            l.pill_x + 2..l.pill_x + l.pill_w / 2,
+            l.pill_y..l.pill_y + l.pill_h,
+        );
+        assert!(dots > 10, "точки: {dots}");
+
+        // Неверный пароль — красное кольцо и подпись под полем.
+        let wrong = Frame {
+            phase: Phase::Wrong,
+            ..base
+        };
+        let pm = frame(&l, &bg, &wrong, &mut fonts).unwrap();
+        let red = (l.ind_x - 14..l.ind_x + 14)
+            .flat_map(|x| (l.ind_y - 14..l.ind_y + 14).map(move |y| (x, y)))
+            .filter(|&(x, y)| {
+                let p = pm.pixel(x as u32, y as u32).unwrap();
+                p.red() > 150 && p.green() < 120 && p.blue() < 120
+            })
+            .count();
+        assert!(red > 10, "красное кольцо: {red}");
+        let below = count(
+            &pm,
+            l.w / 2 - 150..l.w / 2 + 150,
+            l.pill_y + l.pill_h + 5..l.pill_y + l.pill_h + 45,
+        );
+        assert!(below > 20, "подпись «Неверный пароль»: {below}");
+
+        // Проверка пароля — синее кольцо.
+        let verifying = Frame {
+            phase: Phase::Verifying,
+            ..base
+        };
+        let pm = frame(&l, &bg, &verifying, &mut fonts).unwrap();
+        let blue = (l.ind_x - 14..l.ind_x + 14)
+            .flat_map(|x| (l.ind_y - 14..l.ind_y + 14).map(move |y| (x, y)))
+            .filter(|&(x, y)| {
+                let p = pm.pixel(x as u32, y as u32).unwrap();
+                p.blue() > 150 && p.red() < 120
+            })
+            .count();
+        assert!(blue > 10, "синее кольцо: {blue}");
     }
 
     #[test]

@@ -17,6 +17,10 @@ pub enum Key {
     End,
     PageUp,
     PageDown,
+    /// Мультимедийные клавиши громкости (их обрабатывает экран блокировки).
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
     Other,
 }
 

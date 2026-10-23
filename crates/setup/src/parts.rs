@@ -383,14 +383,16 @@ impl Plan<'_> {
     /// по бездействию — через xss-lock, которому сигнал даёт заставка X.
     fn lock(&mut self) {
         println!("▶ Экран блокировки");
-        if crate::sys::which("i3lock").is_none() || crate::sys::which("xss-lock").is_none() {
-            println!("✘ Нет i3lock-color или xss-lock — запустите: macos-look install");
+        if crate::sys::which("xss-lock").is_none() {
+            println!("✘ Нет xss-lock — запустите ./install.sh в папке проекта");
             return;
         }
         // Фон рисуем заранее: при блокировке он будет готов сразу.
         let (w, h) = crate::lock::screen_size();
-        let bg = crate::lock::background(self.look, &self.config.wallpaper, w, h);
-        println!("  фон: {}", bg.display());
+        match crate::lock::background(&self.config.wallpaper, w, h) {
+            Some(bg) => println!("  фон: {}", bg.display()),
+            None => println!("  ⚠ фон не нарисован — блокировка будет на тёмном фоне"),
+        }
         let bin = self.paths.shell_bin.display().to_string();
         xset(
             "xfce4-session",
@@ -400,11 +402,11 @@ impl Plan<'_> {
         );
         // xfce4-power-manager гасит экран через заставку X, а xss-lock на её
         // включение (и перед сном системы) запускает блокировку.
-        let idle = self.look.get("lock", "idle_minutes");
-        let off = self.look.get("lock", "screen_off_minutes");
+        let idle = self.config.lock_idle.to_string();
+        let off = self.config.lock_screen_off.to_string();
         let pm = "/xfce4-power-manager";
         for k in ["blank-on-ac", "blank-on-battery"] {
-            xset("xfce4-power-manager", &format!("{pm}/{k}"), "int", idle);
+            xset("xfce4-power-manager", &format!("{pm}/{k}"), "int", &idle);
         }
         for k in [
             "dpms-on-ac-off",
@@ -412,7 +414,7 @@ impl Plan<'_> {
             "dpms-on-ac-sleep",
             "dpms-on-battery-sleep",
         ] {
-            xset("xfce4-power-manager", &format!("{pm}/{k}"), "uint", off);
+            xset("xfce4-power-manager", &format!("{pm}/{k}"), "uint", &off);
         }
         xset(
             "xfce4-power-manager",
@@ -695,8 +697,10 @@ impl Plan<'_> {
             xset("xfce4-desktop", &format!("{base}/image-style"), "int", "5");
             xset("xfce4-desktop", &format!("{base}/color-style"), "int", "0");
         }
-        let bg = crate::lock::background(self.look, &self.config.wallpaper, w, h);
-        println!("  фон блокировки: {}", bg.display());
+        match crate::lock::background(&self.config.wallpaper, w, h) {
+            Some(bg) => println!("  фон блокировки: {}", bg.display()),
+            None => println!("  ⚠ фон блокировки не нарисован"),
+        }
     }
 
     /// Тема значков для всех программ (xsettings) и, если выбрана наша

@@ -59,6 +59,17 @@ pub struct Config {
     pub menubar_height: u32,
     pub menu_icon: String,
     pub clock_format: String,
+    /// Экран блокировки: подсказка в поле пароля, через сколько минут
+    /// бездействия блокировать экран и через сколько гасить.
+    pub lock_placeholder: String,
+    pub lock_idle: u32,
+    pub lock_screen_off: u32,
+    /// Программы, которые не показываются в Launchpad и Spotlight
+    /// (остаются установленными и запускаются как раньше).
+    pub hide_apps: Vec<String>,
+    /// Названия программ в строке меню, Launchpad и доке:
+    /// (идентификатор ярлыка, новое название).
+    pub rename_apps: Vec<(String, String)>,
 }
 
 /// Части, которые может делать shell: (имя, прежняя программа, что это).
@@ -103,6 +114,31 @@ impl Default for Config {
             menu_icon: "shell-logo".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
             notify: false,
+            lock_placeholder: "Введите пароль".into(),
+            lock_idle: 10,
+            lock_screen_off: 15,
+            hide_apps: [
+                "rofi",
+                "rofi-theme-selector",
+                "qv4l2",
+                "qvidcap",
+                "xterm",
+                "uxterm",
+                "yad-settings",
+                "plank",
+                "reflector-simple",
+            ]
+            .map(String::from)
+            .to_vec(),
+            rename_apps: [
+                ("thunar", "Проводник"),
+                ("xfce4-terminal", "Терминал"),
+                ("org.xfce.mousepad", "Блокнот"),
+                ("xfce-settings-manager", "Системные настройки"),
+                ("xfce4-taskmanager", "Мониторинг системы"),
+            ]
+            .map(|(a, n)| (a.to_string(), n.to_string()))
+            .to_vec(),
         }
     }
 }
@@ -182,8 +218,43 @@ impl Config {
             Some(1) => DockHide::Smart,
             _ => c.dock_hide,
         };
+        if let Some(v) = get("lock", "placeholder").filter(|v| !v.is_empty()) {
+            c.lock_placeholder = v.clone();
+        }
+        if let Some(v) = num("lock", "idle_minutes").filter(|&v| v > 0) {
+            c.lock_idle = v;
+        }
+        if let Some(v) = num("lock", "screen_off_minutes").filter(|&v| v > 0) {
+            c.lock_screen_off = v;
+        }
+        if let Some(hide) = get("launchpad", "hide") {
+            c.hide_apps = comma_list(hide);
+        }
+        if let Some(rename) = get("menubar", "rename") {
+            c.rename_apps = parse_renames(rename);
+        }
         c
     }
+}
+
+/// Список через запятую → вектор непустых строк.
+fn comma_list(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// «ярлык: Новое имя, ярлык2: Имя2» → вектор пар.
+fn parse_renames(text: &str) -> Vec<(String, String)> {
+    text.split(',')
+        .filter_map(|pair| {
+            let (app, name) = pair.split_once(':')?;
+            let (app, name) = (app.trim(), name.trim());
+            (!app.is_empty() && !name.is_empty()).then(|| (app.to_string(), name.to_string()))
+        })
+        .collect()
 }
 
 impl DockHide {
@@ -335,6 +406,30 @@ impl Config {
         if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
             c.launchpad_icon = v;
         }
+        if let Some(v) = text("lock", "placeholder") {
+            c.lock_placeholder = v;
+        }
+        if let Some(v) = num("lock", "idle_minutes").filter(|&v| v > 0) {
+            c.lock_idle = v;
+        }
+        if let Some(v) = num("lock", "screen_off_minutes").filter(|&v| v > 0) {
+            c.lock_screen_off = v;
+        }
+        if let Some(v) = list("apps", "hide") {
+            c.hide_apps = v;
+        }
+        if let Some(table) = get("apps", "rename").and_then(|v| v.as_inline_table()) {
+            let renames: Vec<(String, String)> = table
+                .iter()
+                .filter_map(|(app, name)| {
+                    let name = name.as_str()?.trim();
+                    let app = app.trim();
+                    (!app.is_empty() && !name.is_empty())
+                        .then(|| (app.to_string(), name.to_string()))
+                })
+                .collect();
+            c.rename_apps = renames;
+        }
         for (name, old, _) in PARTS {
             if let Some(v) = get("parts", name).and_then(|v| v.as_str())
                 && (v == "shell" || v == *old)
@@ -411,9 +506,21 @@ columns = {columns}
 rows = {rows}
 icon_size = {lp_icon}
 
+[lock]
+# Подсказка в поле пароля; через сколько минут бездействия блокировать экран
+# и через сколько гасить его (после блокировки). Применить: shell apply lock
+placeholder = {placeholder}
+idle_minutes = {idle}
+screen_off_minutes = {screen_off}
+
 [apps]
 # Чем открывать программы, которым нужен терминал; программа идёт следом.
 terminal = {terminal}
+# Служебные программы, которых не видно в Launchpad и Spotlight
+# (сами остаются установленными).
+hide = {hide_apps}
+# Названия программ в строке меню, Launchpad и доке: ярлык = «Новое имя».
+rename = {rename}
 ",
             font = s(&self.font),
             theme = s(&self.icon_theme),
@@ -429,7 +536,12 @@ terminal = {terminal}
             columns = self.launchpad_columns,
             rows = self.launchpad_rows,
             lp_icon = self.launchpad_icon,
+            placeholder = s(&self.lock_placeholder),
+            idle = self.lock_idle,
+            screen_off = self.lock_screen_off,
             terminal = list(&self.terminal),
+            hide_apps = list(&self.hide_apps),
+            rename = renames_to_toml(&self.rename_apps),
             p_dock = part("dock"),
             p_menubar = part("menubar"),
             p_notify = part("notify"),
@@ -437,6 +549,16 @@ terminal = {terminal}
             p_launchpad = part("launchpad"),
         )
     }
+}
+
+/// Инлайн-таблица `rename` для текста настроек: { ярлык = "Имя", … }.
+fn renames_to_toml(renames: &[(String, String)]) -> String {
+    let s = |v: &str| Value::from(v).to_string();
+    let items: Vec<String> = renames
+        .iter()
+        .map(|(app, name)| format!("{} = {}", s(app), s(name)))
+        .collect();
+    format!("{{ {} }}", items.join(", "))
 }
 
 /// Текст файла настроек, в котором `[раздел] ключ` заменён на `value` (или
@@ -471,6 +593,42 @@ pub fn has_parts(text: &str) -> bool {
         .is_ok_and(|d| d.contains_table("parts"))
 }
 
+/// Есть ли в файле раздел `[lock]` (в файлах, созданных до него, нет).
+pub fn has_lock(text: &str) -> bool {
+    text.parse::<DocumentMut>()
+        .is_ok_and(|d| d.contains_table("lock"))
+}
+
+/// Дописать в старый файл настройки блокировки, скрытия и переименования
+/// программ (`base` — откуда взять значения: прежний конфиг или умолчания).
+pub fn add_lock_settings(text: &str, base: &Config) -> Option<String> {
+    let mut out = set_value(
+        text,
+        "lock",
+        "placeholder",
+        Value::from(base.lock_placeholder.as_str()),
+    )?;
+    out = set_value(
+        &out,
+        "lock",
+        "idle_minutes",
+        Value::from(i64::from(base.lock_idle)),
+    )?;
+    out = set_value(
+        &out,
+        "lock",
+        "screen_off_minutes",
+        Value::from(i64::from(base.lock_screen_off)),
+    )?;
+    let hide: Array = base.hide_apps.iter().map(String::as_str).collect();
+    out = set_value(&out, "apps", "hide", Value::Array(hide))?;
+    let mut table = toml_edit::InlineTable::new();
+    for (app, name) in &base.rename_apps {
+        table.insert(app, Value::from(name.as_str()));
+    }
+    set_value(&out, "apps", "rename", Value::InlineTable(table))
+}
+
 /// Настройки, которые меняет `shell set`: (раздел.ключ, что это).
 pub const SETTINGS: &[(&str, &str)] = &[
     ("parts.dock", "\"shell\" или \"plank\""),
@@ -502,7 +660,24 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("launchpad.columns", "столбцов, 1–32"),
     ("launchpad.rows", "строк, 1–32"),
     ("launchpad.icon_size", "размер значков, 16–256"),
+    ("lock.placeholder", "подсказка в поле пароля"),
+    (
+        "lock.idle_minutes",
+        "блокировать экран после бездействия, минут (1–600)",
+    ),
+    (
+        "lock.screen_off_minutes",
+        "гасить экран после блокировки, минут (1–600)",
+    ),
     ("apps.terminal", "команда терминала через пробел"),
+    (
+        "apps.hide",
+        "программы, скрытые из Launchpad и Spotlight, через запятую",
+    ),
+    (
+        "apps.rename",
+        "названия программ: «ярлык: Новое имя» через запятую",
+    ),
 ];
 
 /// Значение для файла из того, что набрали в `shell set` (`раздел.ключ`).
@@ -538,7 +713,8 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
         | "look.cursor_theme"
         | "look.wallpaper"
         | "menubar.menu_icon"
-        | "menubar.clock_format" => {
+        | "menubar.clock_format"
+        | "lock.placeholder" => {
             if input.is_empty() {
                 Err("пустое значение".into())
             } else {
@@ -554,6 +730,15 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 .filter(|a| !a.is_empty())
                 .collect(),
         )),
+        // Пустой список — ничего не скрывать (и не переименовывать).
+        "apps.hide" => Ok(Value::Array(comma_list(input).into_iter().collect())),
+        "apps.rename" => {
+            let mut table = toml_edit::InlineTable::new();
+            for (app, name) in parse_renames(input) {
+                table.insert(&app, Value::from(name));
+            }
+            Ok(Value::InlineTable(table))
+        }
         "apps.terminal" if !input.is_empty() => {
             Ok(Value::Array(input.split_whitespace().collect()))
         }
@@ -569,6 +754,7 @@ fn number_range(key: &str) -> Option<(u32, u32)> {
         "dock.icon_size" | "launchpad.icon_size" => Some((16, 256)),
         "dock.zoom" => Some((100, 300)),
         "launchpad.columns" | "launchpad.rows" => Some((1, 32)),
+        "lock.idle_minutes" | "lock.screen_off_minutes" => Some((1, 600)),
         _ => None,
     }
 }
@@ -600,7 +786,7 @@ pub fn toml_error(text: &str) -> Option<String> {
                     || item
                         .as_integer()
                         .is_some_and(|n| (i64::from(min)..=i64::from(max)).contains(&n))
-            } else if key == "dock.apps" || key == "apps.terminal" {
+            } else if key == "dock.apps" || key == "apps.terminal" || key == "apps.hide" {
                 item.as_array().is_some_and(|a| {
                     a.iter().all(|v| {
                         v.as_str()
@@ -609,6 +795,13 @@ pub fn toml_error(text: &str) -> Option<String> {
                         || a.get(0)
                             .and_then(Value::as_str)
                             .is_some_and(|s| !s.trim().is_empty()))
+                })
+            } else if key == "apps.rename" {
+                item.as_inline_table().is_some_and(|t| {
+                    t.iter().all(|(app, name)| {
+                        !app.trim().is_empty()
+                            && name.as_str().is_some_and(|n| !n.trim().is_empty())
+                    })
                 })
             } else {
                 item.as_str().is_some_and(|v| {
@@ -791,5 +984,77 @@ mod tests {
         assert_eq!(Config::from_toml(&out).dock_apps, ["a"]);
         assert_eq!(Config::from_toml(&out).font, "Inter");
         assert!(set_dock_apps("[dock\n", &[]).is_none());
+    }
+
+    #[test]
+    fn lock_hide_rename_round_trip() {
+        let c = Config::default();
+        let text = c.to_toml();
+        assert!(toml_error(&text).is_none(), "{text}");
+        assert_eq!(Config::from_toml(&text), c);
+        assert_eq!(c.lock_placeholder, "Введите пароль");
+        assert!((c.lock_idle, c.lock_screen_off) == (10, 15));
+        assert!(c.hide_apps.contains(&"xterm".to_string()));
+        assert!(
+            c.rename_apps
+                .contains(&("thunar".to_string(), "Проводник".to_string()))
+        );
+    }
+
+    #[test]
+    fn lock_hide_rename_from_macos_look() {
+        let c = Config::from_macos_look(
+            "[lock]\nplaceholder = Пароль?\nidle_minutes = 5\nscreen_off_minutes = 7\n\
+             [launchpad]\nhide = rofi, xterm\n[menubar]\nrename = thunar: Проводник, bad\n",
+        );
+        assert_eq!(c.lock_placeholder, "Пароль?");
+        assert_eq!((c.lock_idle, c.lock_screen_off), (5, 7));
+        assert_eq!(c.hide_apps, ["rofi", "xterm"]);
+        assert_eq!(
+            c.rename_apps,
+            [("thunar".to_string(), "Проводник".to_string())]
+        );
+        // Значения вне пределов и пустые — остаются по умолчанию.
+        let c = Config::from_macos_look("[lock]\nidle_minutes = 0\n");
+        assert_eq!(c.lock_idle, 10);
+    }
+
+    #[test]
+    fn lock_hide_rename_from_command() {
+        assert!(setting_value("lock.idle_minutes", "0").is_err());
+        assert!(setting_value("lock.idle_minutes", "601").is_err());
+        assert!(setting_value("lock.idle_minutes", "30").is_ok());
+        assert!(setting_value("lock.placeholder", "").is_err());
+        let hide = setting_value("apps.hide", "a, b").unwrap();
+        let rename = setting_value("apps.rename", "thunar: Проводник, : bad").unwrap();
+        let text = set_value("[apps]\n", "apps", "hide", hide).unwrap();
+        let text = set_value(&text, "apps", "rename", rename).unwrap();
+        assert!(toml_error(&text).is_none(), "{text}");
+        let c = Config::from_toml(&text);
+        assert_eq!(c.hide_apps, ["a", "b"]);
+        assert_eq!(
+            c.rename_apps,
+            [("thunar".to_string(), "Проводник".to_string())]
+        );
+        // Пустые значения — сброс списков.
+        let text = set_value(
+            &text,
+            "apps",
+            "hide",
+            setting_value("apps.hide", "").unwrap(),
+        )
+        .unwrap();
+        assert!(toml_error(&text).is_none());
+        assert!(Config::from_toml(&text).hide_apps.is_empty());
+        for bad in [
+            "[apps]\nrename = { a = 1 }",
+            "[apps]\nrename = [\"a\"]",
+            "[apps]\nhide = [1]",
+            "[apps]\nhide = \"rofi\"",
+            "[lock]\nidle_minutes = 601",
+            "[lock]\nplaceholder = 5",
+        ] {
+            assert!(toml_error(bad).is_some(), "{bad}");
+        }
     }
 }

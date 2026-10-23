@@ -12,7 +12,7 @@ use shell_core::config::Config;
 use crate::look::{APPLE_MENU, Look, Paths};
 use crate::sys::{
     bus_owner, home, in_desktop_session, keyboard_ok, output, output_any, parent, pgrep, read,
-    running, succeeds, which, xget, xget_list,
+    running, succeeds, xget, xget_list,
 };
 
 /// Пакеты из репозитория и из AUR (их ставит `macos-look install`).
@@ -21,11 +21,9 @@ const PACKAGES: &[&str] = &[
     "inter-font",
     "rofi",
     "zenity",
-    "imagemagick",
     "xss-lock",
     "xorg-xset",
     "appmenu-gtk-module",
-    "i3lock-color",
 ];
 /// Пакеты, которые ставит наш установщик (`install.sh`) — на машине без
 /// macos-look проверяются они.
@@ -38,7 +36,6 @@ const OWN_PACKAGES: &[&str] = &[
     "xorg-xkbcomp",
     "xorg-xinput",
     "appmenu-gtk-module",
-    "i3lock-color",
     "sassc",
     "network-manager-applet",
     "xfce4-taskmanager",
@@ -68,8 +65,6 @@ const PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
 const SESSION: &str = "/sessions/Failsafe";
 /// Сочетания клавиш: (клавиши, действие).
 const SHORTCUTS: &[(&str, &str)] = &[("<Super>space", "spotlight"), ("<Super>a", "launchpad")];
-/// Метка в i3lock, собранном с заплаткой macos-look.
-const LOCKER_MARK: &[u8] = b"macos-look-field-v3";
 /// Наблюдатели службы (см. `apps/shell/src/status.rs`).
 const WATCHERS: &str = r"^(pactl subscribe|udevadm monitor --kernel --subsystem-match=power_supply|xfconf-query -c xfce4-notifyd -m)";
 
@@ -446,14 +441,6 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         xget("xfce4-session", "/general/LockCommand").as_deref()
             == Some(&*format!("{} lock", paths.shell_bin.display())),
         "shell apply lock",
-    );
-    add(
-        "lock",
-        "поле пароля как на Mac (точки при вводе)",
-        which("i3lock")
-            .and_then(|p| std::fs::read(p).ok())
-            .is_some_and(|b| b.windows(LOCKER_MARK.len()).any(|w| w == LOCKER_MARK)),
-        "macos-look build-locker",
     );
     let xss = pgrep("^xss-lock(\\s|$)");
     add(

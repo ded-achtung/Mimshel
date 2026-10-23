@@ -153,6 +153,15 @@ fn grid(config: &Config) -> Grid {
     }
 }
 
+/// Настройки чтения ярлыков: папки из окружения, скрытие и названия — из конфига.
+pub fn app_settings(config: &Config) -> Settings {
+    Settings {
+        hide: config.hide_apps.clone(),
+        rename: config.rename_apps.clone(),
+        ..Settings::from_env()
+    }
+}
+
 /// Запускает окна. `once` — открыть это окно один раз и выйти после закрытия;
 /// `None` — работать службой и ждать команд.
 pub fn run(once: Option<Panel>) -> Result<()> {
@@ -196,7 +205,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         });
     }
 
-    let settings = Settings::from_env();
+    let settings = app_settings(&config);
     let all_apps = shell_apps::load_all(&settings);
     let apps = visible(&all_apps);
     step("программы");
@@ -693,7 +702,7 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let start = Instant::now();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
-    let apps = shell_apps::load(&Settings::from_env());
+    let apps = shell_apps::load(&app_settings(&config));
     eprintln!("Загрузка: {:?}", start.elapsed());
     let keys = text.chars().map(|c| KeyPress::plain(Key::Char(c)));
     let start = Instant::now();
