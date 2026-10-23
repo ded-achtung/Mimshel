@@ -4,9 +4,9 @@
 #   git clone https://github.com/ded-achtung/shell.git
 #   cd shell && ./install.sh
 #
-# Что делает: ставит пакеты, собирает экран блокировки i3lock-color с нашей
-# заплаткой, ставит значки, тему окон и курсор Colloid, собирает shell и
-# включает её части (строка меню, док, уведомления, поиск, блокировка, обои).
+# Что делает: ставит пакеты, значки, тему окон и курсор Colloid, собирает shell
+# и включает её части (строка меню, док, уведомления, поиск, экран блокировки,
+# обои).
 # Перед изменениями сохраняет копию настроек: вернуть как было — shell restore.
 # Повторный запуск безопасен: уже сделанное пропускается.
 
@@ -31,7 +31,8 @@ mkdir -p "$SRC" "$HOME/.local/bin"
 
 # --- Пакеты -----------------------------------------------------------------
 PKGS=(
-    git base-devel rust          # сборка
+    git base-devel rust clang    # сборка (clang — для привязки к PAM)
+    pam                          # проверка пароля на экране блокировки
     sassc                        # сборка темы окон Colloid
     inter-font                   # шрифт
     zenity                       # окна «Выключить?», «Об этом компьютере»
@@ -46,38 +47,6 @@ step "Пакеты (pacman спросит пароль sudo и подтверж�
 # -Syu, а не -Sy: частичное обновление ломает Arch.
 sudo pacman -Syu --needed "${PKGS[@]}"
 ok "Пакеты на месте"
-
-# --- Экран блокировки: i3lock-color с заплаткой -----------------------------
-# Заплатка: подсказка в поле сменяется точками ●, точки не вылезают за поле.
-MARK="macos-look-field-v3"
-if command -v i3lock >/dev/null && grep -q "$MARK" "$(command -v i3lock)"; then
-    ok "i3lock-color с заплаткой уже стоит"
-else
-    step "Собираю i3lock-color из AUR с заплаткой (несколько минут)"
-    d="$SRC/i3lock-color-aur"
-    if [ -d "$d/.git" ]; then
-        git -C "$d" pull --ff-only -q
-    else
-        git clone -q https://aur.archlinux.org/i3lock-color.git "$d"
-    fi
-    cp "$ROOT/packaging/i3lock-color-mac-field.patch" "$d/"
-    cat "$d/PKGBUILD" - > "$d/PKGBUILD.shell" <<'EOF'
-
-# --- shell: поле пароля как на Mac ---
-pkgrel="${pkgrel}.1"
-source+=("i3lock-color-mac-field.patch")
-sha256sums+=('SKIP')
-prepare() {
-    cd "$srcdir/$pkgname-$pkgver"
-    patch -Np1 -i "$srcdir/i3lock-color-mac-field.patch"
-}
-EOF
-    rm -f "$d"/*.pkg.tar.*
-    # -s — доставить нужное для сборки, -i — поставить (pacman спросит пароль).
-    (cd "$d" && makepkg -f -s -i -p PKGBUILD.shell)
-    grep -q "$MARK" "$(command -v i3lock)" || fail "i3lock-color не собрался с заплаткой"
-    ok "i3lock-color с заплаткой поставлен"
-fi
 
 # --- Оформление Colloid: значки, курсор, тема окон --------------------------
 fetch() { # fetch ИМЯ АДРЕС — скачать или обновить исходник в $SRC

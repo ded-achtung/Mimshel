@@ -18,8 +18,8 @@ cosmic-text, X11 through x11rb and D-Bus through zbus. Wayland is not supported.
 - Notification banners and history (click the bell), Do Not Disturb.
 - TOML settings, `doctor` diagnostics, switching each part between shell and the
   original Xfce components.
-- A watchdog for the service, and i3lock-color started under a lock watchdog;
-  the lock screen background is drawn by shell itself.
+- A watchdog for the service, and shell's own lock screen (passwords checked by
+  PAM) under a watchdog that restarts it after any failure.
 - Settings backups and restoring the original Xfce setup (`backup`, `restore`).
 
 For now the project expects a configured Xfce session and the `macos-look`
@@ -37,10 +37,9 @@ git clone https://github.com/ded-achtung/shell.git
 cd shell && ./install.sh
 ```
 
-The installer asks for your sudo password. It installs the packages, builds the
-i3lock-color lock screen with our patch (`packaging/`), installs the Colloid icons,
-window theme and cursor, builds shell into `~/.local/bin/shell` and turns all of its
-parts on. It saves a copy of your settings first: `~/.local/bin/shell restore`
+The installer asks for your sudo password. It installs the packages and the
+Colloid icons, window theme and cursor, builds shell into `~/.local/bin/shell` and
+turns all of its parts on, including its own lock screen. It saves a copy of your settings first: `~/.local/bin/shell restore`
 brings them back. Log out and back in afterwards. Running it again is safe.
 
 ## Building and testing
@@ -72,9 +71,8 @@ screen lock, Wi-Fi/Bluetooth hardware, or compatibility with every application.
 Running shell needs an X11 session with D-Bus; it uses `pactl`,
 `xfconf-query`, `nmcli`, `bluetoothctl` and GNU coreutils, including `timeout`.
 The battery is read straight from the kernel files in `/sys/class/power_supply`
-— `upower` is not needed. Locking needs i3lock-color and xss-lock. The font and
-icon theme are set in the config; the defaults are Inter and WhiteSur-dark-mac
-from the macos-look setup.
+— `upower` is not needed. Locking on idle needs xss-lock; passwords are checked by
+PAM. The font and icon theme are set in the config; the defaults are Inter and Colloid.
 
 ## Running and settings
 
@@ -113,7 +111,7 @@ updating the backup copy happen one after another. Temporary files get unique
 names and are created with 0600 permissions. This protects concurrent changes
 made by shell itself; other text editors do not use this lock.
 
-The lock watchdog keeps retrying after repeated i3lock failures for as long as
+The lock watchdog keeps retrying after repeated lock screen failures for as long as
 the X server check confirms that the session is alive. The first retry happens
 immediately, later ones wait up to a second so a constant error does not spin.
 On X11, restarting a crashed locker **does not guarantee the screen stays
@@ -135,7 +133,8 @@ locked**: the screen can be reachable until the new locker grabs input.
 We study how existing programs behave and the open standards (EWMH/ICCCM,
 Desktop Entry, Icon Theme, StatusNotifierItem, DBusMenu, Notifications), and
 write our own implementation. We do not copy other projects' code. Passwords are
-checked by i3lock-color; shell does not implement its own authentication.
+checked by PAM, the same system used at login; shell does not implement its own
+password checking.
 
 ## License
 

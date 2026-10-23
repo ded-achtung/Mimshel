@@ -211,8 +211,9 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 7. **Окно настроек** — ползунки и переключатели вместо правки файла (как «Системные настройки»).
 
 ### Установка на другую машину (23.10.2026, для ноутбука пользователя)
-`install.sh` в корне — EndeavourOS/Arch с Xfce (X11), без macos-look: пакеты (`pacman -Syu --needed`),
-i3lock-color из AUR с заплаткой `packaging/i3lock-color-mac-field.patch` (перенесена из macos-look),
+`install.sh` в корне — EndeavourOS/Arch с Xfce (X11), без macos-look: пакеты (`pacman -Syu --needed`;
+`clang` и `pam` — для сборки проверки пароля: `pam-sys` собирается через bindgen; i3lock-color с 23.10 не
+нужен — экран блокировки свой, заплатка `packaging/` осталась на случай отката),
 Colloid (значки, курсор, тема окон `-c dark --tweaks normal`), `cargo build --release --locked`,
 `shell backup pered-shell`, `shell set --no-apply …` (части и оформление), `shell apply`, `doctor`.
 Повторный запуск безопасен. `shell apply look` теперь ставит и шрифт, сглаживание, заголовок и кнопки
