@@ -34,7 +34,7 @@ for name in Colloid-icon-theme Colloid-gtk-theme; do
 done
 
 echo "▶ Библиотеки Rust"
-cargo vendor --locked --offline "$WORK/shell/offline/vendor" >/dev/null
+cargo vendor --quiet --locked --offline "$WORK/shell/offline/vendor" >/dev/null
 
 mkdir -p "$OUT"
 tar czf "$OUT/shell-offline.tar.gz" -C "$WORK" shell
