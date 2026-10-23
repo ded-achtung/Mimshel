@@ -4,6 +4,9 @@
 #   git clone https://github.com/ded-achtung/shell.git
 #   cd shell && ./install.sh
 #
+# Если GitHub недоступен: архив со всем нужным собирает tools/make-offline.sh
+# (проект, значки и тема Colloid, библиотеки Rust) — распаковать и ./install.sh.
+#
 # Что делает: ставит пакеты, значки, тему окон и курсор Colloid, собирает shell
 # и включает её части (строка меню, док, уведомления, поиск, экран блокировки,
 # обои).
@@ -50,6 +53,11 @@ ok "Пакеты на месте"
 
 # --- Оформление Colloid: значки, курсор, тема окон --------------------------
 fetch() { # fetch ИМЯ АДРЕС — скачать или обновить исходник в $SRC
+    # Архив без интернета (tools/make-offline.sh) — исходник уже рядом.
+    if [ -d "$ROOT/offline/$1" ]; then
+        [ -d "$SRC/$1" ] || cp -r "$ROOT/offline/$1" "$SRC/$1"
+        return
+    fi
     if [ -d "$SRC/$1/.git" ]; then
         git -C "$SRC/$1" pull --ff-only -q || true
     else
@@ -80,7 +88,14 @@ fi
 
 # --- Сама программа ---------------------------------------------------------
 step "Собираю shell (первый раз — несколько минут)"
-(cd "$ROOT" && cargo build --release --locked)
+if [ -d "$ROOT/offline/vendor" ]; then
+    # Библиотеки Rust из архива — без обращения к crates.io.
+    (cd "$ROOT" && cargo build --release --locked --offline \
+        --config 'source.crates-io.replace-with="vendored"' \
+        --config 'source.vendored.directory="offline/vendor"')
+else
+    (cd "$ROOT" && cargo build --release --locked)
+fi
 install -m 755 "$ROOT/target/release/shell" "$BIN"
 ok "Программа: $BIN"
 
