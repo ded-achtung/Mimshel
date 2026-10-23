@@ -2,7 +2,8 @@
 //! (PipeWire/PulseAudio): одно обновление — два коротких запроса, изменения
 //! ловит `pactl subscribe`. Батарея — напрямую из файлов ядра
 //! `/sys/class/power_supply` (то же, что читает UPower, но без демона и без
-//! разбора текста): опрос раз в 30 с, сообщение — только при изменении.
+//! разбора текста): перечитываем по событиям ядра (`udevadm monitor`) и раз
+//! в 30 с, сообщение — только при изменении.
 //! «Не беспокоить» — `xfconf-query` (уведомления Xfce), изменения ловит
 //! `xfconf-query -m`.
 
@@ -260,6 +261,28 @@ fn watch<T: Send + 'static>(
     tx: Sender<Msg>,
 ) {
     let (ping_tx, ping_rx) = mpsc::channel::<()>();
+    spawn_watcher(program, args, relevant, ping_tx);
+    std::thread::spawn(move || {
+        if tx.send(msg(read())).is_err() {
+            return;
+        }
+        while ping_rx.recv().is_ok() {
+            while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
+            if tx.send(msg(read())).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+/// Держит программу-наблюдателя запущенной (упала — запустить снова через
+/// 2 с) и на каждую её важную строку посылает `ping`.
+fn spawn_watcher(
+    program: &'static str,
+    args: &'static [&'static str],
+    relevant: fn(&str) -> bool,
+    ping_tx: Sender<()>,
+) {
     std::thread::spawn(move || {
         loop {
             let child = watcher_command(program)
@@ -280,17 +303,6 @@ fn watch<T: Send + 'static>(
                 let _ = child.wait();
             }
             std::thread::sleep(Duration::from_secs(2));
-        }
-    });
-    std::thread::spawn(move || {
-        if tx.send(msg(read())).is_err() {
-            return;
-        }
-        while ping_rx.recv().is_ok() {
-            while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
-            if tx.send(msg(read())).is_err() {
-                return;
-            }
         }
     });
 }
@@ -321,27 +333,45 @@ pub fn watch_sound(tx: Sender<Msg>) {
     );
 }
 
-/// inotify для файлов ядра не работает: вместо прежнего вечного наблюдателя
-/// `upower --monitor` опрашиваем `/sys` раз в 5 с и сообщаем только об
-/// изменениях. Прочитать несколько маленьких файлов почти ничего не стоит, а
-/// подключённая зарядка видна почти сразу (с 30 с ждать было долго).
+/// Батарея — из файлов ядра; когда перечитывать, говорит само ядро: о
+/// подключении и отключении зарядки и о смене состояния батареи оно сразу
+/// присылает событие (`udevadm monitor` его печатает). Проценты меняются
+/// медленно, и о них ядро сообщает не всегда — их догоняем опросом раз в
+/// 30 с. Службе уходит только то, что изменилось.
 pub fn watch_battery(tx: Sender<Msg>) {
+    let (ping_tx, ping_rx) = mpsc::channel::<()>();
+    spawn_watcher(
+        "udevadm",
+        &["monitor", "--kernel", "--subsystem-match=power_supply"],
+        |l| l.starts_with("KERNEL["),
+        ping_tx,
+    );
     std::thread::spawn(move || {
-        let mut sent = false;
-        let mut last: Option<Battery> = None;
+        let mut last = read_battery();
+        if tx.send(Msg::Battery(last.clone())).is_err() {
+            return;
+        }
         loop {
+            // Событие — сразу (после короткого затишья: при отключении зарядки
+            // их приходит несколько подряд), иначе — по истечении 30 с.
+            match ping_rx.recv_timeout(BATTERY_POLL) {
+                Ok(()) => while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {},
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
             let now = read_battery();
-            if !sent || now != last {
-                sent = true;
+            if now != last {
                 last = now.clone();
                 if tx.send(Msg::Battery(now)).is_err() {
                     return;
                 }
             }
-            std::thread::sleep(Duration::from_secs(5));
         }
     });
 }
+
+/// Как часто перечитывать батарею без событий ядра (ради процентов).
+const BATTERY_POLL: Duration = Duration::from_secs(30);
 
 pub fn watch_dnd(tx: Sender<Msg>) {
     watch(

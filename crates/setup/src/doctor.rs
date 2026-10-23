@@ -55,7 +55,7 @@ const SHORTCUTS: &[(&str, &str)] = &[("<Super>space", "spotlight"), ("<Super>a",
 /// Метка в i3lock, собранном с заплаткой macos-look.
 const LOCKER_MARK: &[u8] = b"macos-look-field-v3";
 /// Наблюдатели службы (см. `apps/shell/src/status.rs`).
-const WATCHERS: &str = r"^(pactl subscribe|upower --monitor|xfconf-query -m)";
+const WATCHERS: &str = r"^(pactl subscribe|udevadm monitor --kernel --subsystem-match=power_supply|xfconf-query -c xfce4-notifyd -m)";
 
 pub struct Check {
     /// Часть оформления: env, install, look, wallpaper, panel, notify, menu,
@@ -524,7 +524,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             .count();
         add(
             "shell",
-            "нет брошенных наблюдателей (pactl, upower, xfconf-query)",
+            "нет брошенных наблюдателей (pactl, udevadm, xfconf-query)",
             orphans == 0,
             &format!("лишних процессов: {orphans}"),
         );

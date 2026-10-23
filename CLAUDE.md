@@ -85,8 +85,9 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      колёсико ±5 %, средняя кнопка — без звука), батарея (`upower`; проценты, меню с состоянием),
      колокольчик («Не беспокоить» — xfconf `xfce4-notifyd /do-not-disturb`). Изменения ловятся
      наблюдателями (`pactl subscribe`, `xfconf-query -m`) — `apps/shell/src/status.rs`. Батарея
-     (23.10.2026, ветка improvements) — из `/sys/class/power_supply` раз в 5 с, без upower; в ВМ
-     нет `power_now`, поэтому без оставшегося времени.
+     (23.10.2026) — из `/sys/class/power_supply`, без upower: перечитывается сразу по событиям ядра
+     (`udevadm monitor --kernel --subsystem-match=power_supply` — зарядка подключена/отключена,
+     смена состояния) и раз в 30 с ради процентов; в ВМ нет `power_now` — без оставшегося времени.
    - 3в **сделано** (22.10.2026): трей StatusNotifierItem — `crates/dbus` (zbus 5, blocking):
      служба занимает `org.kde.StatusNotifierWatcher` (если свободно — панель Xfce его держит, пока
      запущена), читает значки и меню (DBusMenu), передаёт щелчки. Значки `Passive` не показываем
