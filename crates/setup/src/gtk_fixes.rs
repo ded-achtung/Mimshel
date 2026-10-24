@@ -27,9 +27,9 @@ fn file() -> PathBuf {
 }
 
 /// Вписать свой кусок (или обновить его). Запущенные программы увидят
-/// его после перезапуска.
-pub fn apply() {
-    apply_in(&file());
+/// его только после перезапуска — `true`, если файл изменился.
+pub fn apply() -> bool {
+    apply_in(&file())
 }
 
 /// Убрать свой кусок; файл, где больше ничего нет, — удалить.
@@ -54,17 +54,21 @@ pub fn present() -> bool {
     std::fs::read_to_string(file()).is_ok_and(|t| t.contains(BEGIN))
 }
 
-fn apply_in(path: &Path) {
+fn apply_in(path: &Path) -> bool {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let new = with_block(&text);
     if new == text {
-        return;
+        return false;
     }
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(e) = std::fs::write(path, new) {
-        println!("  ⚠ не записан {}: {e}", path.display());
+    match std::fs::write(path, new) {
+        Ok(()) => true,
+        Err(e) => {
+            println!("  ⚠ не записан {}: {e}", path.display());
+            false
+        }
     }
 }
 
@@ -108,7 +112,8 @@ mod tests {
     fn file_written() {
         let dir = std::env::temp_dir().join(format!("shell-gtk-fixes-{}", std::process::id()));
         let path = dir.join("gtk-3.0/gtk.css");
-        apply_in(&path);
+        assert!(apply_in(&path));
+        assert!(!apply_in(&path), "второй раз — без изменений");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("border-radius: 0") && text.contains("box-shadow: none"));
         let _ = std::fs::remove_dir_all(&dir);
