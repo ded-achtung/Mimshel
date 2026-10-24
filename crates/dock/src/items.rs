@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use shell_apps::App;
+use shell_core::config::dock_entry_matches;
 use shell_core::windows::WindowInfo;
 
 /// Ключ значка корзины (в конце дока, за разделителем).
@@ -110,10 +111,7 @@ pub(crate) fn build(
 ) -> Vec<Item> {
     let mut items: Vec<Item> = pinned
         .iter()
-        .filter_map(|id| {
-            let full = format!("{}.desktop", id.trim_end_matches(".desktop"));
-            apps.iter().find(|a| a.id == full)
-        })
+        .filter_map(|entry| apps.iter().find(|a| dock_entry_matches(entry, &a.id)))
         .map(|app| Item {
             key: app.id.clone(),
             app: Some(app.clone()),

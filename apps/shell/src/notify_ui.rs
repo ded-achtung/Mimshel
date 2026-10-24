@@ -6,6 +6,7 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use shell_apps::App;
+use shell_core::config::dock_entry_matches;
 use shell_dbus::notify::{self, NotifyEvent, NotifyServer};
 use shell_icons::Icons;
 use shell_notify::{Banner, Banners, Center, CenterHit, CloseReason, Hit, Notification, WIDTH};
@@ -321,10 +322,9 @@ impl NotifyUi {
         };
         let candidates = [
             Some(n.app_icon.trim_start_matches("file://").to_string()).filter(|s| !s.is_empty()),
-            n.desktop_entry.as_ref().and_then(|e| {
-                let id = format!("{}.desktop", e.trim_end_matches(".desktop"));
-                by_app(&|a: &App| a.id == id)
-            }),
+            n.desktop_entry
+                .as_ref()
+                .and_then(|e| by_app(&|a: &App| dock_entry_matches(e, &a.id))),
             by_app(&|a: &App| {
                 a.name.eq_ignore_ascii_case(&n.app_name)
                     || a.name_untranslated.eq_ignore_ascii_case(&n.app_name)

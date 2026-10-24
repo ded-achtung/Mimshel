@@ -20,7 +20,7 @@ pub use preview::{Preview, PreviewCard, THUMB_H, THUMB_W, thumbnail};
 use std::time::{Duration, Instant};
 
 use shell_apps::App;
-use shell_core::config::DockHide;
+use shell_core::config::{DockHide, dock_entry, dock_entry_matches};
 use shell_core::windows::WindowInfo;
 use tiny_skia::Pixmap;
 
@@ -343,13 +343,11 @@ impl Dock {
                 if item.app.is_none() {
                     return Action::Nothing;
                 }
-                // В настройках имена без «.desktop» (как пишет macos-look).
-                let stem = key.trim_end_matches(".desktop");
-                let same = |p: &String| p.trim_end_matches(".desktop") == stem;
+                let same = |p: &String| dock_entry_matches(p, key);
                 if self.pinned.iter().any(same) {
                     self.pinned.retain(|p| !same(p));
                 } else {
-                    self.pinned.push(stem.to_string());
+                    self.pinned.push(dock_entry(key).to_string());
                 }
                 self.rebuild();
                 Action::Pinned(self.pinned.clone())
@@ -541,6 +539,32 @@ pub(crate) mod tests {
         );
         assert_eq!(d.items[2].windows, [11]);
         assert_eq!(d.windows_without_icon(), [12]);
+    }
+
+    #[test]
+    fn pin_name_with_desktop_inside() {
+        // Ярлык Telegram — org.telegram.desktop.desktop: отрезать «.desktop»
+        // нужно один раз, иначе значок не находится и не закрепляется.
+        let now = Instant::now();
+        let apps = vec![app("org.telegram.desktop", "Telegram")];
+        let mut d = Dock::new(LOOK, apps, vec![], 1600);
+        d.set_windows(vec![(
+            window(10, "telegram-desktop", "TelegramDesktop"),
+            Some("/usr/share/applications/org.telegram.desktop.desktop".into()),
+        )]);
+        let key = "org.telegram.desktop.desktop";
+        assert_eq!(
+            d.command(key, MenuCommand::TogglePin, now),
+            Action::Pinned(vec!["org.telegram.desktop".into()])
+        );
+        d.set_windows(vec![]);
+        assert_eq!(keys(&d), [key], "закреплён и без окна");
+        assert!(d.items[0].pinned);
+        assert_eq!(
+            d.command(key, MenuCommand::TogglePin, now),
+            Action::Pinned(vec![])
+        );
+        assert!(keys(&d).is_empty());
     }
 
     #[test]

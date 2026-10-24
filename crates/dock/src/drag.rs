@@ -6,6 +6,7 @@
 
 use crate::layout::SEPARATOR;
 use crate::{Action, Dock, TRASH};
+use shell_core::config::{dock_entry, dock_entry_matches};
 
 /// Значок, который тащат, и где сейчас указатель (координаты окна дока).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -136,14 +137,13 @@ impl Dock {
         if item.app.is_none() {
             return Action::Nothing;
         }
-        let stem = |key: &str| key.trim_end_matches(".desktop").to_string();
         // Запись в настройках для значка: как была (вдруг с «.desktop»), иначе имя.
         let entry = |key: &str| {
             self.pinned
                 .iter()
-                .find(|p| stem(p) == stem(key))
+                .find(|p| dock_entry_matches(p, key))
                 .cloned()
-                .unwrap_or_else(|| stem(key))
+                .unwrap_or_else(|| dock_entry(key).to_string())
         };
         let mut list: Vec<String> = order[..pinned_count]
             .iter()
@@ -151,7 +151,7 @@ impl Dock {
             .collect();
         // Закреплённые, которых нет в доке (программа не установлена), — в конце.
         for p in &self.pinned {
-            if !self.items.iter().any(|i| stem(&i.key) == stem(p)) {
+            if !self.items.iter().any(|i| dock_entry_matches(p, &i.key)) {
                 list.push(p.clone());
             }
         }

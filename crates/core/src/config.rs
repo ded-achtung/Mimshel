@@ -183,7 +183,7 @@ impl Config {
         if let Some(apps) = get("dock", "apps") {
             c.dock_apps = apps
                 .split(',')
-                .map(|a| a.trim().trim_end_matches(".desktop").to_string())
+                .map(|a| dock_entry(a.trim()).to_string())
                 .filter(|a| !a.is_empty())
                 .collect();
         }
@@ -339,7 +339,7 @@ impl Config {
                     .filter_map(|v| v.as_str())
                     .map(|v| {
                         if section == "dock" {
-                            v.trim().trim_end_matches(".desktop").to_string()
+                            dock_entry(v.trim()).to_string()
                         } else {
                             v.to_string()
                         }
@@ -581,6 +581,19 @@ pub fn set_value(text: &str, section: &str, key: &str, value: Value) -> Option<S
     Some(doc.to_string())
 }
 
+/// Запись значка в `[dock] apps`: имя ярлыка без одного «.desktop» (как
+/// пишет macos-look). Только одного: у Telegram ярлык
+/// `org.telegram.desktop.desktop`, и запись — `org.telegram.desktop`.
+pub fn dock_entry(id: &str) -> &str {
+    id.strip_suffix(".desktop").unwrap_or(id)
+}
+
+/// Подходит ли запись из `[dock] apps` ярлыку `id` (запись может быть
+/// и полным именем файла).
+pub fn dock_entry_matches(entry: &str, id: &str) -> bool {
+    id == entry || dock_entry(id) == entry
+}
+
 /// [`set_value`] для `[dock] apps`.
 pub fn set_dock_apps(text: &str, apps: &[String]) -> Option<String> {
     let new: Array = apps.iter().map(String::as_str).collect();
@@ -726,7 +739,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
         "dock.apps" => Ok(Value::Array(
             input
                 .split(',')
-                .map(|a| a.trim().trim_end_matches(".desktop"))
+                .map(|a| dock_entry(a.trim()))
                 .filter(|a| !a.is_empty())
                 .collect(),
         )),
