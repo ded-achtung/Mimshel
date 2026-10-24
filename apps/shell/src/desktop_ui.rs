@@ -317,9 +317,10 @@ impl DesktopUi {
             | Event::Dropped { window, .. } => window == self.window.id(),
             // Сменился размер экрана (корневое окно) — стол во весь экран заново.
             Event::Configure { window } => window == d.root(),
-            Event::Property { window, what: shell_x11::Property::WorkArea } => {
-                window == d.root()
-            },
+            Event::Property {
+                window,
+                what: shell_x11::Property::WorkArea,
+            } => window == d.root(),
             _ => false,
         }
     }

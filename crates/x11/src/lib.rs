@@ -511,9 +511,7 @@ impl Display {
                         Property::ClientList
                     }
                     x if x == a._NET_ACTIVE_WINDOW => Property::ActiveWindow,
-                    x if x == a._NET_WORKAREA || x == a._NET_CURRENT_DESKTOP => {
-                        Property::WorkArea
-                    },
+                    x if x == a._NET_WORKAREA || x == a._NET_CURRENT_DESKTOP => Property::WorkArea,
                     x if x == a._NET_WM_STATE || x == a.WM_STATE => Property::State,
                     x if x == a._NET_WM_NAME || x == u32::from(AtomEnum::WM_NAME) => {
                         Property::Title
