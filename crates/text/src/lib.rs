@@ -43,6 +43,30 @@ impl Fonts {
         }
     }
 
+    /// Только шрифты семейства `family` — быстро: полный набор (`new`) читает
+    /// каждый шрифт системы (их бывают тысячи), после загрузки системы с
+    /// холодного диска это секунды. Пути к файлам семейства знает fontconfig
+    /// (`fc-list`). Знаков, которых в семействе нет, такой набор не нарисует —
+    /// служба потом подменяет его полным. `None` — семейство не нашлось.
+    pub fn quick(family: &str) -> Option<Fonts> {
+        let out = std::process::Command::new("fc-list")
+            .args([family, "-f", "%{file}\n"])
+            .output()
+            .ok()?;
+        let mut db = cosmic_text::fontdb::Database::new();
+        for path in String::from_utf8_lossy(&out.stdout).lines() {
+            let _ = db.load_font_file(path);
+        }
+        if db.is_empty() {
+            return None;
+        }
+        Some(Fonts {
+            system: FontSystem::new_with_locale_and_db(locale(), db),
+            cache: SwashCache::new(),
+            family: family.to_string(),
+        })
+    }
+
     /// Ширина строки в пикселях.
     pub fn measure(&mut self, text: &str, style: &Style) -> f32 {
         let buffer = self.layout(text, style, None);
@@ -137,6 +161,17 @@ impl Fonts {
         buffer.shape_until_scroll(&mut self.system, false);
         buffer
     }
+}
+
+/// Язык системы для правил текста (`ru_RU.UTF-8` → `ru-RU`), как берёт его
+/// cosmic-text сам.
+fn locale() -> String {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
+        .map(|v| v.split('.').next().unwrap_or(&v).replace('_', "-"))
+        .unwrap_or_else(|| "en-US".into())
 }
 
 /// Накладывает цвет с прозрачностью на пиксель картинки (там цвета уже
@@ -235,5 +270,17 @@ mod tests {
         };
         let (one, two) = (width(&mut fonts, 1.0) as f32, width(&mut fonts, 2.0) as f32);
         assert!((two / one - 2.0).abs() < 0.1, "{one} → {two}");
+    }
+
+    #[test]
+    fn quick_set_draws_like_full() {
+        let Some(mut quick) = Fonts::quick("Inter") else {
+            return; // Inter не установлен — проверять нечего
+        };
+        let mut full = Fonts::new("Inter");
+        let a = quick.measure("Терминал 24 окт", &STYLE);
+        let b = full.measure("Терминал 24 окт", &STYLE);
+        assert!((a - b).abs() < 0.5, "{a} {b}");
+        assert!(Fonts::quick("Нет-такого-шрифта-123").is_none());
     }
 }

@@ -90,6 +90,8 @@ pub(crate) enum Msg {
     Notify(shell_dbus::notify::NotifyEvent),
     /// Щёлкнули по колокольчику — открыть или закрыть центр уведомлений.
     ToggleCenter,
+    /// Полный набор шрифтов загружен (вместо быстрого, с одним семейством).
+    Fonts(Box<Fonts>),
 }
 
 /// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
@@ -196,11 +198,17 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     let config = load_config();
     set_scale(&config);
     step("настройки");
-    // Шрифты читаются с диска долго (после загрузки — секунды): пусть грузятся
-    // заодно со списком программ и значками.
+    // Шрифты читаются с диска долго (после загрузки системы — секунды): пусть
+    // грузятся заодно со списком программ и значками. Службе для первого показа
+    // хватает основного семейства, полный набор она подгрузит после.
     let fonts = {
         let family = config.font.clone();
-        std::thread::spawn(move || Fonts::new(&family))
+        std::thread::spawn(move || {
+            daemon
+                .then(|| Fonts::quick(&family))
+                .flatten()
+                .unwrap_or_else(|| Fonts::new(&family))
+        })
     };
     let (tx, rx) = mpsc::channel();
 
@@ -306,6 +314,13 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             ui.icons.get(name, config.apps_icon);
         }
         step("значки");
+        // Полный набор шрифтов (значки ●, ✓, другие языки в уведомлениях) —
+        // в фоне; готов — заменит быстрый.
+        let family = config.font.clone();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Fonts(Box::new(Fonts::new(&family))));
+        });
     }
     match once {
         None => {
@@ -529,6 +544,10 @@ impl Ui<'_> {
         match msg {
             Msg::Toggle(panel) => self.toggle(panel),
             Msg::Apps(apps) => self.set_apps(apps),
+            Msg::Fonts(fonts) => {
+                self.fonts = *fonts;
+                Ok(())
+            }
             Msg::X(ev) => {
                 if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
                     eprintln!("X: {ev:?}");
