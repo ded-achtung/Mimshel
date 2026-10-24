@@ -6,9 +6,11 @@ use std::time::Duration;
 
 use shell_x11::Display;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ImageFormat, ImageOrder, MapState, PropMode};
-use x11rb::wrapper::ConnectionExt as _;
+use x11rb::protocol::xproto::{
+    AtomEnum, ConnectionExt, ImageFormat, ImageOrder, MapState, PropMode,
+};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 struct Server(Child);
