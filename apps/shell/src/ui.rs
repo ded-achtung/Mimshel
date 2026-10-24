@@ -178,6 +178,12 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     let daemon = once.is_none();
     let config = load_config();
     step("настройки");
+    // Шрифты читаются с диска долго (после загрузки — секунды): пусть грузятся
+    // заодно со списком программ и значками.
+    let fonts = {
+        let family = config.font.clone();
+        std::thread::spawn(move || Fonts::new(&family))
+    };
     let (tx, rx) = mpsc::channel();
 
     if daemon {
@@ -212,13 +218,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     let mut icons = Icons::new(&config.icon_theme);
     if daemon {
         watch_apps(settings, tx.clone());
-        // Иконки всех программ — заранее, чтобы первое открытие было мгновенным.
-        for name in apps.iter().filter_map(|a| a.icon.as_deref()) {
-            icons.get(name, ROW_ICON);
-            icons.get(name, config.launchpad_icon);
-        }
     }
-    step("значки");
     // Своя строка меню — только у службы и только если выбрана вместо панели
     // Xfce (`SHELL_MENUBAR=1` — включить для проверки, не трогая настройки).
     let menubar = if daemon && (config.menubar || std::env::var_os("SHELL_MENUBAR").is_some()) {
@@ -257,10 +257,13 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         None
     };
     step("док");
+    let preload: Vec<String> = apps.iter().filter_map(|a| a.icon.clone()).collect();
+    let fonts = fonts.join().map_err(|_| "сбой при загрузке шрифтов")?;
+    step("шрифты");
     let (sw, sh) = display.screen_size();
     let mut ui = Ui {
         display: &display,
-        fonts: Fonts::new(&config.font),
+        fonts,
         icons,
         spot_popup: display.create_popup("spotlight")?,
         pad_popup: display.create_popup("launchpad")?,
@@ -275,7 +278,17 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         notify,
     };
     ui.flush()?;
-    step("шрифты и окна");
+    step("окна");
+    if daemon {
+        // Иконки всех программ — заранее, чтобы первое открытие Spotlight и
+        // Launchpad было мгновенным. Уже после показа строки меню и дока:
+        // им эти иконки не нужны.
+        for name in &preload {
+            ui.icons.get(name, ROW_ICON);
+            ui.icons.get(name, config.launchpad_icon);
+        }
+        step("значки");
+    }
     match once {
         None => {
             eprintln!("Служба готова за {:?}", start.elapsed());
