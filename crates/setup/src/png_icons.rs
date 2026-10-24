@@ -12,7 +12,7 @@
 //! все три нули. Значки с такими цветами (`class="success"` и т. п.)
 //! оставляем в SVG.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -20,6 +20,8 @@ use shell_icons::{Fit, Icons, render_file};
 
 /// Размеры одноцветных значков (меню, кнопки, боковые панели).
 const SYMBOLIC: &[u32] = &[16, 24, 32];
+/// Версия алгоритма PNG: при изменении кэш должен пересоздаваться.
+const CACHE_VERSION: &str = "shell-png-v2";
 /// Папки, файлы, устройства — в Проводнике бывают и крупными.
 const LARGE: &[u32] = &[16, 24, 32, 48, 64, 96, 128];
 /// Значки программ — в меню, окнах «Открыть с помощью», заголовках.
@@ -79,9 +81,13 @@ fn build_with(
     let mut names: BTreeSet<(&'static str, String, bool)> = BTreeSet::new();
     for source in sources {
         for &(ctx, _, _) in CONTEXTS {
-            collect(&icons_dir.join(source).join(ctx), ctx, &mut names);
+            let mut visited = HashSet::new();
+            collect(&icons_dir.join(source).join(ctx), ctx, &mut names, &mut visited);
         }
     }
+    let marker = out_dir.join(".shell-cache-version");
+    let cache_current = std::fs::read_to_string(&marker)
+        .is_ok_and(|version| version == CACHE_VERSION);
     let wanted_apps: BTreeSet<&str> = apps.iter().map(String::as_str).collect();
     let mut stats = Stats::default();
     let mut jobs = Vec::new();
@@ -112,7 +118,7 @@ fn build_with(
             };
             let out = out_dir.join(format!("{ctx}/{size}/{file}"));
             dirs.insert((ctx, size));
-            if newer(&out, &source) {
+            if cache_current && newer(&out, &source) {
                 stats.kept += 1;
                 continue;
             }
@@ -124,20 +130,36 @@ fn build_with(
             });
         }
     }
+    let expected = jobs.len();
     stats.drawn = render_all(jobs);
     write_index(&out_dir, theme, &dirs);
+    if stats.drawn == expected {
+        let _ = std::fs::write(marker, CACHE_VERSION);
+    }
     stats
 }
 
 /// Все `.svg` в папке раздела (с вложенными, по ссылкам тоже).
-fn collect(dir: &Path, ctx: &'static str, out: &mut BTreeSet<(&'static str, String, bool)>) {
+fn collect(
+    dir: &Path,
+    ctx: &'static str,
+    out: &mut BTreeSet<(&'static str, String, bool)>,
+    visited: &mut HashSet<PathBuf>,
+) {
+    // Циклическая ссылка в теме может возвращать обход в тот же каталог.
+    let Ok(real) = std::fs::canonicalize(dir) else {
+        return;
+    };
+    if !visited.insert(real) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect(&path, ctx, out);
+            collect(&path, ctx, out, visited);
         } else if let Some(name) = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -250,6 +272,7 @@ mod tests {
             )
         };
         std::fs::write(theme.join("places/scalable/folder.svg"), svg("#3af", "")).unwrap();
+        std::os::unix::fs::symlink(&theme, theme.join("places/scalable/cycle")).unwrap();
         std::fs::write(
             theme.join("actions/symbolic/go-next-symbolic.svg"),
             svg("#bebebe", ""),
@@ -282,6 +305,10 @@ mod tests {
         let again = build_with(&root, &icons, "Проба", &["Проба"], &[]);
         assert_eq!(again.drawn, 0);
         assert!(again.kept > 0);
+        // Обновление версии принудительно пересобирает PNG.
+        std::fs::write(out.join(".shell-cache-version"), "old").unwrap();
+        let refreshed = build_with(&root, &icons, "Проба", &["Проба"], &[]);
+        assert!(refreshed.drawn > 0);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
