@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   tag:
-    if: ${{ github.repository == 'ded-achtung/shell' && github.event.head_commit.message == 'chore: one-shot annotated tag v0.0.1-alpha' }}
+    if: "${{ github.repository == 'ded-achtung/shell' && github.event.head_commit.message == 'chore: one-shot annotated tag v0.0.1-alpha' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
