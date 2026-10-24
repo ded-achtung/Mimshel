@@ -255,9 +255,11 @@ impl DesktopUi {
     /// Нарисовать обои под нынешние мониторы (в потоке рисовальщика).
     fn load_wallpaper(&self, d: &Display) {
         let (sw, sh) = d.screen_pixels();
-        let _ = self
-            .painter
-            .send((self.wallpaper.clone(), (u32::from(sw), u32::from(sh)), d.monitors()));
+        let _ = self.painter.send((
+            self.wallpaper.clone(),
+            (u32::from(sw), u32::from(sh)),
+            d.monitors(),
+        ));
     }
 
     /// Пришло из потока.
