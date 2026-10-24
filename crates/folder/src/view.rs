@@ -1259,6 +1259,6 @@ mod tests {
         let p = pm
             .pixel((lx + lw / 2.0) as u32 - 10, ly as u32 + 3)
             .expect("внутри");
-        assert!(p.blue() > p.red() + 60, "{p:?}");
+        assert!(u16::from(p.blue()) > u16::from(p.red()) + 60, "{p:?}");
     }
 }
