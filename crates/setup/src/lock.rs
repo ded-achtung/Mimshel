@@ -121,7 +121,9 @@ pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, Stri
     }
     let a = u32::try_from(l.avatar).map_err(|_| "размер аватара")?;
     let face = shell_icons::render_file(&face, a, a, fit);
-    let mut fonts = shell_text::Fonts::new("Inter");
+    // Только основное семейство: полный набор читает все шрифты системы (секунды).
+    let mut fonts =
+        shell_text::Fonts::quick("Inter").unwrap_or_else(|| shell_text::Fonts::new("Inter"));
     let pm = shell_lock::draw(
         &l,
         shell_lock::Scene {

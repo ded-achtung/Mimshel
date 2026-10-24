@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use shell_core::config::{Config, set_value, setting_value};
 use shell_desktop::{PickerResult, WallpaperPicker, wallpaper_picker};
@@ -30,8 +31,9 @@ pub enum DesktopCommand {
 
 /// Что приходит столу из его потоков.
 pub enum DesktopMsg {
-    /// Обои во весь экран (в пикселях) для этого значения настройки.
-    Wallpaper(String, Pixmap),
+    /// Обои во весь экран (в пикселях) для этого значения настройки и
+    /// сколько они рисовались.
+    Wallpaper(String, Pixmap, Duration),
     /// Миниатюра для окна «Обои».
     Thumb(String, Pixmap),
     /// Окно выбора файла закрыто: путь к картинке или `None` (отмена).
@@ -55,6 +57,12 @@ pub struct DesktopUi {
     picker_dirty: bool,
     /// Нынешние обои (значение `look.wallpaper`).
     wallpaper: String,
+    /// Когда выбрали нынешние обои (для замера в журнале) и сколько прежних
+    /// выборов не дождались своих обоев (выбрали другие раньше).
+    chosen_at: Option<Instant>,
+    skipped: u32,
+    /// Рисовальщик обоев (один поток): (значение, размер экрана в пикселях).
+    painter: Sender<(String, (u32, u32))>,
     tx: Sender<Msg>,
 }
 
@@ -71,31 +79,41 @@ impl DesktopUi {
             picker: None,
             picker_dirty: false,
             wallpaper: config.wallpaper.clone(),
+            chosen_at: None,
+            skipped: 0,
+            painter: painter(tx.clone()),
             tx,
         };
         ui.load_wallpaper(d);
         Ok(ui)
     }
 
-    /// Нарисовать обои под нынешние мониторы (в отдельном потоке).
+    /// Нарисовать обои под нынешние мониторы (в потоке рисовальщика).
     fn load_wallpaper(&self, d: &Display) {
         let (sw, sh) = d.screen_pixels();
-        let value = self.wallpaper.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            if let Some(image) = compose(&value, u32::from(sw), u32::from(sh)) {
-                let msg = DesktopMsg::Wallpaper(value, image);
-                let _ = tx.send(Msg::Desktop(Box::new(msg)));
-            }
-        });
+        let _ = self
+            .painter
+            .send((self.wallpaper.clone(), (u32::from(sw), u32::from(sh))));
     }
 
     /// Пришло из потока.
     pub fn message(&mut self, d: &Display, msg: DesktopMsg) -> Result<()> {
         match msg {
             // Пока рисовались одни обои, могли выбрать другие — старые не ставим.
-            DesktopMsg::Wallpaper(value, image) if value == self.wallpaper => {
-                self.window.set_wallpaper(d, &image)
+            DesktopMsg::Wallpaper(value, image, drawn) if value == self.wallpaper => {
+                let start = Instant::now();
+                self.window.set_wallpaper(d, &image)?;
+                // Сколько от выбора в окне «Обои» до обоев на столе.
+                if let Some(chosen) = self.chosen_at.take() {
+                    eprintln!(
+                        "Обои «{value}»: на столе через {:?} после выбора (рисование {drawn:?}, \
+                         вывод {:?}; пропущено прежних выборов: {})",
+                        chosen.elapsed(),
+                        start.elapsed(),
+                        std::mem::take(&mut self.skipped)
+                    );
+                }
+                Ok(())
             }
             DesktopMsg::Wallpaper(..) => Ok(()),
             DesktopMsg::Thumb(value, image) => {
@@ -315,12 +333,10 @@ impl DesktopUi {
             eprintln!("Обои не сохранены в настройках: {e}");
         }
         self.wallpaper = value.to_string();
+        if self.chosen_at.replace(Instant::now()).is_some() {
+            self.skipped += 1;
+        }
         self.load_wallpaper(d);
-        let value = value.to_string();
-        std::thread::spawn(move || {
-            let (w, h) = shell_setup::lock::screen_size();
-            shell_setup::lock::background(&value, w, h);
-        });
     }
 
     /// Закрыть меню и окно «Обои» (например, перед открытием «Поиска»).
@@ -344,6 +360,50 @@ impl DesktopUi {
         }
         Ok(())
     }
+}
+
+/// Пока выбор обоев не успокоился, фон экрана блокировки не рисуем.
+const LOCK_DELAY: Duration = Duration::from_millis(1500);
+
+/// Рисовальщик обоев: один поток, берёт только последний заказ (быстрые
+/// щелчки по плиткам не рисуют все обои подряд одновременно). Когда новых
+/// заказов нет [`LOCK_DELAY`], рисует и фон экрана блокировки — один раз
+/// для последних обоев.
+fn painter(tx: Sender<Msg>) -> Sender<(String, (u32, u32))> {
+    let (orders, rx) = std::sync::mpsc::channel::<(String, (u32, u32))>();
+    std::thread::spawn(move || {
+        let mut lock_for: Option<String> = None;
+        loop {
+            let order = match &lock_for {
+                Some(_) => match rx.recv_timeout(LOCK_DELAY) {
+                    Ok(o) => o,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if let Some(value) = lock_for.take() {
+                            let (w, h) = shell_setup::lock::screen_size();
+                            shell_setup::lock::background(&value, w, h);
+                        }
+                        continue;
+                    }
+                    Err(_) => return,
+                },
+                None => match rx.recv() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                },
+            };
+            // Заказы, пришедшие, пока ждали, — остаётся только последний.
+            let (value, (sw, sh)) = rx.try_iter().last().unwrap_or(order);
+            let start = Instant::now();
+            if let Some(image) = compose(&value, sw, sh) {
+                let msg = DesktopMsg::Wallpaper(value.clone(), image, start.elapsed());
+                if tx.send(Msg::Desktop(Box::new(msg))).is_err() {
+                    return;
+                }
+            }
+            lock_for = Some(value);
+        }
+    });
+    orders
 }
 
 /// Записать `look.wallpaper` в файл настроек (пояснения в файле остаются).
