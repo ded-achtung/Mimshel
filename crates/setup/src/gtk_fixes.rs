@@ -1,10 +1,12 @@
 //! Поправки к теме GTK 3 — своим кусочком в `~/.config/gtk-3.0/gtk.css`
 //! между пометками; остальное в файле — пользователя, его не трогаем.
 //!
-//! Colloid скругляет углы у области файлов Проводника (`widget.view`), и
-//! скругление достаётся рамке выделения. Проводник перерисовывает только
-//! прямоугольник рамки — от скруглённых краёв остаются обрывки. Рамке
-//! возвращаем прямые углы.
+//! Рамка выделения в Проводнике получает от Colloid лишнее: скругление
+//! области файлов (`widget.view`) и тень наведения (`.view:hover` —
+//! `box-shadow` с огромным размахом). Проводник перерисовывает только
+//! прямоугольник рамки — всё, что рисуется сверх него, остаётся следами
+//! (пунктир за углом, шум по краям). Рамка — без скругления, тени и обводки,
+//! как в стандартной теме Adwaita.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +17,9 @@ const CSS: &str = "\
 .thunar .standard-view.frame widget.view .rubberband,
 .thunar .standard-view.frame widget.view rubberband {
   border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  background-image: none;
 }";
 
 fn file() -> PathBuf {
@@ -105,7 +110,7 @@ mod tests {
         let path = dir.join("gtk-3.0/gtk.css");
         apply_in(&path);
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("border-radius: 0"));
+        assert!(text.contains("border-radius: 0") && text.contains("box-shadow: none"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
