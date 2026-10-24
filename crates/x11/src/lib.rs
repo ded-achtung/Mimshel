@@ -3,12 +3,14 @@
 //! раскладки (us/ru) и регистра. Для дока — окна программ ([`windows`]) и
 //! окно-док ([`dock`]).
 
+mod clipboard;
 mod desktop;
 mod dock;
 mod keyboard;
 mod shm;
 mod windows;
 
+pub use clipboard::clipboard_files;
 pub use desktop::DesktopWindow;
 pub use dock::DockWindow;
 

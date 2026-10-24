@@ -2,7 +2,9 @@
 //! и проверочные команды.
 
 mod config_store;
+mod desktop_files;
 mod desktop_ui;
+mod desktop_wallpaper;
 mod dock_ui;
 mod guard;
 mod ipc;
@@ -29,6 +31,7 @@ const HELP: &str = "\
   shell test-apps       список программ, которые увидит окно «Программы»
   shell test-search ТЕКСТ
                         что найдёт окно «Поиск» по этому тексту
+  shell test-clipboard  какие файлы в буфере обмена (для «Вставить» на столе)
   shell watch           следить за ярлыками и печатать, что появилось и пропало
   shell doctor [--fix]  проверить, что всё на месте; --fix — починить
   shell config          где файл настроек и что в нём можно менять
@@ -53,6 +56,22 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("test-apps") => list_apps(),
+        Some("test-clipboard") => match shell_x11::clipboard_files() {
+            Some((cut, files)) => {
+                println!(
+                    "{}:",
+                    if cut {
+                        "вырезаны"
+                    } else {
+                        "скопированы"
+                    }
+                );
+                for f in files {
+                    println!("  {}", f.display());
+                }
+            }
+            None => println!("в буфере обмена нет файлов"),
+        },
         Some("test-search") if args.len() > 1 => search(&args[1..].join(" ")),
         Some("watch") => watch(),
         Some("daemon") if args.get(1).map(String::as_str) == Some("--child") => {

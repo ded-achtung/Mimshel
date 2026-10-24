@@ -533,7 +533,7 @@ impl Ui<'_> {
             dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
         if let Some(desktop) = &mut self.desktop {
-            desktop.flush(self.display, &mut self.fonts)?;
+            desktop.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
         Ok(())
     }

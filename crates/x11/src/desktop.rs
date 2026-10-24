@@ -7,10 +7,10 @@
 use std::cell::Cell;
 
 use tiny_skia::Pixmap;
-use x11rb::connection::Connection;
+use x11rb::connection::{Connection, RequestConnection as _};
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, CreateGCAux,
-    CreateWindowAux, EventMask, PropMode, StackMode, Window, WindowClass,
+    CreateWindowAux, EventMask, ImageFormat, PropMode, StackMode, Window, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -142,6 +142,44 @@ impl DesktopWindow {
         if let Some(old) = self.wallpaper.replace(Some(pixmap)) {
             d.conn.free_pixmap(old)?;
         }
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// Заменить часть обоев картинкой `image` (в пикселях) с левым верхним
+    /// углом в `x`, `y` — например, клетку значка, который выделили. Весь
+    /// экран заново не отправляется.
+    pub fn update(&self, d: &Display, image: &Pixmap, x: i32, y: i32) -> Result<()> {
+        let Some(pixmap) = self.wallpaper.get() else {
+            return Ok(());
+        };
+        let (w, h) = (image.width() as usize, image.height() as usize);
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+        let mut data = image.data().to_vec();
+        // tiny-skia хранит RGBA, X-сервер ждёт BGRA.
+        for px in data.as_chunks_mut::<4>().0 {
+            px.swap(0, 2);
+        }
+        // Полосами: у запроса к X есть предел размера.
+        let max_rows = (d.conn.maximum_request_bytes().saturating_sub(64) / (w * 4)).max(1);
+        for (n, rows) in data.chunks(max_rows * w * 4).enumerate() {
+            d.conn.put_image(
+                ImageFormat::Z_PIXMAP,
+                pixmap,
+                self.gc,
+                w as u16,
+                (rows.len() / (w * 4)) as u16,
+                x as i16,
+                (y + (n * max_rows) as i32) as i16,
+                0,
+                32,
+                rows,
+            )?;
+        }
+        d.conn
+            .clear_area(false, self.window, x as i16, y as i16, w as u16, h as u16)?;
         d.conn.flush()?;
         Ok(())
     }

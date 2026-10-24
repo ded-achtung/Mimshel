@@ -19,6 +19,7 @@ shell-notify = { path = "../../crates/notify" }
 shell-widgets = { path = "../../crates/widgets" }
 shell-setup = { path = "../../crates/setup" }
 shell-desktop = { path = "../../crates/desktop" }
+inotify = { version = "0.11.5", default-features = false }
 shell-wallpaper = { path = "../../crates/wallpaper" }
 tiny-skia = "0.12.0"
 pam = "0.8"

@@ -1,32 +1,47 @@
 //! Рабочий стол (вместо xfdesktop): окно под всеми окнами с обоями на
-//! каждом мониторе, меню по правому щелчку («Изменить обои…», «Настройки
-//! экрана…») и окно «Обои» с миниатюрами (`shell_desktop::WallpaperPicker`).
+//! каждом мониторе и значками файлов из папки «Рабочий стол», меню по правому
+//! щелчку и окно «Обои».
 //!
-//! Всё долгое — в отдельных потоках, результат приходит сообщением
-//! [`DesktopMsg`]: обои под мониторы (свои под новый размер — секунды),
-//! миниатюры, выбранный файл. Обои меняются без перезапуска службы: настройка
-//! пишется в файл, стол и фон блокировки перерисовываются.
+//! - значки: щелчок выделяет, двойной открывает; меню на значке — «Открыть»,
+//!   «Переименовать…», «В корзину»; на пустом месте — «Новая папка»,
+//!   «Вставить», «Открыть терминал здесь», «Изменить обои…»;
+//! - обои — в `desktop_wallpaper`, действия с файлами — в `desktop_files`.
+//!
+//! Картинка стола — обои со значками — лежит на X-сервере фоном окна. Новые
+//! обои или другой список файлов — стол отправляется целиком; выделение —
+//! только клетки затронутых значков.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use shell_core::config::{Config, set_value, setting_value};
+use shell_core::config::Config;
+use shell_desktop::files::Item;
+use shell_desktop::icon_grid::{self, IconGrid};
 use shell_desktop::{PickerResult, WallpaperPicker, wallpaper_picker};
-use shell_icons::Fit;
+use shell_icons::Icons;
+use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
 use shell_x11::{DesktopWindow, Display, Event, Popup};
-use tiny_skia::{Pixmap, PixmapPaint, Transform};
+use tiny_skia::{IntRect, Pixmap};
 
+use crate::desktop_files;
+use crate::desktop_wallpaper::{WALLPAPERS, painter, pick_file, save_wallpaper, thumb};
 use crate::ui::{Msg, Result};
 
-/// Пункты меню стола.
+/// Пункты меню стола и значков.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DesktopCommand {
+    // На пустом месте.
+    NewFolder,
+    Paste,
+    Terminal,
     ChangeWallpaper,
-    DisplaySettings,
+    // На значке.
+    Open,
+    Rename,
+    Trash,
 }
 
 /// Что приходит столу из его потоков.
@@ -38,14 +53,17 @@ pub enum DesktopMsg {
     Thumb(String, Pixmap),
     /// Окно выбора файла закрыто: путь к картинке или `None` (отмена).
     Picked(Option<String>),
+    /// Список файлов на столе (сразу и после каждой перемены в папке).
+    Files(Vec<Item>),
+    /// Выделить этот файл, когда он появится (переименовали, создали).
+    Select(PathBuf),
 }
 
-/// Свои обои: (имя в настройках, подпись).
-const WALLPAPERS: &[(&str, &str)] = &[
-    ("space", "Космос"),
-    ("waves", "Волны"),
-    ("aurora", "Сияние"),
-];
+/// Два щелчка по одному значку быстрее этого — «открыть».
+const DOUBLE_CLICK: Duration = Duration::from_millis(450);
+/// Отступы области значков: справа, под строкой меню и над доком.
+const MARGIN: f32 = 12.0;
+const DOCK_ROOM: f32 = 96.0;
 
 pub struct DesktopUi {
     window: DesktopWindow,
@@ -55,8 +73,22 @@ pub struct DesktopUi {
     picker_popup: Popup,
     picker: Option<WallpaperPicker>,
     picker_dirty: bool,
-    /// Нынешние обои (значение `look.wallpaper`).
+    /// Нынешние обои (значение `look.wallpaper`) и их картинка без значков
+    /// (в пикселях экрана) — из неё перерисовываются клетки значков.
     wallpaper: String,
+    wall: Option<Pixmap>,
+    /// Значки и папка «Рабочий стол».
+    grid: IconGrid,
+    dir: PathBuf,
+    /// Выделить, когда появится в списке (только что создан или переименован).
+    pending_select: Option<PathBuf>,
+    /// Последний щелчок по значку — для двойного щелчка.
+    last_click: Option<(usize, Instant)>,
+    /// Перерисовать: весь стол или клетки этих значков.
+    full_dirty: bool,
+    cells_dirty: Vec<usize>,
+    terminal: Vec<String>,
+    menubar_height: u32,
     /// Когда выбрали нынешние обои (для замера в журнале) и сколько прежних
     /// выборов не дождались своих обоев (выбрали другие раньше).
     chosen_at: Option<Instant>,
@@ -70,7 +102,8 @@ impl DesktopUi {
     pub fn new(d: &Display, config: &Config, tx: Sender<Msg>) -> Result<DesktopUi> {
         let window = d.create_desktop()?;
         window.show(d)?;
-        let ui = DesktopUi {
+        let dir = desktop_files::desktop_dir();
+        let mut ui = DesktopUi {
             window,
             menu_popup: d.create_popup("desktop-menu")?,
             menu: None,
@@ -79,13 +112,42 @@ impl DesktopUi {
             picker: None,
             picker_dirty: false,
             wallpaper: config.wallpaper.clone(),
+            wall: None,
+            grid: IconGrid::new((0.0, 0.0, 1.0, 1.0)),
+            dir: dir.clone(),
+            pending_select: None,
+            last_click: None,
+            full_dirty: false,
+            cells_dirty: Vec::new(),
+            terminal: config.terminal.clone(),
+            menubar_height: config.menubar_height,
             chosen_at: None,
             skipped: 0,
             painter: painter(tx.clone()),
-            tx,
+            tx: tx.clone(),
         };
+        ui.place_icons(d);
         ui.load_wallpaper(d);
+        desktop_files::watch(dir, tx);
         Ok(ui)
+    }
+
+    /// Где стоят значки: на первом мониторе, под строкой меню, над доком.
+    fn place_icons(&mut self, d: &Display) {
+        let k = d.scale();
+        let (sw, sh) = d.screen_size();
+        let (mx, my, mw, mh) = shell_setup::parts::monitor_rects()
+            .first()
+            .map(|&(x, y, w, h)| (x as f32 / k, y as f32 / k, w as f32 / k, h as f32 / k))
+            .unwrap_or((0.0, 0.0, f32::from(sw), f32::from(sh)));
+        let top = my + self.menubar_height as f32 + MARGIN;
+        self.grid.set_area((
+            mx,
+            top,
+            mw - MARGIN,
+            (my + mh - DOCK_ROOM - top).max(icon_grid::CELL_H),
+        ));
+        self.full_dirty = true;
     }
 
     /// Нарисовать обои под нынешние мониторы (в потоке рисовальщика).
@@ -101,35 +163,52 @@ impl DesktopUi {
         match msg {
             // Пока рисовались одни обои, могли выбрать другие — старые не ставим.
             DesktopMsg::Wallpaper(value, image, drawn) if value == self.wallpaper => {
-                let start = Instant::now();
-                self.window.set_wallpaper(d, &image)?;
                 // Сколько от выбора в окне «Обои» до обоев на столе.
                 if let Some(chosen) = self.chosen_at.take() {
                     eprintln!(
-                        "Обои «{value}»: на столе через {:?} после выбора (рисование {drawn:?}, \
-                         вывод {:?}; пропущено прежних выборов: {})",
+                        "Обои «{value}»: готовы через {:?} после выбора (рисование {drawn:?}; \
+                         пропущено прежних выборов: {})",
                         chosen.elapsed(),
-                        start.elapsed(),
                         std::mem::take(&mut self.skipped)
                     );
                 }
-                Ok(())
+                self.wall = Some(image);
+                self.full_dirty = true;
             }
-            DesktopMsg::Wallpaper(..) => Ok(()),
+            DesktopMsg::Wallpaper(..) => {}
             DesktopMsg::Thumb(value, image) => {
                 if let Some(picker) = &mut self.picker {
                     picker.set_thumb(value, image);
                     self.picker_dirty = true;
                 }
-                Ok(())
             }
             DesktopMsg::Picked(path) => {
                 if let Some(path) = path {
                     self.apply(d, &path);
                 }
-                self.open_picker(d)
+                self.open_picker(d)?;
+            }
+            DesktopMsg::Files(items) => {
+                self.grid.set_items(items);
+                if let Some(path) = self.pending_select.take() {
+                    self.grid.select_path(&path);
+                    if self.grid.selected().is_none_or(|i| i.path != path) {
+                        // Ещё не появился — подождём следующего списка.
+                        self.pending_select = Some(path);
+                    }
+                }
+                self.last_click = None;
+                self.full_dirty = true;
+            }
+            DesktopMsg::Select(path) => {
+                let changed = self.grid.select_path(&path);
+                if self.grid.selected().is_none_or(|i| i.path != path) {
+                    self.pending_select = Some(path);
+                }
+                self.cells_dirty.extend(changed);
             }
         }
+        Ok(())
     }
 
     pub fn wants(&self, d: &Display, ev: &Event) -> bool {
@@ -154,6 +233,7 @@ impl DesktopUi {
             && window == d.root()
         {
             self.window.show(d)?;
+            self.place_icons(d);
             self.load_wallpaper(d);
             return Ok(());
         }
@@ -163,36 +243,76 @@ impl DesktopUi {
         if self.menu.is_some() {
             return self.menu_event(d, ev);
         }
-        if let Event::Button {
+        let Event::Button {
             window,
             x,
             y,
-            button: 3,
+            button,
         } = ev
-            && window == self.window.id()
-        {
-            self.open_menu(d, fonts, x, y)?;
+        else {
+            return Ok(());
+        };
+        if window != self.window.id() {
+            return Ok(());
+        }
+        let hit = self.grid.item_at(f32::from(x), f32::from(y));
+        let changed = self.grid.select(hit);
+        self.cells_dirty.extend(changed);
+        match button {
+            1 => {
+                let now = Instant::now();
+                let double = hit.is_some()
+                    && self
+                        .last_click
+                        .is_some_and(|(i, t)| Some(i) == hit && now - t < DOUBLE_CLICK);
+                if double {
+                    self.last_click = None;
+                    if let Some(item) = self.grid.selected() {
+                        desktop_files::open(item);
+                    }
+                } else {
+                    self.last_click = hit.map(|i| (i, now));
+                }
+            }
+            3 => self.open_menu(d, fonts, x, y, hit.is_some())?,
+            _ => {}
         }
         Ok(())
     }
 
-    /// Меню по правому щелчку — только то, что относится к столу.
-    fn open_menu(&mut self, d: &Display, fonts: &mut Fonts, x: i16, y: i16) -> Result<()> {
-        let entry = |label: &str, command| MenuEntry {
+    /// Меню по правому щелчку: на значке — что сделать с ним, на пустом месте
+    /// — со столом.
+    fn open_menu(
+        &mut self,
+        d: &Display,
+        fonts: &mut Fonts,
+        x: i16,
+        y: i16,
+        on_icon: bool,
+    ) -> Result<()> {
+        let entry = |label: &str, command, separator_before| MenuEntry {
             label: label.to_string(),
             command,
             checked: false,
-            separator_before: false,
+            separator_before,
             enabled: true,
             indent: false,
         };
-        let mut menu = Menu::new(
-            "desktop".into(),
+        let entries = if on_icon {
             vec![
-                entry("Изменить обои…", DesktopCommand::ChangeWallpaper),
-                entry("Настройки экрана…", DesktopCommand::DisplaySettings),
-            ],
-        );
+                entry("Открыть", DesktopCommand::Open, false),
+                entry("Переименовать…", DesktopCommand::Rename, true),
+                entry("В корзину", DesktopCommand::Trash, true),
+            ]
+        } else {
+            vec![
+                entry("Новая папка", DesktopCommand::NewFolder, false),
+                entry("Вставить", DesktopCommand::Paste, false),
+                entry("Открыть терминал здесь", DesktopCommand::Terminal, true),
+                entry("Изменить обои…", DesktopCommand::ChangeWallpaper, true),
+            ]
+        };
+        let mut menu = Menu::new("desktop".into(), entries);
         let (w, h) = menu.measure(fonts);
         // Меню под указателем; у края экрана — сдвинуть, чтобы влезло.
         let (sw, sh) = d.screen_size();
@@ -233,9 +353,36 @@ impl DesktopUi {
             MenuResult::Close => self.close_menu(d)?,
             MenuResult::Run(command) => {
                 self.close_menu(d)?;
-                match command {
-                    DesktopCommand::ChangeWallpaper => self.open_picker(d)?,
-                    DesktopCommand::DisplaySettings => spawn(&["xfce4-display-settings"]),
+                self.run(d, command)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn run(&mut self, d: &Display, command: DesktopCommand) -> Result<()> {
+        let item = self.grid.selected().cloned();
+        match command {
+            DesktopCommand::NewFolder => {
+                if let Some(path) = desktop_files::new_folder(&self.dir) {
+                    self.pending_select = Some(path);
+                }
+            }
+            DesktopCommand::Paste => desktop_files::paste(self.dir.clone()),
+            DesktopCommand::Terminal => desktop_files::terminal(&self.terminal, &self.dir),
+            DesktopCommand::ChangeWallpaper => self.open_picker(d)?,
+            DesktopCommand::Open => {
+                if let Some(item) = &item {
+                    desktop_files::open(item);
+                }
+            }
+            DesktopCommand::Rename => {
+                if let Some(item) = &item {
+                    desktop_files::rename(item, self.tx.clone());
+                }
+            }
+            DesktopCommand::Trash => {
+                if let Some(item) = &item {
+                    desktop_files::trash(item);
                 }
             }
         }
@@ -345,7 +492,7 @@ impl DesktopUi {
         self.close_picker(d)
     }
 
-    pub fn flush(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
+    pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
         if self.menu_dirty {
             self.menu_dirty = false;
             if let Some(menu) = &self.menu {
@@ -358,164 +505,78 @@ impl DesktopUi {
                 self.picker_popup.present(d, &picker.render(fonts))?;
             }
         }
+        if self.full_dirty {
+            self.full_dirty = false;
+            self.cells_dirty.clear();
+            self.draw_all(d, fonts, icons)?;
+        } else if !self.cells_dirty.is_empty() {
+            let mut cells = std::mem::take(&mut self.cells_dirty);
+            cells.sort_unstable();
+            cells.dedup();
+            for i in cells {
+                self.draw_cell(d, fonts, icons, i)?;
+            }
+        }
         Ok(())
     }
-}
 
-/// Пока выбор обоев не успокоился, фон экрана блокировки не рисуем.
-const LOCK_DELAY: Duration = Duration::from_millis(1500);
-
-/// Рисовальщик обоев: один поток, берёт только последний заказ (быстрые
-/// щелчки по плиткам не рисуют все обои подряд одновременно). Когда новых
-/// заказов нет [`LOCK_DELAY`], рисует и фон экрана блокировки — один раз
-/// для последних обоев.
-fn painter(tx: Sender<Msg>) -> Sender<(String, (u32, u32))> {
-    let (orders, rx) = std::sync::mpsc::channel::<(String, (u32, u32))>();
-    std::thread::spawn(move || {
-        let mut lock_for: Option<String> = None;
-        loop {
-            let order = match &lock_for {
-                Some(_) => match rx.recv_timeout(LOCK_DELAY) {
-                    Ok(o) => o,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if let Some(value) = lock_for.take() {
-                            let (w, h) = shell_setup::lock::screen_size();
-                            shell_setup::lock::background(&value, w, h);
-                        }
-                        continue;
-                    }
-                    Err(_) => return,
-                },
-                None => match rx.recv() {
-                    Ok(o) => o,
-                    Err(_) => return,
-                },
-            };
-            // Заказы, пришедшие, пока ждали, — остаётся только последний.
-            let (value, (sw, sh)) = rx.try_iter().last().unwrap_or(order);
-            let start = Instant::now();
-            if let Some(image) = compose(&value, sw, sh) {
-                let msg = DesktopMsg::Wallpaper(value.clone(), image, start.elapsed());
-                if tx.send(Msg::Desktop(Box::new(msg))).is_err() {
-                    return;
-                }
-            }
-            lock_for = Some(value);
+    /// Весь стол: обои и все значки — новой картинкой-фоном.
+    fn draw_all(&self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        let Some(wall) = &self.wall else {
+            return Ok(());
+        };
+        let start = Instant::now();
+        let mut pm = Canvas::from_pixmap(wall.clone(), d.scale());
+        for i in 0..self.grid.items().len() {
+            let icon = item_icon(icons, &self.grid.items()[i]);
+            self.grid.draw(&mut pm, (0.0, 0.0), i, icon.as_ref(), fonts);
         }
-    });
-    orders
-}
-
-/// Записать `look.wallpaper` в файл настроек (пояснения в файле остаются).
-fn save_wallpaper(value: &str) -> std::io::Result<()> {
-    let Some(path) = crate::ui::config_path() else {
-        return Ok(());
-    };
-    let v = setting_value("look.wallpaper", value).map_err(std::io::Error::other)?;
-    crate::ui::config_store(path).edit(|text| {
-        set_value(text, "look", "wallpaper", v)
-            .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))
-    })
-}
-
-/// Миниатюра обоев `tw`×`th` пикселей: из уже нарисованных под экран обоев
-/// (так она такая же, как на столе), иначе свои рисуются сразу маленькими.
-fn thumb(value: &str, tw: u32, th: u32) -> Option<Pixmap> {
-    let (sw, sh) = shell_setup::lock::screen_size();
-    let drawn = match shell_wallpaper::Style::parse(value) {
-        Some(style) => {
-            let (sw, sh) = (u32::try_from(sw).ok()?, u32::try_from(sh).ok()?);
-            let file = shell_setup::parts::wallpaper_path(style, sw, sh);
-            if file.exists() {
-                Some(file)
-            } else {
-                return shell_wallpaper::draw(style, tw, th);
-            }
+        self.window.set_wallpaper(d, pm.pixmap())?;
+        if std::env::var_os("SHELL_TIMING").is_some() {
+            eprintln!(
+                "Стол: {} значков, перерисован за {:?}",
+                self.grid.items().len(),
+                start.elapsed()
+            );
         }
-        None => Some(PathBuf::from(value)),
-    };
-    shell_icons::render_file(&drawn?, tw, th, Fit::Cover)
-}
-
-/// Окно выбора картинки (zenity) в отдельном потоке.
-fn pick_file(tx: Sender<Msg>) {
-    std::thread::spawn(move || {
-        // Открыть сразу в папке «Изображения» (по xdg-user-dir).
-        let pictures = Command::new("xdg-user-dir")
-            .arg("PICTURES")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && std::path::Path::new(s).is_dir());
-        let start = pictures.map(|p| format!("--filename={p}/"));
-        let path = Command::new("zenity")
-            .args(start)
-            .args([
-                "--file-selection",
-                "--title=Картинка для обоев",
-                "--file-filter=Картинки | *.png *.jpg *.jpeg *.svg *.webp *.PNG *.JPG *.JPEG",
-            ])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let _ = tx.send(Msg::Desktop(Box::new(DesktopMsg::Picked(path))));
-    });
-}
-
-/// Обои во весь экран `sw`×`sh` пикселей: на каждом мониторе — свои под его
-/// размер (свои обои рисуются под размер один раз и хранятся). `None` —
-/// нарисовать не вышло (останется ровный цвет).
-fn compose(value: &str, sw: u32, sh: u32) -> Option<Pixmap> {
-    let mut monitors = shell_setup::parts::monitor_rects();
-    if monitors.is_empty() {
-        monitors.push((0, 0, sw, sh));
+        Ok(())
     }
-    let mut out = Pixmap::new(sw.max(1), sh.max(1))?;
-    out.fill(tiny_skia::Color::from_rgba8(0x1e, 0x1b, 0x3a, 0xff));
-    for (x, y, w, h) in monitors {
-        let Some(file) = shell_setup::parts::wallpaper_file(value, i64::from(w), i64::from(h))
-        else {
-            eprintln!("Обои «{value}» не нарисованы и не найдены");
-            continue;
+
+    /// Только клетка значка `i`: кусок обоев и значок на нём.
+    fn draw_cell(&self, d: &Display, fonts: &mut Fonts, icons: &mut Icons, i: usize) -> Result<()> {
+        let (Some(wall), Some(item)) = (&self.wall, self.grid.items().get(i)) else {
+            return Ok(());
         };
-        let Some(image) = shell_icons::render_file(&file, w, h, Fit::Cover) else {
-            eprintln!("Обои {} не прочитаны", file.display());
-            continue;
-        };
-        out.draw_pixmap(
-            x,
-            y,
-            image.as_ref(),
-            &PixmapPaint::default(),
-            Transform::identity(),
-            None,
+        let k = d.scale();
+        let (cx, cy, cw, ch) = self.grid.cell(i);
+        let px = |v: f32| (v * k).round() as i32;
+        let (x0, y0) = (px(cx).max(0), px(cy).max(0));
+        let (x1, y1) = (
+            px(cx + cw).min(wall.width() as i32),
+            px(cy + ch).min(wall.height() as i32),
         );
+        let Some(rect) = IntRect::from_ltrb(x0, y0, x1, y1) else {
+            return Ok(());
+        };
+        let Some(piece) = wall.clone_rect(rect) else {
+            return Ok(());
+        };
+        let mut pm = Canvas::from_pixmap(piece, k);
+        let icon = item_icon(icons, item);
+        self.grid.draw(
+            &mut pm,
+            (x0 as f32 / k, y0 as f32 / k),
+            i,
+            icon.as_ref(),
+            fonts,
+        );
+        self.window.update(d, pm.pixmap(), x0, y0)
     }
-    Some(out)
 }
 
-/// Запустить программу отдельно от службы (в своей группе процессов).
-fn spawn(args: &[&str]) {
-    let Some((program, rest)) = args.split_first() else {
-        return;
-    };
-    let mut cmd = Command::new(program);
-    cmd.args(rest)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    match cmd.spawn() {
-        // Дожидаемся в отдельном потоке, чтобы не копились «зомби».
-        Ok(mut child) => {
-            std::thread::spawn(move || child.wait());
-        }
-        Err(e) => eprintln!("Не запустить {program}: {e}"),
-    }
+/// Картинка значка: первое найденное имя из списка.
+fn item_icon(icons: &mut Icons, item: &Item) -> Option<Pixmap> {
+    item.icons
+        .iter()
+        .find_map(|name| icons.get(name, icon_grid::ICON).cloned())
 }

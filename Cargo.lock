@@ -1154,6 +1154,7 @@ dependencies = [
 name = "shell"
 version = "0.1.0"
 dependencies = [
+ "inotify",
  "pam",
  "shell-apps",
  "shell-core",
@@ -1199,6 +1200,7 @@ dependencies = [
 name = "shell-desktop"
 version = "0.1.0"
 dependencies = [
+ "shell-apps",
  "shell-core",
  "shell-render",
  "shell-text",

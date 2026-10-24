@@ -529,6 +529,15 @@ impl Plan<'_> {
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
             ),
         );
+        // Список «тип файла → программа» для своих ярлыков: без него копии
+        // ярлыков в ~/.local/share/applications заслоняют системные, и папки
+        // нечем открыть (gio open).
+        if crate::sys::which("update-desktop-database").is_some() {
+            run(&[
+                "update-desktop-database",
+                &self.paths.applications.display().to_string(),
+            ]);
+        }
         for s in SHORTCUTS {
             let shell = c.part(s.part) == Some(true);
             let command = shortcut_command(&self.paths, s, shell);

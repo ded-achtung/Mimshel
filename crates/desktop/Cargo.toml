@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 shell-core = { path = "../core" }
+shell-apps = { path = "../apps" }
 shell-render = { path = "../render" }
 shell-text = { path = "../text" }
 shell-widgets = { path = "../widgets" }
