@@ -2,7 +2,7 @@
 //! значок рисуется. Как на Mac — колонками от правого верхнего угла: сверху
 //! вниз, потом следующая колонка левее.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use shell_render::Canvas;
@@ -196,7 +196,8 @@ impl IconGrid {
             .map(|i| i.path.clone())
             .collect();
         self.items = items;
-        let names: Vec<String> = self.items.iter().map(file_name).collect();
+        let names: HashSet<String> = self.items.iter().map(file_name).collect();
+        let keep: HashSet<PathBuf> = keep.into_iter().collect();
         self.saved.retain(|name, _| names.contains(name));
         self.selected = (0..self.items.len())
             .filter(|&i| keep.contains(&self.items[i].path))
@@ -228,16 +229,13 @@ impl IconGrid {
     /// экране и не занята), остальные — в свободные клетки колонками справа.
     fn layout(&mut self) {
         let (rows, cols) = (self.rows(), self.columns());
-        let mut taken: Vec<Slot> = Vec::new();
+        let mut taken: HashSet<Slot> = HashSet::new();
         let mut places: Vec<Option<Slot>> = self
             .items
             .iter()
             .map(|item| {
                 let slot = *self.saved.get(&file_name(item))?;
-                (slot.0 < cols && slot.1 < rows && !taken.contains(&slot)).then(|| {
-                    taken.push(slot);
-                    slot
-                })
+                (slot.0 < cols && slot.1 < rows && taken.insert(slot)).then_some(slot)
             })
             .collect();
         let mut free = (0..u32::MAX)
