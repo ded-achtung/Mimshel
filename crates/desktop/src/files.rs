@@ -30,6 +30,8 @@ pub struct Item {
     pub kind: Kind,
     /// Имена значка в теме по порядку (первый найденный и берётся).
     pub icons: Vec<String>,
+    /// Размер файла в байтах (у папки — 0).
+    pub size: u64,
 }
 
 /// Типы файлов системы: расширение → тип и тип → общий значок.
@@ -127,13 +129,18 @@ impl MimeDb {
 /// Значки для папки `dir`: скрытые (с точки) не показываются; папки — первыми,
 /// дальше по имени без учёта регистра.
 pub fn scan(dir: &Path, mime: &MimeDb, locale: Option<&Locale>) -> Vec<Item> {
+    scan_with(dir, mime, locale, false)
+}
+
+/// То же; `hidden` — показывать и скрытые (окно папки, Ctrl+H).
+pub fn scan_with(dir: &Path, mime: &MimeDb, locale: Option<&Locale>, hidden: bool) -> Vec<Item> {
     let mut items: Vec<Item> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let file_name = e.file_name().to_string_lossy().into_owned();
-            if file_name.starts_with('.') {
+            if file_name.starts_with('.') && !hidden {
                 return None;
             }
             let path = e.path();
@@ -143,8 +150,10 @@ pub fn scan(dir: &Path, mime: &MimeDb, locale: Option<&Locale>) -> Vec<Item> {
                     name: file_name,
                     kind: Kind::Folder,
                     icons: vec!["folder".into()],
+                    size: 0,
                 });
             }
+            let size = std::fs::metadata(&path).map_or(0, |m| m.len());
             if file_name.ends_with(".desktop")
                 && let Ok(text) = std::fs::read_to_string(&path)
             {
@@ -159,6 +168,7 @@ pub fn scan(dir: &Path, mime: &MimeDb, locale: Option<&Locale>) -> Vec<Item> {
                     name,
                     kind: Kind::Launcher,
                     icons,
+                    size,
                 });
             }
             let icons = mime.icons(mime.mime(&file_name));
@@ -167,6 +177,7 @@ pub fn scan(dir: &Path, mime: &MimeDb, locale: Option<&Locale>) -> Vec<Item> {
                 name: file_name,
                 kind: Kind::File,
                 icons,
+                size,
             })
         })
         .collect();

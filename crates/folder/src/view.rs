@@ -1,9 +1,11 @@
 //! Окно папки без X: где что нарисовано, что под указателем, выделение,
-//! прокрутка, история «назад/вперёд», клавиши — и картинка окна целиком.
+//! прокрутка, история «назад/вперёд», строка пути и поиск, клавиши — и
+//! картинка окна целиком.
 //!
-//! Раскладка, как в Finder: сверху панель с кнопками ‹ › ↑ и названием
-//! папки, слева места, справа значки строками слева направо (папки — первыми),
-//! внизу строка состояния. Всё в точках; холст сам переводит в пиксели.
+//! Раскладка, как в Thunar: сверху кнопки ‹ › ↑ ⌂, строка с путём и кнопка
+//! поиска; слева «Места» и «Устройства»; справа значки строками слева
+//! направо (папки — первыми); внизу — сколько папок и файлов, их размер и
+//! свободное место. Всё в точках; холст сам переводит в пиксели.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -14,33 +16,36 @@ use shell_desktop::icon_grid::label_lines;
 use shell_icons::Icons;
 use shell_render::Canvas;
 use shell_text::{Fonts, Style};
+use shell_widgets::field::{Edit, TextField};
 use shell_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Transform};
 
-use crate::places::Place;
+use crate::places::{Place, Section};
 
 /// Размер окна при открытии и наименьший.
 pub const DEFAULT_SIZE: (u32, u32) = (900, 560);
-pub const MIN_SIZE: (u32, u32) = (520, 320);
+pub const MIN_SIZE: (u32, u32) = (560, 320);
 
 const TOOLBAR_H: f32 = 48.0;
-const SIDEBAR_W: f32 = 184.0;
+const SIDEBAR_W: f32 = 172.0;
 const STATUS_H: f32 = 26.0;
 /// Клетка значка (ширина растягивается, чтобы строка заполняла окно).
-const CELL_W: f32 = 104.0;
-const CELL_H: f32 = 100.0;
+const CELL_W: f32 = 132.0;
+const CELL_H: f32 = 112.0;
 /// Картинка значка файла.
-pub const ICON: u32 = 52;
-const PAD: f32 = 12.0;
-const ICON_TOP: f32 = 6.0;
-const LABEL_TOP: f32 = ICON_TOP + ICON as f32 + 5.0;
-/// Строка в боковой панели и где начинается список мест.
-const ROW_H: f32 = 28.0;
-const PLACES_TOP: f32 = TOOLBAR_H + 36.0;
-/// Кнопки ‹ › ↑ на панели.
+pub const ICON: u32 = 56;
+const PAD: f32 = 10.0;
+const ICON_TOP: f32 = 8.0;
+const LABEL_TOP: f32 = ICON_TOP + ICON as f32 + 6.0;
+/// Боковая панель: строка места и заголовок раздела.
+const ROW_H: f32 = 26.0;
+const HEADING_H: f32 = 26.0;
+const SIDE_TOP: f32 = TOOLBAR_H + 4.0;
+/// Кнопки ‹ › ↑ ⌂ и поиск на панели.
 const BUTTON: f32 = 28.0;
-const BUTTONS_X: f32 = 12.0;
+const BUTTONS_X: f32 = 8.0;
 const BUTTON_GAP: f32 = 4.0;
+const BUTTONS: usize = 4;
 const SIDE_ICON: u32 = 16;
 /// Колёсико мыши — на столько точек.
 const SCROLL_STEP: f32 = 56.0;
@@ -48,44 +53,49 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(450);
 const DRAG_START: f32 = 5.0;
 const TYPE_AGAIN: Duration = Duration::from_millis(1000);
 
-const BG: [u8; 4] = [0x1e, 0x1e, 0x1e, 0xff];
-const SIDEBAR_BG: [u8; 4] = [0x26, 0x26, 0x28, 0xff];
-const TOOLBAR_BG: [u8; 4] = [0x2c, 0x2c, 0x2e, 0xff];
-const LINE: [u8; 4] = [0x00, 0x00, 0x00, 0x80];
-const HOVER: [u8; 4] = [0xff, 0xff, 0xff, 0x14];
-const CURRENT: [u8; 4] = [0xff, 0xff, 0xff, 0x24];
-const ICON_SELECTED: [u8; 4] = [0xff, 0xff, 0xff, 0x22];
-const LABEL_SELECTED: [u8; 4] = [0x0a, 0x64, 0xd6, 0xff];
+// Цвета — как у Thunar с темой Colloid-Dark.
+const BG: [u8; 4] = [0x2c, 0x2c, 0x2c, 0xff];
+const TOOLBAR_BG: [u8; 4] = [0x24, 0x24, 0x24, 0xff];
+const FIELD_BG: [u8; 4] = [0x38, 0x38, 0x38, 0xff];
+const LINE: [u8; 4] = [0x00, 0x00, 0x00, 0x60];
+const HOVER: [u8; 4] = [0xff, 0xff, 0xff, 0x12];
+const CURRENT: [u8; 4] = [0xff, 0xff, 0xff, 0x1c];
+const SELECTED: [u8; 4] = [0x5b, 0x9b, 0xf8, 0xff];
+const TEXT_SELECTION: [u8; 4] = [0x5b, 0x9b, 0xf8, 0x90];
 const SCROLLBAR: [u8; 4] = [0xff, 0xff, 0xff, 0x50];
-const BAND_FILL: [u8; 4] = [0xff, 0xff, 0xff, 0x22];
-const BAND_EDGE: [u8; 4] = [0xff, 0xff, 0xff, 0x90];
-const SIDE_ICON_COLOR: [u8; 4] = [0x4c, 0x9b, 0xff, 0xff];
-const BUTTON_COLOR: [u8; 4] = [0xe0, 0xe0, 0xe0, 0xff];
-const BUTTON_OFF: [u8; 4] = [0xe0, 0xe0, 0xe0, 0x50];
+const BAND_FILL: [u8; 4] = [0x5b, 0x9b, 0xf8, 0x40];
+const BAND_EDGE: [u8; 4] = [0x5b, 0x9b, 0xf8, 0xff];
+const ICON_COLOR: [u8; 4] = [0xe8, 0xe8, 0xe8, 0xff];
+const ICON_OFF: [u8; 4] = [0xe8, 0xe8, 0xe8, 0x50];
+const CURSOR: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 
-const TITLE: Style = Style {
-    size: 15.0,
-    color: [0xff, 0xff, 0xff, 0xff],
-    weight: 700,
-};
 const LABEL: Style = Style {
-    size: 12.5,
-    color: [0xf0, 0xf0, 0xf0, 0xff],
+    size: 13.0,
+    color: [0xf2, 0xf2, 0xf2, 0xff],
     weight: 400,
 };
 const SIDE: Style = Style {
     size: 13.0,
-    color: [0xe8, 0xe8, 0xe8, 0xff],
+    color: [0xf2, 0xf2, 0xf2, 0xff],
     weight: 400,
 };
 const HEADING: Style = Style {
-    size: 11.0,
-    color: [0xff, 0xff, 0xff, 0x80],
+    size: 13.0,
+    color: [0xff, 0xff, 0xff, 0xff],
     weight: 700,
+};
+const PATH: Style = Style {
+    size: 13.0,
+    color: [0xf2, 0xf2, 0xf2, 0xff],
+    weight: 400,
+};
+const PLACEHOLDER: Style = Style {
+    color: [0xff, 0xff, 0xff, 0x70],
+    ..PATH
 };
 const STATUS: Style = Style {
     size: 12.0,
-    color: [0xff, 0xff, 0xff, 0xa0],
+    color: [0xff, 0xff, 0xff, 0xc0],
     weight: 400,
 };
 const EMPTY: Style = Style {
@@ -103,7 +113,13 @@ pub enum Hit {
     Back,
     Forward,
     Up,
+    Home,
+    /// Строка пути (щелчок — ввести путь).
+    PathField,
+    Search,
     Place(usize),
+    /// Кнопка ⏏ у подключённого диска.
+    Eject(usize),
     Item(usize),
     /// Пустое место среди значков.
     Empty,
@@ -144,9 +160,23 @@ pub enum Action {
     NewFolder,
     NewWindow,
     Close,
+    /// Извлечь подключённый диск.
+    Eject(PathBuf),
+    /// Показать или спрятать скрытые файлы (Ctrl+H) — прочитать папку заново.
+    ToggleHidden,
 }
 
-/// Нажатие кнопки мыши: на значке (`index`) или на пустом месте.
+/// Что вводят в строке вверху.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Input {
+    /// Путь к папке (Ctrl+L или щелчок по строке пути).
+    Path,
+    /// Поиск в папке (Ctrl+F или кнопка поиска): показываются только файлы,
+    /// в имени которых есть набранное.
+    Search,
+}
+
+/// Нажатие кнопки мыши на значке.
 struct Press {
     index: usize,
     at: (f32, f32),
@@ -155,10 +185,22 @@ struct Press {
     collapse: bool,
 }
 
+/// Строка боковой панели.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SideRow {
+    Heading(Section),
+    Place(usize),
+}
+
 pub struct FolderView {
     dir: PathBuf,
+    home: PathBuf,
+    /// Все файлы папки и те, что видны (с поиском — только подходящие).
+    all: Vec<Item>,
     items: Vec<Item>,
     places: Vec<Place>,
+    /// Особые папки (Документы, Загрузки…) — своими значками.
+    special: Vec<(PathBuf, &'static str)>,
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
     size: (f32, f32),
@@ -176,6 +218,12 @@ pub struct FolderView {
     renaming: Option<PathBuf>,
     /// Список папки прочитан (до того — не «Папка пуста»).
     loaded: bool,
+    /// Свободное место на диске папки, байт.
+    free: Option<u64>,
+    show_hidden: bool,
+    /// Строка вверху: что вводят и поле; текст поиска остаётся и после ввода.
+    input: Option<(Input, TextField)>,
+    search: String,
     last_click: Option<(usize, Instant)>,
     typed: String,
     typed_at: Instant,
@@ -188,8 +236,11 @@ impl FolderView {
     pub fn new(dir: PathBuf, places: Vec<Place>, (w, h): (u32, u32)) -> FolderView {
         FolderView {
             dir,
+            home: PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),
+            all: Vec::new(),
             items: Vec::new(),
             places,
+            special: Vec::new(),
             back: Vec::new(),
             forward: Vec::new(),
             size: (w as f32, h as f32),
@@ -202,6 +253,10 @@ impl FolderView {
             drop_target: None,
             renaming: None,
             loaded: false,
+            free: None,
+            show_hidden: false,
+            input: None,
+            search: String::new(),
             last_click: None,
             typed: String::new(),
             typed_at: Instant::now(),
@@ -213,12 +268,13 @@ impl FolderView {
         &self.dir
     }
 
-    /// Заголовок окна — имя папки (у корня — «/»).
+    /// Заголовок окна — имя папки и программа, как у Thunar.
     pub fn title(&self) -> String {
-        match self.dir.file_name() {
+        let name = match self.dir.file_name() {
             Some(n) => n.to_string_lossy().into_owned(),
             None => self.dir.display().to_string(),
-        }
+        };
+        format!("{name} - Проводник")
     }
 
     /// Список папки уже прочитан.
@@ -226,8 +282,28 @@ impl FolderView {
         self.loaded
     }
 
+    pub fn show_hidden(&self) -> bool {
+        self.show_hidden
+    }
+
     pub fn items(&self) -> &[Item] {
         &self.items
+    }
+
+    pub fn set_places(&mut self, places: Vec<Place>) -> bool {
+        if places == self.places {
+            return false;
+        }
+        self.places = places;
+        true
+    }
+
+    pub fn set_special(&mut self, special: Vec<(PathBuf, &'static str)>) {
+        self.special = special;
+    }
+
+    pub fn set_free(&mut self, free: Option<u64>) {
+        self.free = free;
     }
 
     pub fn selected_items(&self) -> Vec<Item> {
@@ -243,15 +319,17 @@ impl FolderView {
 
     /// Новый список файлов папки (сразу после перехода и после перемен).
     /// Выделение остаётся на тех же файлах.
-    pub fn set_items(&mut self, items: Vec<Item>) {
-        let keep = self.selected_paths();
-        self.items = items;
-        self.selected = (0..self.items.len())
-            .filter(|&i| keep.contains(&self.items[i].path))
-            .collect();
+    pub fn set_items(&mut self, mut items: Vec<Item>) {
+        for item in &mut items {
+            if let Some((_, icon)) = self.special.iter().find(|(p, _)| *p == item.path) {
+                item.icons.insert(0, (*icon).to_string());
+            }
+        }
+        self.all = items;
         self.loaded = true;
         self.drop_target = None;
         self.last_click = None;
+        self.apply_search();
         if let Some(path) = self.pending_select.take() {
             match self.items.iter().position(|i| i.path == path) {
                 Some(i) => {
@@ -261,6 +339,21 @@ impl FolderView {
                 None => self.pending_select = Some(path),
             }
         }
+    }
+
+    /// Видны файлы, в имени которых есть текст поиска (без учёта регистра).
+    fn apply_search(&mut self) {
+        let keep = self.selected_paths();
+        let needle = self.search.to_lowercase();
+        self.items = self
+            .all
+            .iter()
+            .filter(|i| needle.is_empty() || i.name.to_lowercase().contains(&needle))
+            .cloned()
+            .collect();
+        self.selected = (0..self.items.len())
+            .filter(|&i| keep.contains(&self.items[i].path))
+            .collect();
         self.scroll = self.scroll.min(self.max_scroll());
     }
 
@@ -327,8 +420,9 @@ impl FolderView {
         action
     }
 
-    /// Только что перешли: список ещё не прочитан.
+    /// Только что перешли: список ещё не прочитан, поиск сброшен.
     fn entered(&mut self) {
+        self.all.clear();
         self.items.clear();
         self.selected.clear();
         self.anchor = None;
@@ -338,6 +432,8 @@ impl FolderView {
         self.band = None;
         self.pending_select = None;
         self.hover = Hit::Nothing;
+        self.input = None;
+        self.search.clear();
     }
 
     // ---- Раскладка ----
@@ -394,9 +490,9 @@ impl FolderView {
         let (x, y, w, _) = self.cell(i);
         (
             x + 4.0,
-            y + ICON_TOP - 2.0,
+            y + ICON_TOP - 4.0,
             w - 8.0,
-            LABEL_TOP - ICON_TOP + 2.0 + 2.0 * LABEL.line_height(),
+            LABEL_TOP - ICON_TOP + 4.0 + 2.0 * LABEL.line_height() + 4.0,
         )
     }
 
@@ -420,17 +516,8 @@ impl FolderView {
         if i >= self.items.len() {
             return None;
         }
-        let (ix, iy, iw, ih) = self.cell(i);
-        let icon_x = ix + (iw - ICON as f32) / 2.0 - 4.0;
-        let on_icon = x >= icon_x
-            && x < icon_x + ICON as f32 + 8.0
-            && y >= iy + ICON_TOP - 2.0
-            && y < iy + LABEL_TOP;
-        let on_label = x >= ix + 4.0
-            && x < ix + iw - 4.0
-            && y >= iy + LABEL_TOP
-            && y < (iy + LABEL_TOP + 2.0 * LABEL.line_height()).min(iy + ih);
-        (on_icon || on_label).then_some(i)
+        let (ix, iy, iw, ih) = self.item_rect(i);
+        (x >= ix && x < ix + iw && y >= iy && y < iy + ih).then_some(i)
     }
 
     fn button_rect(n: usize) -> Rect {
@@ -442,23 +529,61 @@ impl FolderView {
         )
     }
 
-    fn place_rect(&self, n: usize) -> Rect {
-        (8.0, PLACES_TOP + n as f32 * ROW_H, SIDEBAR_W - 16.0, ROW_H)
+    /// Строка пути и кнопка поиска справа от неё.
+    fn field_rect(&self) -> Rect {
+        let (bx, by, bw, bh) = Self::button_rect(BUTTONS - 1);
+        let x = bx + bw + 8.0;
+        (x, by, (self.size.0 - x - BUTTON - 16.0).max(40.0), bh)
+    }
+
+    fn search_rect(&self) -> Rect {
+        let (_, y, _, h) = Self::button_rect(0);
+        (self.size.0 - BUTTON - 8.0, y, BUTTON, h)
+    }
+
+    /// Строки боковой панели и где каждая начинается.
+    fn side_rows(&self) -> Vec<(f32, SideRow)> {
+        let mut rows = Vec::new();
+        let mut y = SIDE_TOP;
+        let mut section = None;
+        for (n, place) in self.places.iter().enumerate() {
+            if section != Some(place.section) {
+                section = Some(place.section);
+                rows.push((y, SideRow::Heading(place.section)));
+                y += HEADING_H;
+            }
+            rows.push((y, SideRow::Place(n)));
+            y += ROW_H;
+        }
+        rows
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Hit {
         let inside = |(rx, ry, rw, rh): Rect| x >= rx && x < rx + rw && y >= ry && y < ry + rh;
         if y < TOOLBAR_H {
-            return [Hit::Back, Hit::Forward, Hit::Up]
-                .into_iter()
-                .enumerate()
-                .find(|&(n, _)| inside(Self::button_rect(n)))
-                .map_or(Hit::Nothing, |(_, h)| h);
+            let buttons = [Hit::Back, Hit::Forward, Hit::Up, Hit::Home];
+            if let Some(n) = (0..BUTTONS).find(|&n| inside(Self::button_rect(n))) {
+                return buttons[n];
+            }
+            if inside(self.field_rect()) {
+                return Hit::PathField;
+            }
+            if inside(self.search_rect()) {
+                return Hit::Search;
+            }
+            return Hit::Nothing;
         }
         if x < SIDEBAR_W {
-            return (0..self.places.len())
-                .find(|&n| inside(self.place_rect(n)))
-                .map_or(Hit::Nothing, Hit::Place);
+            for (ry, row) in self.side_rows() {
+                if let SideRow::Place(n) = row
+                    && y >= ry
+                    && y < ry + ROW_H
+                {
+                    let eject = self.places[n].removable && x >= SIDEBAR_W - 30.0;
+                    return if eject { Hit::Eject(n) } else { Hit::Place(n) };
+                }
+            }
+            return Hit::Nothing;
         }
         if !self.in_content(x, y) {
             return Hit::Nothing;
@@ -534,6 +659,77 @@ impl FolderView {
         }
     }
 
+    // ---- Строка пути и поиск ----
+
+    fn start_input(&mut self, kind: Input) -> Action {
+        let field = match kind {
+            Input::Path => {
+                let text = self.path_text();
+                let n = text.chars().count();
+                TextField::with_text(&text, n)
+            }
+            Input::Search => TextField::with_text(&self.search, 0),
+        };
+        self.input = Some((kind, field));
+        Action::Redraw
+    }
+
+    /// Путь папки, как в строке Thunar: с «/» на конце.
+    fn path_text(&self) -> String {
+        let s = self.dir.display().to_string();
+        if s.ends_with('/') { s } else { format!("{s}/") }
+    }
+
+    /// Клавиша, пока вводят путь или поиск.
+    fn input_key(&mut self, k: KeyPress) -> Action {
+        let Some((kind, field)) = &mut self.input else {
+            return Action::Nothing;
+        };
+        let kind = *kind;
+        match k.key {
+            Key::Escape => {
+                self.input = None;
+                if kind == Input::Search && !self.search.is_empty() {
+                    self.search.clear();
+                    self.apply_search();
+                }
+                Action::Redraw
+            }
+            Key::Return => {
+                let text = field.text().trim().to_string();
+                self.input = None;
+                if kind == Input::Search {
+                    return Action::Redraw;
+                }
+                let path = match text.strip_prefix('~') {
+                    Some(rest) => self.home.join(rest.trim_start_matches('/')),
+                    None => PathBuf::from(&text),
+                };
+                if path.is_dir() {
+                    let path = path.canonicalize().unwrap_or(path);
+                    match self.navigate(path) {
+                        Action::Nothing => Action::Redraw,
+                        a => a,
+                    }
+                } else {
+                    // Нет такой папки — поле остаётся, путь можно поправить.
+                    let n = text.chars().count();
+                    self.input = Some((kind, TextField::with_text(&text, n)));
+                    Action::Redraw
+                }
+            }
+            _ => match field.key(k) {
+                Edit::Changed if kind == Input::Search => {
+                    self.search = field.text().to_string();
+                    self.apply_search();
+                    Action::Redraw
+                }
+                Edit::Changed | Edit::Moved => Action::Redraw,
+                Edit::Ignored => Action::Nothing,
+            },
+        }
+    }
+
     // ---- Мышь ----
 
     /// Нажали кнопку мыши в точке окна (Ctrl, Shift — зажаты ли).
@@ -548,6 +744,10 @@ impl FolderView {
             _ => return Action::Nothing,
         }
         let hit = self.hit(x, y);
+        // Щелчок мимо строки ввода: путь — отменить, поиск — оставить.
+        if self.input.is_some() && hit != Hit::PathField {
+            self.input = None;
+        }
         if button == 3 {
             return match hit {
                 Hit::Item(i) => {
@@ -568,17 +768,44 @@ impl FolderView {
                         on_item: false,
                     }
                 }
-                _ => Action::Nothing,
+                _ => Action::Redraw,
             };
         }
         match hit {
             Hit::Back => self.go_back(),
             Hit::Forward => self.go_forward(),
             Hit::Up => self.go_up(),
+            Hit::Home => {
+                let home = self.home.clone();
+                self.navigate(home)
+            }
+            Hit::PathField => {
+                if self.input.is_none() {
+                    let kind = if self.search.is_empty() {
+                        Input::Path
+                    } else {
+                        Input::Search
+                    };
+                    self.start_input(kind)
+                } else {
+                    Action::Nothing
+                }
+            }
+            Hit::Search => {
+                if self.search.is_empty() && self.input.is_none() {
+                    self.start_input(Input::Search)
+                } else {
+                    self.input = None;
+                    self.search.clear();
+                    self.apply_search();
+                    Action::Redraw
+                }
+            }
             Hit::Place(n) => {
                 let path = self.places[n].path.clone();
                 self.navigate(path)
             }
+            Hit::Eject(n) => Action::Eject(self.places[n].path.clone()),
             Hit::Item(i) if ctrl => {
                 match self.selected.iter().position(|&s| s == i) {
                     Some(p) => {
@@ -626,7 +853,7 @@ impl FolderView {
                 self.band = Some(((x, y), (x, y)));
                 Action::Redraw
             }
-            Hit::Nothing => Action::Nothing,
+            Hit::Nothing => Action::Redraw,
         }
     }
 
@@ -656,9 +883,8 @@ impl FolderView {
             return Action::DragMove { x, y };
         }
         let hit = match self.hit(x, y) {
-            // Подсвечиваются только кнопки и места.
-            h @ (Hit::Back | Hit::Forward | Hit::Up | Hit::Place(_)) => h,
-            _ => Hit::Nothing,
+            Hit::Empty | Hit::PathField => Hit::Nothing,
+            h => h,
         };
         redraw_if(std::mem::replace(&mut self.hover, hit) != hit)
     }
@@ -699,6 +925,9 @@ impl FolderView {
     // ---- Клавиши ----
 
     pub fn key(&mut self, k: KeyPress) -> Action {
+        if self.input.is_some() {
+            return self.input_key(k);
+        }
         if k.ctrl {
             let Key::Char(c) = k.key else {
                 return Action::Nothing;
@@ -714,6 +943,12 @@ impl FolderView {
                 'n' if k.shift => Action::NewFolder,
                 'n' => Action::NewWindow,
                 'w' => Action::Close,
+                'h' => {
+                    self.show_hidden = !self.show_hidden;
+                    Action::ToggleHidden
+                }
+                'l' => self.start_input(Input::Path),
+                'f' => self.start_input(Input::Search),
                 _ => Action::Nothing,
             };
         }
@@ -723,6 +958,10 @@ impl FolderView {
                 Key::Right => self.go_forward(),
                 Key::Up => self.go_up(),
                 Key::Down => self.open_selected(),
+                Key::Home => {
+                    let home = self.home.clone();
+                    self.navigate(home)
+                }
                 _ => Action::Nothing,
             };
         }
@@ -755,12 +994,17 @@ impl FolderView {
                 _ => Action::Nothing,
             },
             Key::Delete if !self.selected.is_empty() => Action::Trash(self.selected_paths()),
+            Key::Escape if !self.search.is_empty() => {
+                self.search.clear();
+                self.apply_search();
+                Action::Redraw
+            }
             Key::Escape => {
                 self.select(None);
                 Action::Redraw
             }
             // Буквы — к файлу с таким началом имени, набор подряд продолжает
-            // слово (как в Finder).
+            // слово (как в Thunar и Finder).
             Key::Char(c) if !k.logo && !c.is_control() => {
                 let again = self.typed_at.elapsed() > TYPE_AGAIN;
                 if again {
@@ -792,13 +1036,52 @@ impl FolderView {
 
     // ---- Рисование ----
 
-    /// Строка состояния: сколько всего и сколько выделено.
+    /// Строка состояния, как у Thunar: «30 папок | 24 файла: 73,1 КиБ
+    /// (74 846 байт) | Свободно: 42,8 ГиБ»; с выделением — что выделено.
     fn status(&self) -> String {
-        let n = self.items.len();
-        match self.selected.len() {
-            0 => format!("{n} {}", objects(n)),
-            k => format!("Выбрано: {k} из {n}"),
-        }
+        let free = self
+            .free
+            .map(|f| format!("  |  Свободно: {}", human_size(f)));
+        let items = self.selected_items();
+        let line = match &items[..] {
+            [] => {
+                let folders = self.items.iter().filter(|i| i.kind == Kind::Folder).count();
+                let files: Vec<&Item> = self
+                    .items
+                    .iter()
+                    .filter(|i| i.kind != Kind::Folder)
+                    .collect();
+                let size: u64 = files.iter().map(|i| i.size).sum();
+                let mut parts = Vec::new();
+                if folders > 0 {
+                    parts.push(format!(
+                        "{folders} {}",
+                        plural(folders, ["папка", "папки", "папок"])
+                    ));
+                }
+                if !files.is_empty() || folders == 0 {
+                    let n = files.len();
+                    parts.push(format!(
+                        "{n} {}: {}",
+                        plural(n, ["файл", "файла", "файлов"]),
+                        size_with_bytes(size)
+                    ));
+                }
+                parts.join("  |  ")
+            }
+            [one] if one.kind == Kind::Folder => format!("«{}»  |  папка", one.name),
+            [one] => format!("«{}»  |  {}", one.name, size_with_bytes(one.size)),
+            many => {
+                let size: u64 = many.iter().map(|i| i.size).sum();
+                let n = many.len();
+                format!(
+                    "Выделено: {n} {}: {}",
+                    plural(n, ["объект", "объекта", "объектов"]),
+                    size_with_bytes(size)
+                )
+            }
+        };
+        line + free.as_deref().unwrap_or("")
     }
 
     /// Окно целиком.
@@ -818,17 +1101,16 @@ impl FolderView {
         self.draw_toolbar(&mut pm, fonts, icons);
         // Строка состояния.
         let (cx, _, cw, _) = self.content();
-        fill(&mut pm, (cx, hf - STATUS_H, cw, STATUS_H), TOOLBAR_BG);
+        fill(&mut pm, (cx, hf - STATUS_H, cw, STATUS_H), BG);
         fill(&mut pm, (cx, hf - STATUS_H, cw, 1.0), LINE);
         let text = self.status();
-        let tw = fonts.measure(&text, &STATUS);
         fonts.draw(
             &mut pm,
             &text,
             &STATUS,
-            (cx + (cw - tw) / 2.0).round(),
+            cx + 8.0,
             hf - STATUS_H + (STATUS_H - STATUS.line_height()) / 2.0,
-            None,
+            Some(cw - 16.0),
         );
         pm
     }
@@ -836,7 +1118,11 @@ impl FolderView {
     fn draw_items(&self, pm: &mut Canvas, fonts: &mut Fonts, icons: &mut Icons) {
         let (cx, cy, cw, ch) = self.content();
         if self.loaded && self.items.is_empty() {
-            let text = "Папка пуста";
+            let text = if self.search.is_empty() {
+                "Папка пуста"
+            } else {
+                "Ничего не найдено"
+            };
             let tw = fonts.measure(text, &EMPTY);
             fonts.draw(
                 pm,
@@ -875,20 +1161,24 @@ impl FolderView {
         let (x, y, cw, _) = self.cell(i);
         let (x, y) = (x - origin.0, y - origin.1);
         let selected = self.selected.contains(&i) || self.drop_target == Some(i);
-        let ix = x + (cw - ICON as f32) / 2.0;
+        let renaming = self.renaming.as_ref() == Some(&item.path);
+        let width = cw - 12.0;
+        let lines = if renaming {
+            Vec::new()
+        } else {
+            label_lines(fonts, &item.name, &LABEL, width)
+        };
+        let lh = LABEL.line_height();
+        // Выделен — синяя подложка под значком и подписью, как в Thunar;
+        // под указателем — светлая.
+        let box_h = LABEL_TOP - ICON_TOP + 8.0 + lines.len().max(1) as f32 * lh;
+        let back = (x + 4.0, y + ICON_TOP - 4.0, cw - 8.0, box_h);
         if selected {
-            fill_rounded(
-                pm,
-                (
-                    ix - 5.0,
-                    y + ICON_TOP - 5.0,
-                    ICON as f32 + 10.0,
-                    ICON as f32 + 10.0,
-                ),
-                6.0,
-                ICON_SELECTED,
-            );
+            fill_rounded(pm, back, 6.0, SELECTED);
+        } else if self.hover == Hit::Item(i) {
+            fill_rounded(pm, back, 6.0, HOVER);
         }
+        let ix = x + (cw - ICON as f32) / 2.0;
         if let Some(img) = item
             .icons
             .iter()
@@ -896,26 +1186,15 @@ impl FolderView {
         {
             draw_pixmap(pm, &img, ix, y + ICON_TOP, ICON as f32);
         }
-        if self.renaming.as_ref() == Some(&item.path) {
-            return;
-        }
-        let width = cw - 8.0;
-        let lh = LABEL.line_height();
-        for (n, line) in label_lines(fonts, &item.name, &LABEL, width)
-            .iter()
-            .enumerate()
-        {
+        for (n, line) in lines.iter().enumerate() {
             let tw = fonts.measure(line, &LABEL).min(width);
             let tx = (x + (cw - tw) / 2.0).round();
             let ty = y + LABEL_TOP + n as f32 * lh;
-            if selected {
-                fill_rounded(pm, (tx - 4.0, ty, tw + 8.0, lh), 4.0, LABEL_SELECTED);
-            }
             fonts.draw(pm, line, &LABEL, tx, ty, Some(width));
         }
     }
 
-    /// Картинка значка, который тащат (полупрозрачная, как в Finder).
+    /// Картинка значка, который тащат (полупрозрачная).
     pub fn drag_image(&self, fonts: &mut Fonts, icons: &mut Icons) -> Option<Canvas> {
         let i = self.dragged()?;
         let (cx, cy, cw, ch) = self.cell(i);
@@ -941,29 +1220,47 @@ impl FolderView {
 
     fn draw_sidebar(&self, pm: &mut Canvas, fonts: &mut Fonts, icons: &mut Icons) {
         let (_, hf) = self.size;
-        fill(pm, (0.0, TOOLBAR_H, SIDEBAR_W, hf - TOOLBAR_H), SIDEBAR_BG);
+        fill(pm, (0.0, TOOLBAR_H, SIDEBAR_W, hf - TOOLBAR_H), BG);
         fill(pm, (SIDEBAR_W - 1.0, TOOLBAR_H, 1.0, hf - TOOLBAR_H), LINE);
-        fonts.draw(pm, "Места", &HEADING, 18.0, TOOLBAR_H + 14.0, None);
-        for (n, place) in self.places.iter().enumerate() {
-            let (x, y, w, h) = self.place_rect(n);
-            if self.dir == place.path {
-                fill_rounded(pm, (x, y + 1.0, w, h - 2.0), 6.0, CURRENT);
-            } else if self.hover == Hit::Place(n) {
-                fill_rounded(pm, (x, y + 1.0, w, h - 2.0), 6.0, HOVER);
+        for (y, row) in self.side_rows() {
+            match row {
+                SideRow::Heading(section) => fonts.draw(
+                    pm,
+                    section.title(),
+                    &HEADING,
+                    10.0,
+                    y + (HEADING_H - HEADING.line_height()) / 2.0 + 2.0,
+                    None,
+                ),
+                SideRow::Place(n) => {
+                    let place = &self.places[n];
+                    let row = (0.0, y, SIDEBAR_W - 1.0, ROW_H);
+                    if self.dir == place.path {
+                        fill(pm, row, CURRENT);
+                    } else if matches!(self.hover, Hit::Place(h) | Hit::Eject(h) if h == n) {
+                        fill(pm, row, HOVER);
+                    }
+                    let s = SIDE_ICON as f32;
+                    if let Some(img) = icons.get(place.icon, SIDE_ICON) {
+                        draw_pixmap(pm, &tint(img, ICON_COLOR), 12.0, y + (ROW_H - s) / 2.0, s);
+                    }
+                    let right = if place.removable { 34.0 } else { 8.0 };
+                    fonts.draw(
+                        pm,
+                        &place.name,
+                        &SIDE,
+                        36.0,
+                        y + (ROW_H - SIDE.line_height()) / 2.0,
+                        Some(SIDEBAR_W - 36.0 - right),
+                    );
+                    if place.removable
+                        && let Some(img) = icons.get("media-eject-symbolic", SIDE_ICON)
+                    {
+                        let ex = SIDEBAR_W - 26.0;
+                        draw_pixmap(pm, &tint(img, ICON_COLOR), ex, y + (ROW_H - s) / 2.0, s);
+                    }
+                }
             }
-            if let Some(img) = icons.get(place.icon, SIDE_ICON) {
-                let img = tint(img, SIDE_ICON_COLOR);
-                let s = SIDE_ICON as f32;
-                draw_pixmap(pm, &img, x + 10.0, y + (h - s) / 2.0, s);
-            }
-            fonts.draw(
-                pm,
-                &place.name,
-                &SIDE,
-                x + 34.0,
-                y + (h - SIDE.line_height()) / 2.0,
-                Some(w - 40.0),
-            );
         }
     }
 
@@ -975,53 +1272,113 @@ impl FolderView {
             (Hit::Back, "go-previous-symbolic", !self.back.is_empty()),
             (Hit::Forward, "go-next-symbolic", !self.forward.is_empty()),
             (Hit::Up, "go-up-symbolic", self.dir.parent().is_some()),
+            (Hit::Home, "go-home-symbolic", true),
         ];
         for (n, (hit, icon, enabled)) in buttons.into_iter().enumerate() {
-            let (x, y, w, h) = Self::button_rect(n);
-            if enabled && self.hover == hit {
-                fill_rounded(pm, (x, y, w, h), 6.0, HOVER);
-            }
-            if let Some(img) = icons.get(icon, SIDE_ICON) {
-                let img = tint(img, if enabled { BUTTON_COLOR } else { BUTTON_OFF });
-                let s = SIDE_ICON as f32;
-                draw_pixmap(pm, &img, x + (w - s) / 2.0, y + (h - s) / 2.0, s);
-            }
+            self.draw_button(pm, icons, Self::button_rect(n), hit, icon, enabled);
         }
-        let (bx, _, bw, _) = Self::button_rect(2);
-        let tx = bx + bw + 16.0;
-        fonts.draw(
+        let search_on = !self.search.is_empty() || self.input.is_some_and_search();
+        self.draw_button(
             pm,
-            &self.title(),
-            &TITLE,
-            tx,
-            (TOOLBAR_H - TITLE.line_height()) / 2.0,
-            Some(wf - tx - 16.0),
+            icons,
+            self.search_rect(),
+            Hit::Search,
+            "system-search-symbolic",
+            true,
         );
+        if search_on {
+            let (x, y, w, h) = self.search_rect();
+            fill_rounded(pm, (x, y, w, h), 6.0, CURRENT);
+        }
+        // Строка пути (или поиска).
+        let (fx, fy, fw, fh) = self.field_rect();
+        fill_rounded(pm, (fx, fy, fw, fh), 6.0, FIELD_BG);
+        let searching = self
+            .input
+            .as_ref()
+            .is_some_and(|(k, _)| *k == Input::Search)
+            || (self.input.is_none() && !self.search.is_empty());
+        let icon = if searching {
+            "system-search-symbolic"
+        } else if self.dir == self.home {
+            "user-home-symbolic"
+        } else {
+            "folder-symbolic"
+        };
+        let s = SIDE_ICON as f32;
+        if let Some(img) = icons.get(icon, SIDE_ICON) {
+            draw_pixmap(pm, &tint(img, ICON_COLOR), fx + 8.0, fy + (fh - s) / 2.0, s);
+        }
+        let tx = fx + 30.0;
+        let ty = fy + (fh - PATH.line_height()) / 2.0;
+        let room = fw - 38.0;
+        match &self.input {
+            Some((_, field)) => draw_field(pm, fonts, field, tx, ty, room),
+            None if searching => {
+                fonts.draw(pm, &self.search, &PATH, tx, ty, Some(room));
+            }
+            None => fonts.draw(pm, &self.path_text(), &PATH, tx, ty, Some(room)),
+        }
+        if self.input.is_some()
+            && self
+                .input
+                .as_ref()
+                .is_some_and(|(k, f)| *k == Input::Search && f.is_empty())
+        {
+            fonts.draw(pm, "Поиск в папке", &PLACEHOLDER, tx + 2.0, ty, Some(room));
+        }
+    }
+
+    fn draw_button(
+        &self,
+        pm: &mut Canvas,
+        icons: &mut Icons,
+        (x, y, w, h): Rect,
+        hit: Hit,
+        icon: &str,
+        enabled: bool,
+    ) {
+        if enabled && self.hover == hit {
+            fill_rounded(pm, (x, y, w, h), 6.0, HOVER);
+        }
+        if let Some(img) = icons.get(icon, SIDE_ICON) {
+            let img = tint(img, if enabled { ICON_COLOR } else { ICON_OFF });
+            let s = SIDE_ICON as f32;
+            draw_pixmap(pm, &img, x + (w - s) / 2.0, y + (h - s) / 2.0, s);
+        }
     }
 }
 
-/// Загрузить значки окна заранее (места, кнопки, частые типы файлов).
-pub fn preload(icons: &mut Icons, places: &[Place]) {
-    for place in places {
-        icons.get(place.icon, SIDE_ICON);
+/// Идёт ли ввод поиска.
+trait SearchInput {
+    fn is_some_and_search(&self) -> bool;
+}
+
+impl SearchInput for Option<(Input, TextField)> {
+    fn is_some_and_search(&self) -> bool {
+        self.as_ref().is_some_and(|(k, _)| *k == Input::Search)
     }
-    for name in ["go-previous-symbolic", "go-next-symbolic", "go-up-symbolic"] {
-        icons.get(name, SIDE_ICON);
+}
+
+/// Поле ввода: текст, выделение и курсор. Длинный текст — виден конец у
+/// курсора.
+fn draw_field(pm: &mut Canvas, fonts: &mut Fonts, field: &TextField, x: f32, y: f32, room: f32) {
+    let text_w = fonts.measure(field.text(), &PATH);
+    let cursor_x = fonts.measure(field.before_cursor(), &PATH);
+    let shift = (cursor_x - room + 2.0).clamp(0.0, (text_w - room).max(0.0));
+    let x = x - shift;
+    let selection = field.selection();
+    if !selection.is_empty() {
+        let sw = fonts.measure(selection, &PATH);
+        fill(pm, (x, y, sw, PATH.line_height()), TEXT_SELECTION);
     }
-    for name in [
-        "folder",
-        "text-x-generic",
-        "image-x-generic",
-        "image-png",
-        "image-jpeg",
-        "application-pdf",
-        "application-x-executable",
-        "audio-x-generic",
-        "video-x-generic",
-        "package-x-generic",
-        "unknown",
-    ] {
-        icons.get(name, ICON);
+    fonts.draw(pm, field.text(), &PATH, x, y, None);
+    if selection.is_empty() {
+        fill(
+            pm,
+            (x + cursor_x, y + 1.0, 1.2, PATH.line_height() - 2.0),
+            CURSOR,
+        );
     }
 }
 
@@ -1033,13 +1390,47 @@ fn redraw_if(changed: bool) -> Action {
     }
 }
 
-/// «объект», «объекта», «объектов» — по числу.
-fn objects(n: usize) -> &'static str {
+/// Слово по числу: 1 папка, 3 папки, 5 папок.
+fn plural(n: usize, [one, few, many]: [&'static str; 3]) -> &'static str {
     match (n % 10, n % 100) {
-        (1, r) if r != 11 => "объект",
-        (2..=4, r) if !(12..=14).contains(&r) => "объекта",
-        _ => "объектов",
+        (1, r) if r != 11 => one,
+        (2..=4, r) if !(12..=14).contains(&r) => few,
+        _ => many,
     }
+}
+
+/// Размер словами, как у Thunar: «73,1 КиБ».
+fn human_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!(
+            "{bytes} {}",
+            plural(bytes as usize, ["байт", "байта", "байт"])
+        );
+    }
+    let units = ["КиБ", "МиБ", "ГиБ", "ТиБ"];
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < units.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", units[unit]).replace('.', ",")
+}
+
+/// «73,1 КиБ (74 846 байт)»; меньше килобайта — просто байты.
+fn size_with_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        return human_size(bytes);
+    }
+    let digits = bytes.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push('\u{a0}');
+        }
+        grouped.push(c);
+    }
+    format!("{} ({grouped} байт)", human_size(bytes))
 }
 
 /// Прямоугольник рамки между точкой начала и указателем.
@@ -1108,6 +1499,46 @@ fn tint(img: &Pixmap, [r, g, b, a]: [u8; 4]) -> Pixmap {
     out
 }
 
+/// Загрузить значки окна заранее (места, кнопки, частые типы файлов).
+pub fn preload(icons: &mut Icons, places: &[Place]) {
+    for place in places {
+        icons.get(place.icon, SIDE_ICON);
+    }
+    for name in [
+        "go-previous-symbolic",
+        "go-next-symbolic",
+        "go-up-symbolic",
+        "go-home-symbolic",
+        "system-search-symbolic",
+        "user-home-symbolic",
+        "folder-symbolic",
+        "media-eject-symbolic",
+    ] {
+        icons.get(name, SIDE_ICON);
+    }
+    for name in [
+        "folder",
+        "folder-documents",
+        "folder-download",
+        "folder-pictures",
+        "folder-music",
+        "folder-videos",
+        "folder-desktop",
+        "text-x-generic",
+        "image-x-generic",
+        "image-png",
+        "image-jpeg",
+        "application-pdf",
+        "application-x-executable",
+        "audio-x-generic",
+        "video-x-generic",
+        "package-x-generic",
+        "unknown",
+    ] {
+        icons.get(name, ICON);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1118,6 +1549,7 @@ mod tests {
             name: name.into(),
             kind,
             icons: vec![],
+            size: 1000,
         }
     }
 
@@ -1146,12 +1578,30 @@ mod tests {
         assert!(v.cell(cols).1 > y0, "следующая строка ниже");
         let (cx, cy) = center(&v, 3);
         assert_eq!(v.hit(cx, cy), Hit::Item(3));
-        assert_eq!(v.hit(x0 + 2.0, y0 + 2.0), Hit::Empty, "угол клетки — пусто");
+        assert_eq!(v.hit(x0 + 1.0, y0 + 1.0), Hit::Empty, "угол клетки — пусто");
         assert_eq!(v.hit(20.0, 20.0), Hit::Back);
-        assert_eq!(objects(1), "объект");
-        assert_eq!(objects(3), "объекта");
-        assert_eq!(objects(11), "объектов");
-        assert_eq!(objects(22), "объекта");
+        assert_eq!(v.hit(400.0, 24.0), Hit::PathField);
+        assert_eq!(v.hit(880.0, 24.0), Hit::Search);
+        assert_eq!(plural(1, ["папка", "папки", "папок"]), "папка");
+        assert_eq!(plural(3, ["папка", "папки", "папок"]), "папки");
+        assert_eq!(plural(11, ["папка", "папки", "папок"]), "папок");
+        assert_eq!(plural(22, ["файл", "файла", "файлов"]), "файла");
+    }
+
+    #[test]
+    fn status_like_thunar() {
+        let mut v = view(4);
+        v.set_free(Some(45_964_327_731));
+        assert_eq!(
+            v.status(),
+            "1 папка  |  3 файла: 2,9 КиБ (3\u{a0}000 байт)  |  Свободно: 42,8 ГиБ"
+        );
+        v.selected = vec![1];
+        assert!(v.status().starts_with("«файл1.txt»  |  1000 байт"));
+        v.selected = vec![1, 2];
+        assert!(v.status().starts_with("Выделено: 2 объекта: 2,0 КиБ"));
+        assert_eq!(human_size(500), "500 байт");
+        assert_eq!(human_size(74_846), "73,1 КиБ");
     }
 
     #[test]
@@ -1173,16 +1623,60 @@ mod tests {
         assert_eq!(v.press(x, y, 1, false, false), Action::Load);
         assert_eq!(v.dir(), Path::new("/дом/Папка"));
         assert!(v.items().is_empty());
+        assert_eq!(v.title(), "Папка - Проводник");
         let k = KeyPress {
             alt: true,
             ..KeyPress::plain(Key::Left)
         };
         assert_eq!(v.key(k), Action::Load);
         assert_eq!(v.dir(), Path::new("/дом"));
-        v.set_items(view(5).items);
+        v.set_items(view(5).all);
         assert_eq!(v.selected, [0], "выделена папка, из которой вышли");
         assert_eq!(v.key(KeyPress::plain(Key::Right)), Action::Redraw);
         assert_eq!(v.selected, [1]);
+    }
+
+    #[test]
+    fn path_and_search_input() {
+        let dir = std::env::temp_dir().join(format!("shell-folder-view-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Внутри")).unwrap();
+        let mut v = view(12);
+        // Поиск: Ctrl+F, набор — видны только подходящие; Esc — все снова.
+        let ctrl = |c| KeyPress {
+            ctrl: true,
+            ..KeyPress::plain(Key::Char(c))
+        };
+        assert_eq!(v.key(ctrl('f')), Action::Redraw);
+        for c in "файл1".chars() {
+            v.key(KeyPress::plain(Key::Char(c)));
+        }
+        let names: Vec<&str> = v.items().iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["файл1.txt", "файл10.txt", "файл11.txt"]);
+        assert_eq!(v.key(KeyPress::plain(Key::Escape)), Action::Redraw);
+        assert_eq!(v.items().len(), 12);
+        // Путь: Ctrl+L, набрать папку, Enter — переход.
+        assert_eq!(v.key(ctrl('l')), Action::Redraw);
+        for c in dir.join("Внутри").display().to_string().chars() {
+            v.key(KeyPress::plain(Key::Char(c)));
+        }
+        assert_eq!(v.key(KeyPress::plain(Key::Return)), Action::Load);
+        assert_eq!(v.dir(), dir.join("Внутри").canonicalize().unwrap());
+        // Нет такой папки — поле остаётся.
+        v.key(ctrl('l'));
+        for c in "/нет/такой".chars() {
+            v.key(KeyPress::plain(Key::Char(c)));
+        }
+        assert_eq!(v.key(KeyPress::plain(Key::Return)), Action::Redraw);
+        assert!(v.input.is_some());
+        assert_eq!(
+            v.key(ctrl('h')),
+            Action::Nothing,
+            "пока вводят — не клавиша окна"
+        );
+        v.key(KeyPress::plain(Key::Escape));
+        assert_eq!(v.key(ctrl('h')), Action::ToggleHidden);
+        assert!(v.show_hidden());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1196,7 +1690,7 @@ mod tests {
         assert_eq!(v.selected, [1, 2, 3], "Shift — от первого до этого");
         v.press(x1, y1, 1, true, false);
         assert_eq!(v.selected, [2, 3], "Ctrl — убрать");
-        // Рамка с пустого места.
+        // Рамка с пустого места (между строками).
         let (cx, cy, _, _) = v.cell(0);
         v.press(cx + 1.0, cy + 1.0, 1, false, false);
         assert!(v.selected.is_empty());
@@ -1247,6 +1741,38 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_sections_and_special_icons() {
+        let place = |name: &str, section, removable| Place {
+            name: name.into(),
+            path: PathBuf::from(format!("/{name}")),
+            icon: "folder-symbolic",
+            section,
+            removable,
+        };
+        let mut v = FolderView::new(
+            PathBuf::from("/дом"),
+            vec![
+                place("дом", Section::Places, false),
+                place("Корзина", Section::Places, false),
+                place("Флешка", Section::Devices, true),
+            ],
+            (900, 560),
+        );
+        let rows = v.side_rows();
+        assert_eq!(rows.len(), 5, "два заголовка и три места");
+        let (fy, _) = rows[4];
+        assert_eq!(v.hit(40.0, fy + 5.0), Hit::Place(2));
+        assert_eq!(v.hit(SIDEBAR_W - 10.0, fy + 5.0), Hit::Eject(2));
+        assert_eq!(
+            v.press(SIDEBAR_W - 10.0, fy + 5.0, 1, false, false),
+            Action::Eject(PathBuf::from("/Флешка"))
+        );
+        v.set_special(vec![(PathBuf::from("/дом/Папка"), "folder-documents")]);
+        v.set_items(view(2).all);
+        assert_eq!(v.items()[0].icons[0], "folder-documents");
+    }
+
+    #[test]
     fn renders() {
         let mut fonts = Fonts::new("Inter");
         let mut icons = Icons::with_dirs("none", vec![], vec![]);
@@ -1254,10 +1780,10 @@ mod tests {
         v.selected = vec![1];
         let pm = v.render(&mut fonts, &mut icons);
         assert_eq!((pm.width(), pm.height()), (900, 560));
-        // Под выделенной подписью — синяя подложка.
-        let (lx, ly, lw, _) = v.label_rect(1);
+        // Выделенный значок — на синей подложке.
+        let (x, y, _, _) = v.cell(1);
         let p = pm
-            .pixel((lx + lw / 2.0) as u32 - 10, ly as u32 + 3)
+            .pixel(x as u32 + 8, y as u32 + ICON_TOP as u32)
             .expect("внутри");
         assert!(p.blue() > p.red() + 60, "{p:?}");
     }
