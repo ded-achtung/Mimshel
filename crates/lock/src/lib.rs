@@ -95,7 +95,7 @@ pub fn draw(l: &Layout, scene: Scene, fonts: &mut Fonts) -> Option<Pixmap> {
         weight: 600,
     };
     let nw = fonts.measure(scene.user, &name);
-    fonts.draw(
+    fonts.draw_pixels(
         &mut pm,
         scene.user,
         &name,
@@ -126,7 +126,7 @@ pub fn frame(l: &Layout, bg: &Pixmap, f: &Frame, fonts: &mut Fonts) -> Option<Pi
     };
     let mut center = |fonts: &mut Fonts, text: &str, style: &Style, baseline: i64| {
         let w = fonts.measure(text, style);
-        fonts.draw(
+        fonts.draw_pixels(
             &mut pm,
             text,
             style,
@@ -148,7 +148,7 @@ pub fn frame(l: &Layout, bg: &Pixmap, f: &Frame, fonts: &mut Fonts) -> Option<Pi
     let left = px + (14.0 * s).round();
     if f.typed == 0 {
         if f.phase == Phase::Idle {
-            fonts.draw(&mut pm, f.placeholder, &hint, left, middle, None);
+            fonts.draw_pixels(&mut pm, f.placeholder, &hint, left, middle, None);
         }
     } else {
         // Точки ● вместо пароля; в поле помещается столько, сколько влезает
@@ -163,7 +163,7 @@ pub fn frame(l: &Layout, bg: &Pixmap, f: &Frame, fonts: &mut Fonts) -> Option<Pi
         while n > 1 && fonts.measure(&"●".repeat(n), &dots) > room {
             n -= 1;
         }
-        fonts.draw(&mut pm, &"●".repeat(n), &dots, left, middle, None);
+        fonts.draw_pixels(&mut pm, &"●".repeat(n), &dots, left, middle, None);
     }
 
     // Кольцо справа в поле — как кнопка-стрелка на Mac: белое в покое,
@@ -195,7 +195,7 @@ pub fn frame(l: &Layout, bg: &Pixmap, f: &Frame, fonts: &mut Fonts) -> Option<Pi
         };
         let text = "Неверный пароль";
         let w = fonts.measure(text, &wrong);
-        fonts.draw(
+        fonts.draw_pixels(
             &mut pm,
             text,
             &wrong,
@@ -265,7 +265,7 @@ fn draw_avatar(
                 weight: 600,
             };
             let lw = fonts.measure(&letter, &style);
-            fonts.draw(
+            fonts.draw_pixels(
                 pm,
                 &letter,
                 &style,

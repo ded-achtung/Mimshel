@@ -33,6 +33,9 @@ pub struct Config {
     pub gtk_theme: String,
     pub cursor_theme: String,
     pub wallpaper: String,
+    /// Масштаб для крупных экранов (HiDPI): сколько пикселей в точке.
+    /// `None` — «auto»: по DPI системы (Xfce: Внешний вид → Шрифты → DPI).
+    pub scale: Option<f32>,
     /// Команда терминала для программ с `Terminal=true`; программа идёт после неё.
     pub terminal: Vec<String>,
     /// Сетка Launchpad: столбцы, строки и размер иконки.
@@ -89,6 +92,7 @@ impl Default for Config {
             gtk_theme: "Colloid-Dark".into(),
             cursor_theme: "Colloid-cursors".into(),
             wallpaper: "space".into(),
+            scale: None,
             terminal: vec!["xfce4-terminal".into(), "-x".into()],
             launchpad_columns: 7,
             launchpad_rows: 4,
@@ -364,6 +368,12 @@ impl Config {
         if let Some(v) = text("look", "icon_theme") {
             c.icon_theme = v;
         }
+        if let Some(v) = get("look", "scale")
+            .and_then(|i| i.as_value())
+            .and_then(scale_value)
+        {
+            c.scale = v;
+        }
         if let Some(v) = list("apps", "terminal").filter(|v| !v.is_empty()) {
             c.terminal = v;
         }
@@ -482,6 +492,9 @@ icon_theme = {theme}
 gtk_theme = {gtk_theme}
 cursor_theme = {cursor_theme}
 wallpaper = {wallpaper}
+# Масштаб для крупных экранов: \"auto\" — по DPI системы, или число от 1 до 3
+# (1.5 — всё в полтора раза крупнее). Меняется командой shell set look.scale 1.5
+scale = {scale}
 
 [menubar]
 # Высота в точках, значок главного меню (shell-logo — наша планета; имя в теме или путь к файлу),
@@ -527,6 +540,9 @@ rename = {rename}
             gtk_theme = s(&self.gtk_theme),
             cursor_theme = s(&self.cursor_theme),
             wallpaper = s(&self.wallpaper),
+            scale = self
+                .scale
+                .map_or_else(|| s("auto"), |k| Value::from(f64::from(k)).to_string()),
             height = self.menubar_height,
             menu_icon = s(&self.menu_icon),
             clock = s(&self.clock_format),
@@ -549,6 +565,16 @@ rename = {rename}
             p_launchpad = part("launchpad"),
         )
     }
+}
+
+/// Масштаб из файла: `"auto"` — `Some(None)`, число от 1 до 3 — `Some(Some(k))`,
+/// иначе `None` (ошибка).
+fn scale_value(v: &Value) -> Option<Option<f32>> {
+    if v.as_str() == Some("auto") {
+        return Some(None);
+    }
+    let k = v.as_float().or_else(|| v.as_integer().map(|n| n as f64))?;
+    (1.0..=3.0).contains(&k).then_some(Some(k as f32))
 }
 
 /// Инлайн-таблица `rename` для текста настроек: { ярлык = "Имя", … }.
@@ -660,6 +686,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "look.wallpaper",
         "обои: space, waves, aurora или путь к картинке",
     ),
+    (
+        "look.scale",
+        "масштаб для крупных экранов: auto (по DPI) или от 1 до 3, например 1.5",
+    ),
     ("menubar.height", "высота строки меню, 16–128"),
     (
         "menubar.menu_icon",
@@ -734,6 +764,13 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 Ok(Value::from(input))
             }
         }
+        "look.scale" => match input.replace(',', ".").as_str() {
+            "auto" => Ok(Value::from("auto")),
+            v => match v.parse::<f64>() {
+                Ok(k) if (1.0..=3.0).contains(&k) => Ok(Value::from((k * 100.0).round() / 100.0)),
+                _ => Err("нужно auto или число от 1 до 3, например 1.5".into()),
+            },
+        },
         "dock.zoom" if input == "false" || input == "no" => Ok(Value::from(false)),
         "dock.hide" => words(&["never", "smart", "auto", "maximized"]),
         "dock.apps" => Ok(Value::Array(
@@ -809,6 +846,8 @@ pub fn toml_error(text: &str) -> Option<String> {
                             .and_then(Value::as_str)
                             .is_some_and(|s| !s.trim().is_empty()))
                 })
+            } else if key == "look.scale" {
+                item.as_value().and_then(scale_value).is_some()
             } else if key == "apps.rename" {
                 item.as_inline_table().is_some_and(|t| {
                     t.iter().all(|(app, name)| {
@@ -852,6 +891,36 @@ pub fn parse_ini(text: &str) -> HashMap<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scale_auto_or_number() {
+        assert_eq!(Config::default().scale, None);
+        assert!(Config::default().to_toml().contains("scale = \"auto\""));
+        for (text, want) in [
+            ("[look]\nscale = \"auto\"", None),
+            ("[look]\nscale = 1.5", Some(1.5)),
+            ("[look]\nscale = 2", Some(2.0)),
+        ] {
+            assert!(toml_error(text).is_none(), "{text}");
+            assert_eq!(Config::from_toml(text).scale, want, "{text}");
+        }
+        for text in [
+            "[look]\nscale = 5",
+            "[look]\nscale = \"big\"",
+            "[look]\nscale = 0.5",
+        ] {
+            assert!(toml_error(text).is_some(), "{text}");
+        }
+        assert_eq!(
+            setting_value("look.scale", "1,5").unwrap().as_float(),
+            Some(1.5)
+        );
+        assert_eq!(
+            setting_value("look.scale", "auto").unwrap().as_str(),
+            Some("auto")
+        );
+        assert!(setting_value("look.scale", "4").is_err());
+    }
 
     #[test]
     fn validates_types_ranges_and_unknown_keys() {

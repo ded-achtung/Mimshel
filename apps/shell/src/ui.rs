@@ -18,6 +18,7 @@ use shell_apps::{App, Settings, Watcher};
 use shell_core::config::Config;
 use shell_icons::Icons;
 use shell_launcher::{Action, Grid, Launchpad, Spotlight, backdrop};
+use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_x11::{Display, Event, Key, KeyPress, Popup};
 
@@ -162,6 +163,21 @@ pub fn app_settings(config: &Config) -> Settings {
     }
 }
 
+/// Масштаб для крупных экранов — до создания окон: из настроек, при «auto» —
+/// по DPI системы. `SHELL_SCALE` — задать для проверки, не трогая настройки.
+fn set_scale(config: &Config) {
+    let forced = std::env::var("SHELL_SCALE")
+        .ok()
+        .and_then(|v| v.replace(',', ".").parse::<f32>().ok());
+    let k = forced
+        .or(config.scale)
+        .unwrap_or_else(|| shell_x11::xft_dpi().map_or(1.0, shell_x11::scale_for_dpi));
+    shell_render::set_scale(k);
+    if shell_render::scale() != 1.0 {
+        eprintln!("Масштаб: {}", shell_render::scale());
+    }
+}
+
 /// Запускает окна. `once` — открыть это окно один раз и выйти после закрытия;
 /// `None` — работать службой и ждать команд.
 pub fn run(once: Option<Panel>) -> Result<()> {
@@ -177,6 +193,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     };
     let daemon = once.is_none();
     let config = load_config();
+    set_scale(&config);
     step("настройки");
     // Шрифты читаются с диска долго (после загрузки — секунды): пусть грузятся
     // заодно со списком программ и значками.
@@ -331,7 +348,7 @@ struct Ui<'a> {
     /// Размытый снимок стола под Launchpad — делается при каждом открытии.
     background: Option<Pixmap>,
     /// Последняя нарисованная картинка — чтобы быстро повторить её по Expose.
-    frame: Option<Pixmap>,
+    frame: Option<Canvas>,
     shown: Option<Panel>,
     terminal: Vec<String>,
     dock: Option<DockUi>,
@@ -395,11 +412,14 @@ impl Ui<'_> {
             }
         };
         let shot_time = start.elapsed();
-        let background = backdrop(shot.as_ref(), self.launchpad.size());
+        // Фон — в пикселях экрана, всё остальное Launchpad считает в точках.
+        let (pw, ph) = self.display.screen_pixels();
+        let background = backdrop(shot.as_ref(), (u32::from(pw), u32::from(ph)));
         let blur_time = start.elapsed();
+        let scale = self.display.scale();
         let frame = self
             .launchpad
-            .render(&background, &mut self.fonts, &mut self.icons);
+            .render(&background, scale, &mut self.fonts, &mut self.icons);
         let render_time = start.elapsed();
         self.pad_popup.show(self.display, 0, 0, w, h)?;
         self.pad_popup.present(self.display, &frame)?;
@@ -453,9 +473,10 @@ impl Ui<'_> {
                 let Some(background) = &self.background else {
                     return Ok(());
                 };
-                let frame = self
-                    .launchpad
-                    .render(background, &mut self.fonts, &mut self.icons);
+                let scale = self.display.scale();
+                let frame =
+                    self.launchpad
+                        .render(background, scale, &mut self.fonts, &mut self.icons);
                 self.pad_popup.present(self.display, &frame)?;
                 self.frame = Some(frame);
             }
@@ -712,6 +733,7 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
 /// экран, берёт его размер и снимок для фона; иначе — 1920×1080, ровный фон.
 pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let config = load_config();
+    set_scale(&config);
     let start = Instant::now();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
@@ -738,8 +760,10 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
             keys.for_each(|k| {
                 l.key(k);
             });
-            let background = backdrop(shot.as_ref(), size);
-            l.render(&background, &mut fonts, &mut icons)
+            let k = shell_render::scale();
+            let px = |v| shell_render::to_px(v, k);
+            let background = backdrop(shot.as_ref(), (px(size.0), px(size.1)));
+            l.render(&background, k, &mut fonts, &mut icons)
         }
     };
     eprintln!("Рисование: {:?}", start.elapsed());

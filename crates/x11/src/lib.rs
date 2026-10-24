@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 pub use shell_core::input::{Key, KeyPress};
+use shell_render::Image;
 use tiny_skia::Pixmap;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event as XEvent;
@@ -44,6 +45,41 @@ impl ServerWatch {
     pub fn wait_closed(self) {
         while self.0.wait_for_event().is_ok() {}
     }
+}
+
+/// DPI из ресурсов X (`Xft.dpi`; его ставит xfsettingsd по настройке Xfce
+/// «Внешний вид → Шрифты → DPI»). `None` — не задан или нет связи с X.
+pub fn xft_dpi() -> Option<f32> {
+    let (conn, screen) = RustConnection::connect(None).ok()?;
+    let root = conn.setup().roots.get(screen)?.root;
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            AtomEnum::RESOURCE_MANAGER,
+            AtomEnum::STRING,
+            0,
+            1 << 20,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
+    parse_dpi(&String::from_utf8_lossy(&reply.value))
+}
+
+fn parse_dpi(resources: &str) -> Option<f32> {
+    resources.lines().find_map(|l| {
+        let (name, value) = l.split_once(':')?;
+        (name.trim() == "Xft.dpi")
+            .then(|| value.trim().parse::<f32>().ok())
+            .flatten()
+            .filter(|d| *d > 0.0)
+    })
+}
+
+/// Масштаб по DPI: 96 — 1, 144 — 1,5, 192 — 2 (с шагом 0,25).
+pub fn scale_for_dpi(dpi: f32) -> f32 {
+    ((dpi / 96.0) * 4.0).round().clamp(4.0, 12.0) / 4.0
 }
 
 x11rb::atom_manager! {
@@ -159,6 +195,9 @@ pub struct Display {
     keymap: Mutex<Keymap>,
     /// Общая память для больших картинок (см. [`shm`]).
     shm: shm::Shm,
+    /// Масштаб (`shell_render::scale` при подключении): размеры окон и
+    /// координаты мыши снаружи — в точках, серверу — в пикселях.
+    scale: f32,
 }
 
 impl Display {
@@ -195,17 +234,62 @@ impl Display {
             colormap,
             keymap,
             shm,
+            scale: shell_render::scale(),
         })
+    }
+
+    /// Масштаб: сколько пикселей экрана в одной точке.
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// Размер экрана в точках (с округлением вверх — окна во весь экран его
+    /// закрывают целиком).
+    pub fn screen_size(&self) -> (u16, u16) {
+        let (w, h) = self.screen_pixels();
+        let pt = |v: u16| (f32::from(v) / self.scale).ceil() as u16;
+        (pt(w), pt(h))
     }
 
     /// Размер экрана в пикселях. Спрашиваем каждый раз: в ВМ он меняется вместе
     /// с окном VirtualBox. Если сервер не ответил — размер при подключении.
-    pub fn screen_size(&self) -> (u16, u16) {
+    pub fn screen_pixels(&self) -> (u16, u16) {
         self.conn
             .get_geometry(self.root)
             .ok()
             .and_then(|c| c.reply().ok())
             .map_or(self.screen_size, |g| (g.width, g.height))
+    }
+
+    /// Длина в точках → в пикселях (как у холста `shell_render::Canvas`).
+    pub fn px(&self, v: u32) -> u32 {
+        shell_render::to_px(v, self.scale)
+    }
+
+    /// Координата в пикселях → в точках.
+    pub(crate) fn pt(&self, v: i16) -> i16 {
+        (f32::from(v) / self.scale).floor() as i16
+    }
+
+    /// Прямоугольник окна в точках → в пикселях: угол округляется, размер —
+    /// как у холста той же ширины (картинка ляжет ровно). Край, вышедший за
+    /// экран на долю точки (экран в точках округлён вверх), прижат к экрану.
+    pub(crate) fn rect_px(&self, x: i32, y: i32, w: u32, h: u32) -> (i32, i32, u32, u32) {
+        if self.scale == 1.0 {
+            return (x, y, w, h);
+        }
+        let at = |v: i32| (v as f32 * self.scale).round() as i32;
+        let (x, y, mut w, mut h) = (at(x), at(y), self.px(w), self.px(h));
+        let (sw, sh) = self.screen_pixels();
+        let snap = |pos: i32, len: &mut u32, screen: u16| {
+            let over = pos + *len as i32 - i32::from(screen);
+            if over > 0 && over <= self.scale.ceil() as i32 + 1 {
+                *len -= over as u32;
+            }
+        };
+        snap(x, &mut w, sw);
+        snap(y, &mut h, sh);
+        (x, y, w.max(1), h.max(1))
     }
 
     /// Создаёт скрытое всплывающее окно (без рамки, поверх остальных).
@@ -353,25 +437,25 @@ impl Display {
             }
             XEvent::ButtonPress(e) => Event::Button {
                 window: e.event,
-                x: e.event_x,
-                y: e.event_y,
+                x: self.pt(e.event_x),
+                y: self.pt(e.event_y),
                 button: e.detail,
             },
             XEvent::ButtonRelease(e) => Event::Release {
                 window: e.event,
-                x: e.event_x,
-                y: e.event_y,
+                x: self.pt(e.event_x),
+                y: self.pt(e.event_y),
                 button: e.detail,
             },
             XEvent::MotionNotify(e) => Event::Motion {
                 window: e.event,
-                x: e.event_x,
-                y: e.event_y,
+                x: self.pt(e.event_x),
+                y: self.pt(e.event_y),
             },
             XEvent::EnterNotify(e) => Event::Enter {
                 window: e.event,
-                x: e.event_x,
-                y: e.event_y,
+                x: self.pt(e.event_x),
+                y: self.pt(e.event_y),
             },
             XEvent::LeaveNotify(e) => Event::Leave { window: e.event },
             XEvent::Expose(e) if e.count == 0 => Event::Expose { window: e.window },
@@ -595,21 +679,19 @@ impl Popup {
         Ok(())
     }
 
+    /// Место и размер окна — в точках.
     pub fn set_geometry(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        let (x, y, w, h) = d.rect_px(x.into(), y.into(), w.into(), h.into());
         d.conn.configure_window(
             self.window,
-            &ConfigureWindowAux::new()
-                .x(i32::from(x))
-                .y(i32::from(y))
-                .width(u32::from(w))
-                .height(u32::from(h)),
+            &ConfigureWindowAux::new().x(x).y(y).width(w).height(h),
         )?;
         Ok(())
     }
 
-    /// Выводит картинку в окно (левый верхний угол к углу).
-    pub fn present(&self, d: &Display, pixmap: &Pixmap) -> Result<()> {
-        put_pixmap(d, self.window, self.gc, pixmap)
+    /// Выводит картинку (или холст) в окно (левый верхний угол к углу).
+    pub fn present(&self, d: &Display, pixmap: &impl Image) -> Result<()> {
+        put_pixmap(d, self.window, self.gc, pixmap.image())
     }
 
     pub fn id(&self) -> u32 {
@@ -811,5 +893,23 @@ mod tests {
         assert_eq!(k.key(9, SHIFT), Key::Char('!'));
         assert_eq!(k.key(10, RU), Key::Return);
         assert_eq!(k.key(200, 0), Key::Other);
+    }
+}
+
+#[cfg(test)]
+mod dpi_tests {
+    use super::*;
+
+    #[test]
+    fn dpi_from_resources_and_scale() {
+        let r = "Xft.antialias:\t1\nXft.dpi:\t144\nXft.hinting:\t1\n";
+        assert_eq!(parse_dpi(r), Some(144.0));
+        assert_eq!(parse_dpi("Xft.antialias:\t1\n"), None);
+        assert_eq!(scale_for_dpi(96.0), 1.0);
+        assert_eq!(scale_for_dpi(144.0), 1.5);
+        assert_eq!(scale_for_dpi(120.0), 1.25);
+        assert_eq!(scale_for_dpi(110.0), 1.25);
+        assert_eq!(scale_for_dpi(72.0), 1.0);
+        assert_eq!(scale_for_dpi(192.0), 2.0);
     }
 }

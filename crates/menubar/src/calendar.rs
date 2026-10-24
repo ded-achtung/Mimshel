@@ -4,9 +4,10 @@
 //! только счёт дней, мышь и рисование.
 
 use shell_core::input::Key;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use shell_widgets::shape::{circle, paint, rounded};
-use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Stroke, Transform};
 
 /// День: год, месяц (1–12), число.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,12 +275,12 @@ impl CalendarPanel {
         }
     }
 
-    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts) -> Canvas {
         let (w, h) = self.size();
         let (wf, hf) = (w as f32, h as f32);
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
         let id = Transform::identity();
-        let fill = |pm: &mut Pixmap, path: Option<tiny_skia::Path>, c: [u8; 4]| {
+        let fill = |pm: &mut Canvas, path: Option<tiny_skia::Path>, c: [u8; 4]| {
             if let Some(p) = path {
                 pm.fill_path(&p, &paint(c), FillRule::Winding, id, None);
             }

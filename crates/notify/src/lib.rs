@@ -3,6 +3,7 @@
 //! текста и кнопки действий; крестик при наведении. Здесь — что показывать,
 //! когда убрать, раскладка и рисование в картинку; окно и время — у службы.
 
+use shell_render::Canvas;
 use std::time::{Duration, Instant};
 
 pub use shell_dbus::notify::{CloseReason, Notification};
@@ -301,9 +302,9 @@ impl Banners {
         Some(Hit::Body(id))
     }
 
-    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts) -> Canvas {
         let (w, h) = self.size(fonts);
-        let mut pm = Pixmap::new(w.max(1), h.max(1)).expect("размер не нулевой");
+        let mut pm = Canvas::new(w.max(1), h.max(1)).expect("размер не нулевой");
         let layout = self.layout(fonts);
         for (i, (b, &(top, bh))) in self.items.iter().zip(&layout).enumerate() {
             self.draw_banner(&mut pm, fonts, b, top, bh, self.hover == Some(i));
@@ -313,14 +314,14 @@ impl Banners {
 
     fn draw_banner(
         &self,
-        pm: &mut Pixmap,
+        pm: &mut Canvas,
         fonts: &mut Fonts,
         b: &Banner,
         top: f32,
         h: f32,
         hover: bool,
     ) {
-        let fill = |pm: &mut Pixmap, path: Option<tiny_skia::Path>, c: [u8; 4]| {
+        let fill = |pm: &mut Canvas, path: Option<tiny_skia::Path>, c: [u8; 4]| {
             if let Some(p) = path {
                 pm.fill_path(
                     &p,
@@ -495,10 +496,10 @@ impl Center {
         }
     }
 
-    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts) -> Canvas {
         let (w, h) = self.size(fonts);
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
-        let fill = |pm: &mut Pixmap, path: Option<tiny_skia::Path>, c: [u8; 4]| {
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
+        let fill = |pm: &mut Canvas, path: Option<tiny_skia::Path>, c: [u8; 4]| {
             if let Some(p) = path {
                 pm.fill_path(
                     &p,
@@ -533,14 +534,7 @@ impl Center {
             fonts.draw(&mut pm, EMPTY, &APP, (WIDTH - tw) / 2.0, ey, None);
         } else {
             let cards = self.list.render(fonts);
-            pm.draw_pixmap(
-                0,
-                top as i32,
-                cards.as_ref(),
-                &PixmapPaint::default(),
-                Transform::identity(),
-                None,
-            );
+            pm.draw_canvas(0.0, top, &cards, &PixmapPaint::default());
         }
         pm
     }

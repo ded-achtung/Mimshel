@@ -4,9 +4,10 @@
 //! менять громкость — дело службы.
 
 use shell_core::input::Key;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use shell_widgets::shape::{circle, paint, rounded};
-use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Rect, Stroke, Transform};
 
 use crate::status::Sound;
 
@@ -185,11 +186,11 @@ impl SoundPanel {
         SoundAction::SetVolume(v)
     }
 
-    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts) -> Canvas {
         let (w, h) = self.size();
         let (wf, hf) = (w as f32, h as f32);
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
-        let fill = |pm: &mut Pixmap, path: Option<tiny_skia::Path>, c: [u8; 4]| {
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
+        let fill = |pm: &mut Canvas, path: Option<tiny_skia::Path>, c: [u8; 4]| {
             if let Some(p) = path {
                 pm.fill_path(
                     &p,
@@ -242,7 +243,7 @@ impl SoundPanel {
         fill(&mut pm, circle(kx, cy, 9.0), [0, 0, 0, 0x40]);
         fill(&mut pm, circle(kx, cy, 8.0), FILL);
 
-        let separator = |pm: &mut Pixmap, y: f32| {
+        let separator = |pm: &mut Canvas, y: f32| {
             if let Some(r) = Rect::from_xywh(INSET + 5.0, y.round(), wf - 2.0 * INSET - 10.0, 1.0) {
                 pm.fill_rect(r, &paint(LINE), Transform::identity(), None);
             }
@@ -257,7 +258,7 @@ impl SoundPanel {
             None,
         );
 
-        let row = |pm: &mut Pixmap,
+        let row = |pm: &mut Canvas,
                    fonts: &mut Fonts,
                    top: f32,
                    text: &str,
@@ -302,7 +303,7 @@ impl SoundPanel {
 }
 
 /// Галочка с серединой по высоте `y`.
-fn check(pm: &mut Pixmap, x: f32, y: f32) {
+fn check(pm: &mut Canvas, x: f32, y: f32) {
     let mut pb = PathBuilder::new();
     pb.move_to(x, y);
     pb.line_to(x + 3.5, y + 3.5);

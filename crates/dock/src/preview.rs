@@ -3,6 +3,7 @@
 //! карточке переключает на окно. Здесь раскладка, наведение и рисование;
 //! снимки окон делает служба.
 
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use tiny_skia::{FillRule, FilterQuality, IntSize, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
@@ -89,10 +90,10 @@ impl Preview {
         changed
     }
 
-    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts) -> Canvas {
         let (w, h) = self.size();
         let (wf, hf) = (w as f32, h as f32);
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
         if let Some(r) = rounded(0.0, 0.0, wf, hf, RADIUS) {
             pm.fill_path(
                 &r,

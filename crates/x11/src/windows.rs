@@ -145,9 +145,11 @@ impl Display {
         })
     }
 
-    /// Иконка окна (`_NET_WM_ICON`) размером `size`×`size` — для программ без
+    /// Иконка окна (`_NET_WM_ICON`) размером `size`×`size` точек (картинка —
+    /// в пикселях, как у `shell_icons::Icons::get`) — для программ без
     /// ярлыка. Берётся наименьшая не меньше нужной, иначе самая большая.
     pub fn window_icon(&self, w: Window, size: u32) -> Option<Pixmap> {
+        let size = self.px(size);
         let data = self.cardinals(w, self.atoms._NET_WM_ICON, AtomEnum::CARDINAL);
         let mut icons = Vec::new();
         let mut rest = data.as_slice();
@@ -208,7 +210,15 @@ impl Display {
         let y = i32::from(t.dst_y) - top as i32 + st as i32;
         let width = (u32::from(g.width) + l + r).saturating_sub(sl + sr);
         let height = (u32::from(g.height) + top + b).saturating_sub(st + sb);
-        Some((x, y, width.max(1), height.max(1)))
+        // В точки.
+        let k = self.scale();
+        let pt = |v: f32| (v / k).round();
+        Some((
+            pt(x as f32) as i32,
+            pt(y as f32) as i32,
+            (pt(width as f32) as u32).max(1),
+            (pt(height as f32) as u32).max(1),
+        ))
     }
 
     /// Поля окна (слева, справа, сверху, снизу) из свойства `atom`.
@@ -279,10 +289,10 @@ impl Display {
             .filter(|t| !t.is_empty())
     }
 
-    /// Где указатель мыши на экране.
+    /// Где указатель мыши на экране (в точках).
     pub fn pointer_position(&self) -> Option<(i16, i16)> {
         let r = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
-        Some((r.root_x, r.root_y))
+        Some((self.pt(r.root_x), self.pt(r.root_y)))
     }
 
     fn client_message(&self, w: Window, kind: u32, data: [u32; 5]) -> Result<()> {

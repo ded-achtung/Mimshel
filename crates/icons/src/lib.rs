@@ -76,6 +76,8 @@ pub struct Icons {
     /// почти все они есть не в каждом месте поиска — без памяти о них поиск
     /// недостающего значка спрашивал диск о тысячах файлов.
     folders: RefCell<HashMap<PathBuf, bool>>,
+    /// Масштаб экрана: значок в `size` точек рисуется в `size × scale` пикселей.
+    scale: f32,
 }
 
 impl Icons {
@@ -132,6 +134,7 @@ impl Icons {
             pixmaps,
             cache: HashMap::new(),
             folders: RefCell::new(HashMap::new()),
+            scale: shell_render::scale(),
         }
     }
 
@@ -201,11 +204,23 @@ impl Icons {
             .map(|(_, p)| p)
     }
 
-    /// Картинка иконки размером `size`×`size`. Запоминается: второй раз — мгновенно.
+    /// Картинка иконки размером `size`×`size` точек — в пикселях экрана
+    /// (при масштабе 2 — вдвое больше: рисовать с уменьшением до `size`).
+    /// Запоминается: второй раз — мгновенно.
     pub fn get(&mut self, name: &str, size: u32) -> Option<&Pixmap> {
-        let key = (name.to_string(), size);
+        let px = shell_render::to_px(size, self.scale);
+        let key = (name.to_string(), px);
         if !self.cache.contains_key(&key) {
-            let pixmap = self.find(name, size).and_then(|p| render(&p, size));
+            // Рисунок выбираем по размеру в точках: у одного имени в разных
+            // размерах бывают разные рисунки (значок сети WhiteSur в 16, 22
+            // и 24 — три разных), и при масштабе значок не должен меняться.
+            // SVG рисуется чётко в любом размере; картинку PNG берём ближе к
+            // пикселям, иначе она расплывётся.
+            let path = self
+                .find(name, size)
+                .filter(|p| px == size || p.extension().is_some_and(|e| e == "svg"))
+                .or_else(|| self.find(name, px));
+            let pixmap = path.and_then(|p| render(&p, px));
             self.cache.insert(key.clone(), pixmap);
         }
         self.cache.get(&key).and_then(Option::as_ref)
@@ -451,6 +466,29 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned()
+    }
+
+    #[test]
+    fn scaled_icon_keeps_drawing_of_point_size() {
+        // В 16 — красный, в 24 — синий рисунок: при масштабе 1,5 значок в
+        // 16 точек берётся из 16 (тот же рисунок), а рисуется в 24 пикселя.
+        let t = TempDir::new("scale");
+        t.write(
+            "icons/child/index.theme",
+            "[Icon Theme]\nDirectories=status/16,status/24\n\n\
+             [status/16]\nSize=16\nType=Fixed\n\n[status/24]\nSize=24\nType=Fixed\n",
+        );
+        t.write("icons/child/status/16/net.svg", SVG);
+        t.write(
+            "icons/child/status/24/net.svg",
+            &SVG.replace("#f00", "#00f"),
+        );
+        let mut i = icons(&t);
+        i.scale = 1.5;
+        let pm = i.get("net", 16).unwrap();
+        assert_eq!(pm.width(), 24);
+        let p = pm.pixel(12, 12).unwrap();
+        assert!(p.red() > 200 && p.blue() < 50, "{p:?}");
     }
 
     #[test]

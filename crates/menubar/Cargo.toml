@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+shell-render = { path = "../render" }
 shell-apps = { path = "../apps" }
 shell-core = { path = "../core" }
 shell-icons = { path = "../icons" }

@@ -425,7 +425,8 @@ impl DockUi {
                 // Свёрнутое окно не нарисовано — вместо снимка иконка.
                 image: d
                     .capture_window(w)
-                    .map(|p| thumbnail(&p, THUMB_W, THUMB_H))
+                    // Миниатюра — в пикселях экрана (при масштабе крупнее).
+                    .map(|p| thumbnail(&p, d.px(THUMB_W), d.px(THUMB_H)))
                     .or_else(|| app_icon.clone())
                     .or_else(|| d.window_icon(w, 64)),
             })
@@ -806,7 +807,7 @@ impl DockUi {
         // Окно во всю ширину экрана, а нарисовано обычно меньше: отправляем
         // только занятые столбцы — и те, что были заняты прошлым кадром
         // (их нужно стереть).
-        let painted = painted_columns(&frame);
+        let painted = painted_columns(frame.pixmap());
         let send = match (painted, self.painted) {
             (Some((a, b)), Some((c, e))) => Some((a.min(c), b.max(e))),
             (one, other) => one.or(other),

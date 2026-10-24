@@ -16,6 +16,7 @@ pub use control::{ControlAction, ControlPanel, ControlState, Network, Tile};
 pub use sound::{Row, SoundAction, SoundPanel};
 
 use shell_icons::Icons;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use shell_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Rect, Transform};
@@ -178,10 +179,10 @@ impl Bar {
             .map(|(p, px, _)| (p, px))
     }
 
-    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons) -> Canvas {
         let (w, h) = (self.width.max(1), self.height.max(1));
         let hf = h as f32;
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
         if let Some(r) = Rect::from_xywh(0.0, 0.0, w as f32, hf) {
             pm.fill_rect(r, &paint(BG), Transform::identity(), None);
         }
@@ -199,7 +200,7 @@ impl Bar {
                 );
             }
             let tx = x + ITEM_PAD;
-            let mut icon = |pm: &mut Pixmap, name: &str| {
+            let mut icon = |pm: &mut Canvas, name: &str| {
                 if let Some(icon) = icons.get(name, ICON) {
                     let k = ICON as f32 / icon.width() as f32;
                     let iy = ((hf - ICON as f32) / 2.0).round();
@@ -267,7 +268,7 @@ impl Bar {
 /// Значок Пункта управления — два переключателя-«таблетки»: у верхнего
 /// кружок справа, у нижнего слева (как в macOS). `x` — левый край, `cy` —
 /// середина по высоте.
-fn control_icon(pm: &mut Pixmap, x: f32, cy: f32) {
+fn control_icon(pm: &mut Canvas, x: f32, cy: f32) {
     let stroke = tiny_skia::Stroke {
         width: 1.3,
         ..tiny_skia::Stroke::default()
@@ -386,7 +387,7 @@ mod tests {
         assert_eq!((plain.width(), plain.height()), (1280, 28));
         // Полоса полупрозрачная, текст — светлый и непрозрачный.
         assert_eq!(plain.pixel(640, 14).unwrap().alpha(), BG[3]);
-        let lit = |pm: &Pixmap| pm.pixels().iter().filter(|p| p.alpha() > 200).count();
+        let lit = |pm: &Canvas| pm.pixels().iter().filter(|p| p.alpha() > 200).count();
         assert!(lit(&plain) > 100);
 
         b.open = Some(Part::Apple);

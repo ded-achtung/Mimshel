@@ -6,9 +6,10 @@
 
 use shell_core::input::Key;
 use shell_icons::Icons;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use shell_widgets::shape::{circle, paint, rounded};
-use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Stroke, Transform};
+use tiny_skia::{FillRule, FilterQuality, PixmapPaint, Stroke, Transform};
 
 use crate::status::Sound;
 
@@ -222,11 +223,11 @@ impl ControlPanel {
         }
     }
 
-    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons) -> Canvas {
         let (w, h) = self.size();
         let (wf, hf) = (w as f32, h as f32);
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
-        let fill = |pm: &mut Pixmap, path: Option<tiny_skia::Path>, c: [u8; 4]| {
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
+        let fill = |pm: &mut Canvas, path: Option<tiny_skia::Path>, c: [u8; 4]| {
             if let Some(p) = path {
                 pm.fill_path(
                     &p,
@@ -245,14 +246,14 @@ impl ControlPanel {
             };
             pm.stroke_path(&r, &paint(EDGE), &s, Transform::identity(), None);
         }
-        let tile = |pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, hover: bool| {
+        let tile = |pm: &mut Canvas, x: f32, y: f32, w: f32, h: f32, hover: bool| {
             fill(
                 pm,
                 rounded(x, y, w, h, TILE_R),
                 if hover { TILE_HOVER } else { TILE },
             );
         };
-        let mut icon = |pm: &mut Pixmap, name: &str, cx: f32, cy: f32| {
+        let mut icon = |pm: &mut Canvas, name: &str, cx: f32, cy: f32| {
             if let Some(img) = icons.get(name, 16) {
                 let k = 16.0 / img.width().max(img.height()) as f32;
                 let t = Transform::from_scale(k, k).post_translate(cx - 8.0, cy - 8.0);

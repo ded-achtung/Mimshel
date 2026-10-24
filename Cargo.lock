@@ -1164,6 +1164,7 @@ dependencies = [
  "shell-lock",
  "shell-menubar",
  "shell-notify",
+ "shell-render",
  "shell-setup",
  "shell-text",
  "shell-widgets",
@@ -1199,6 +1200,7 @@ dependencies = [
  "shell-apps",
  "shell-core",
  "shell-icons",
+ "shell-render",
  "shell-text",
  "shell-widgets",
  "tiny-skia",
@@ -1209,6 +1211,7 @@ name = "shell-icons"
 version = "0.1.0"
 dependencies = [
  "resvg",
+ "shell-render",
  "tiny-skia",
  "zune-jpeg",
 ]
@@ -1220,6 +1223,7 @@ dependencies = [
  "shell-apps",
  "shell-core",
  "shell-icons",
+ "shell-render",
  "shell-text",
  "tiny-skia",
 ]
@@ -1240,6 +1244,7 @@ dependencies = [
  "shell-apps",
  "shell-core",
  "shell-icons",
+ "shell-render",
  "shell-text",
  "shell-widgets",
  "tiny-skia",
@@ -1250,8 +1255,16 @@ name = "shell-notify"
 version = "0.1.0"
 dependencies = [
  "shell-dbus",
+ "shell-render",
  "shell-text",
  "shell-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "shell-render"
+version = "0.1.0"
+dependencies = [
  "tiny-skia",
 ]
 
@@ -1272,6 +1285,7 @@ name = "shell-text"
 version = "0.1.0"
 dependencies = [
  "cosmic-text",
+ "shell-render",
  "tiny-skia",
 ]
 
@@ -1287,6 +1301,7 @@ name = "shell-widgets"
 version = "0.1.0"
 dependencies = [
  "shell-core",
+ "shell-render",
  "shell-text",
  "tiny-skia",
 ]
@@ -1296,6 +1311,7 @@ name = "shell-x11"
 version = "0.1.0"
 dependencies = [
  "shell-core",
+ "shell-render",
  "tiny-skia",
  "x11rb",
  "xkeysym",

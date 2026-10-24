@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+shell-render = { path = "../../crates/render" }
 shell-core = { path = "../../crates/core" }
 shell-apps = { path = "../../crates/apps" }
 shell-text = { path = "../../crates/text" }

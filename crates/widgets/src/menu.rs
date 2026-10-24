@@ -5,8 +5,9 @@
 //! для меню — у службы.
 
 use shell_core::input::Key;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
-use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Stroke, Transform};
 
 use crate::shape::{paint, rounded};
 
@@ -192,9 +193,9 @@ impl<C: Copy> Menu<C> {
     }
 
     /// Рисует меню (размер — из [`Menu::measure`]).
-    pub fn render(&self, fonts: &mut Fonts) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts) -> Canvas {
         let (w, h) = (self.width, self.height());
-        let mut pm = Pixmap::new(w as u32, h as u32).expect("размер не нулевой");
+        let mut pm = Canvas::new(w as u32, h as u32).expect("размер не нулевой");
         if let Some(r) = rounded(0.0, 0.0, w, h, RADIUS) {
             pm.fill_path(
                 &r,
@@ -245,7 +246,7 @@ impl<C: Copy> Menu<C> {
 }
 
 /// Галочка с серединой по высоте `y`.
-fn check(pm: &mut Pixmap, x: f32, y: f32) {
+fn check(pm: &mut Canvas, x: f32, y: f32) {
     let mut pb = PathBuilder::new();
     pb.move_to(x, y);
     pb.line_to(x + 3.5, y + 3.5);
@@ -355,7 +356,7 @@ mod tests {
         let pm = m.render(&mut fonts);
         assert_eq!((pm.width(), pm.height()), (w, h));
         // Под указателем — синяя подсветка.
-        let p = pm.pixel(w - 12, (PAD + 3.0) as u32).unwrap();
+        let p = pm.pixmap().pixel(w - 12, (PAD + 3.0) as u32).unwrap();
         assert!(p.blue() > 150 && p.red() < 40, "{p:?}");
     }
 }

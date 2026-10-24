@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+shell-render = { path = "../render" }
 shell-dbus = { path = "../dbus" }
 shell-text = { path = "../text" }
 shell-widgets = { path = "../widgets" }

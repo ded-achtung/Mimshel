@@ -3,11 +3,12 @@
 //! (как в rofi-теме macos-look: 7×4, иконки 72 px).
 
 use shell_icons::Icons;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use tiny_skia::{FillRule, IntSize, Pixmap, Transform};
 
 use crate::Launchpad;
-use crate::draw::{draw_icon, fill_rect, magnifier, paint, rounded};
+use crate::draw::{draw_icon, fill_pixels, fill_rect, magnifier, paint, rounded};
 
 /// Во сколько раз уменьшать снимок экрана перед размытием: и быстрее,
 /// и само уменьшение — часть размытия.
@@ -59,13 +60,13 @@ pub fn backdrop(screen: Option<&Pixmap>, size: (u32, u32)) -> Pixmap {
     let size = (size.0.max(1), size.1.max(1));
     let Some(screen) = screen else {
         let mut out = Pixmap::new(size.0, size.1).expect("размер не нулевой");
-        fill_rect(&mut out, 0.0, 0.0, size.0 as f32, size.1 as f32, PLAIN);
+        fill_pixels(&mut out, 0.0, 0.0, size.0 as f32, size.1 as f32, PLAIN);
         return out;
     };
     let mut small = blur(&shrink(screen, SHRINK));
     // Затемняем маленькую картинку — в 64 раза меньше работы, чем на всём экране.
     let (w, h) = (small.width() as f32, small.height() as f32);
-    fill_rect(&mut small, 0.0, 0.0, w, h, DIM);
+    fill_pixels(&mut small, 0.0, 0.0, w, h, DIM);
     enlarge(&small, size)
 }
 
@@ -200,9 +201,16 @@ fn box_pass(src: &[u8], dst: &mut [u8], len: usize, lines: usize, step: usize, l
 }
 
 impl Launchpad {
-    /// Рисует экран Launchpad поверх готового фона (см. [`backdrop`]).
-    pub fn render(&self, background: &Pixmap, fonts: &mut Fonts, icons: &mut Icons) -> Pixmap {
-        let mut pm = background.clone();
+    /// Рисует экран Launchpad поверх готового фона (см. [`backdrop`]; фон —
+    /// в пикселях экрана, `scale` — сколько их в точке).
+    pub fn render(
+        &self,
+        background: &Pixmap,
+        scale: f32,
+        fonts: &mut Fonts,
+        icons: &mut Icons,
+    ) -> Canvas {
+        let mut pm = Canvas::from_pixmap(background.clone(), scale);
         self.draw_search(&mut pm, fonts);
 
         let mut any = false;
@@ -261,7 +269,7 @@ impl Launchpad {
 
     /// Поле поиска: пока пусто — лупа и «Поиск» по центру, как на Mac;
     /// при наборе — текст от левого края и курсор.
-    fn draw_search(&self, pm: &mut Pixmap, fonts: &mut Fonts) {
+    fn draw_search(&self, pm: &mut Canvas, fonts: &mut Fonts) {
         let (x, y, w, h) = self.layout.search;
         if let Some(r) = rounded(x, y, w, h, 8.0) {
             pm.fill_path(
@@ -319,7 +327,7 @@ mod tests {
         // Чёрно-белые полосы по 1 точке после размытия становятся серыми.
         let mut src = Pixmap::new(64, 32).unwrap();
         for x in (0..64).step_by(2) {
-            fill_rect(&mut src, x as f32, 0.0, 1.0, 32.0, [255, 255, 255, 255]);
+            fill_pixels(&mut src, x as f32, 0.0, 1.0, 32.0, [255, 255, 255, 255]);
         }
         let bg = backdrop(Some(&src), (64, 32));
         assert_eq!((bg.width(), bg.height()), (64, 32));
@@ -334,7 +342,7 @@ mod tests {
     fn enlarge_is_smooth() {
         // Две точки: чёрная и белая → плавный переход между ними.
         let mut src = Pixmap::new(2, 1).unwrap();
-        fill_rect(&mut src, 1.0, 0.0, 1.0, 1.0, [255, 255, 255, 255]);
+        fill_pixels(&mut src, 1.0, 0.0, 1.0, 1.0, [255, 255, 255, 255]);
         let big = enlarge(&src, (8, 1));
         let reds: Vec<u8> = (0..8).map(|x| big.pixel(x, 0).unwrap().red()).collect();
         assert_eq!((reds[0], reds[7]), (0, 255));
@@ -354,14 +362,14 @@ mod tests {
         let apps = ["А", "Б", "В", "Г", "Д", "Е", "Ж"].map(app).to_vec();
         let mut l = Launchpad::new(apps, (900, 600), grid);
         let bg = backdrop(None, l.size());
-        let pm = l.render(&bg, &mut fonts, &mut icons);
+        let pm = l.render(&bg, 1.0, &mut fonts, &mut icons);
         assert_eq!((pm.width(), pm.height()), (900, 600));
         // Две страницы — есть точки: текущая яркая.
         let (cx, cy) = l.dot_center(0);
         assert!(pm.pixel(cx as u32, cy as u32).unwrap().red() > 200);
 
         l.key(KeyPress::plain(Key::Right));
-        let pm = l.render(&bg, &mut fonts, &mut icons);
+        let pm = l.render(&bg, 1.0, &mut fonts, &mut icons);
         let (x, y, _, _) = l.cell_box(0);
         // Подсветка выбранной иконки светлее фона.
         let lit = pm.pixel(x as u32 + 3, y as u32 + 20).unwrap().red();

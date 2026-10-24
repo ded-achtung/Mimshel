@@ -6,6 +6,7 @@ use cosmic_text::{
     Attrs, Buffer, Color, Ellipsize, EllipsizeHeightLimit, Family, FontSystem, Metrics, Shaping,
     SwashCache, Weight, Wrap,
 };
+use shell_render::Canvas;
 use tiny_skia::Pixmap;
 
 /// Как выглядит строка.
@@ -50,7 +51,24 @@ impl Fonts {
 
     /// Рисует одну строку. `x`, `y` — левый верхний угол строки высотой
     /// [`Style::line_height`]. Если задана `max_width`, лишнее заменяется на «…».
+    /// Всё в точках холста; буквы рисуются сразу в пикселях (чёткие при
+    /// любом масштабе).
     pub fn draw(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        style: &Style,
+        x: f32,
+        y: f32,
+        max_width: Option<f32>,
+    ) {
+        let k = canvas.scale();
+        self.draw_scaled(canvas.pixmap_mut(), k, text, style, x, y, max_width);
+    }
+
+    /// То же прямо на картинке в пикселях, без масштаба (экран блокировки
+    /// рисуется в пикселях экрана).
+    pub fn draw_pixels(
         &mut self,
         pixmap: &mut Pixmap,
         text: &str,
@@ -59,11 +77,29 @@ impl Fonts {
         y: f32,
         max_width: Option<f32>,
     ) {
-        let mut buffer = self.layout(text, style, max_width);
+        self.draw_scaled(pixmap, 1.0, text, style, x, y, max_width);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_scaled(
+        &mut self,
+        pixmap: &mut Pixmap,
+        k: f32,
+        text: &str,
+        style: &Style,
+        x: f32,
+        y: f32,
+        max_width: Option<f32>,
+    ) {
+        let scaled = Style {
+            size: style.size * k,
+            ..*style
+        };
+        let mut buffer = self.layout(text, &scaled, max_width.map(|m| m * k));
         let [r, g, b, a] = style.color;
         let (w, h) = (pixmap.width() as i32, pixmap.height() as i32);
         let data = pixmap.data_mut();
-        let (ox, oy) = (x.round() as i32, y.round() as i32);
+        let (ox, oy) = ((x * k).round() as i32, (y * k).round() as i32);
         buffer.draw(
             &mut self.system,
             &mut self.cache,
@@ -134,20 +170,26 @@ mod tests {
         let long = fonts.measure("Терминал Терминал", &STYLE);
         assert!(short > 20.0 && long > short * 1.8, "{short} {long}");
 
-        let mut pixmap = Pixmap::new(200, 30).unwrap();
+        let mut pixmap = Canvas::with_scale(200, 30, 1.0).unwrap();
         fonts.draw(&mut pixmap, "Терминал", &STYLE, 4.0, 4.0, None);
-        let painted = pixmap.data().chunks(4).filter(|p| p[3] > 0).count();
+        let painted = pixmap
+            .pixmap()
+            .data()
+            .chunks(4)
+            .filter(|p| p[3] > 0)
+            .count();
         assert!(painted > 50, "нарисовано точек: {painted}");
     }
 
     #[test]
     fn ellipsis_keeps_within_width() {
         let mut fonts = Fonts::new("Inter");
-        let mut pixmap = Pixmap::new(300, 30).unwrap();
+        let mut pixmap = Canvas::with_scale(300, 30, 1.0).unwrap();
         let text = "Очень длинное название программы, которое не влезает";
         fonts.draw(&mut pixmap, text, &STYLE, 0.0, 0.0, Some(100.0));
         let w = pixmap.width() as usize;
         let beyond = pixmap
+            .pixmap()
             .data()
             .chunks(4)
             .enumerate()
@@ -160,17 +202,38 @@ mod tests {
     fn color_alpha_dims_text() {
         let mut fonts = Fonts::new("Inter");
         let brightest = |fonts: &mut Fonts, alpha: u8| {
-            let mut pm = Pixmap::new(80, 30).unwrap();
+            let mut pm = Canvas::with_scale(80, 30, 1.0).unwrap();
             pm.fill(tiny_skia::Color::BLACK);
             let style = Style {
                 color: [255, 255, 255, alpha],
                 ..STYLE
             };
             fonts.draw(&mut pm, "Пн 28", &style, 2.0, 2.0, None);
-            pm.pixels().iter().map(|p| p.red()).max().unwrap()
+            pm.pixmap().pixels().iter().map(|p| p.red()).max().unwrap()
         };
         assert!(brightest(&mut fonts, 255) > 240);
         let dim = brightest(&mut fonts, 70);
         assert!((50..=80).contains(&dim), "приглушённый текст: {dim}");
+    }
+
+    #[test]
+    fn scaled_canvas_draws_bigger_text() {
+        let mut fonts = Fonts::new("Inter");
+        let width = |fonts: &mut Fonts, k: f32| {
+            let mut c = Canvas::with_scale(200, 30, k).unwrap();
+            fonts.draw(&mut c, "Терминал", &STYLE, 4.0, 4.0, None);
+            let pm = c.pixmap();
+            let w = pm.width() as usize;
+            let cols: Vec<usize> = pm
+                .data()
+                .chunks(4)
+                .enumerate()
+                .filter(|(_, p)| p[3] > 0)
+                .map(|(i, _)| i % w)
+                .collect();
+            cols.iter().max().unwrap() - cols.iter().min().unwrap()
+        };
+        let (one, two) = (width(&mut fonts, 1.0) as f32, width(&mut fonts, 2.0) as f32);
+        assert!((two / one - 2.0).abs() < 0.1, "{one} → {two}");
     }
 }

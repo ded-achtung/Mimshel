@@ -2,7 +2,7 @@
 //! поверх окон, без рамки, на всех рабочих столах, не даёт ему фокус), с
 //! прозрачностью и областью кликов — только там, где док нарисован.
 
-use tiny_skia::Pixmap;
+use shell_render::Image;
 use x11rb::connection::Connection;
 use x11rb::protocol::shape::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
@@ -108,7 +108,9 @@ impl DockWindow {
         Ok(())
     }
 
+    /// Место и размер окна — в точках.
     pub fn set_geometry(&self, d: &Display, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let (x, y, w, h) = d.rect_px(x, y, w, h);
         d.conn.configure_window(
             self.window,
             &ConfigureWindowAux::new().x(x).y(y).width(w).height(h),
@@ -117,21 +119,31 @@ impl DockWindow {
         Ok(())
     }
 
-    pub fn present(&self, d: &Display, pixmap: &Pixmap) -> Result<()> {
-        put_pixmap(d, self.window, self.gc, pixmap)
+    pub fn present(&self, d: &Display, pixmap: &impl Image) -> Result<()> {
+        put_pixmap(d, self.window, self.gc, pixmap.image())
     }
 
-    /// Вывести только столбцы `x0..x1` (остальная часть окна не меняется).
-    pub fn present_columns(&self, d: &Display, pixmap: &Pixmap, x0: u32, x1: u32) -> Result<()> {
-        put_columns(d, self.window, self.gc, pixmap, x0, x1)
+    /// Вывести только столбцы `x0..x1` **в пикселях** (остальная часть окна
+    /// не меняется).
+    pub fn present_columns(
+        &self,
+        d: &Display,
+        pixmap: &impl Image,
+        x0: u32,
+        x1: u32,
+    ) -> Result<()> {
+        put_columns(d, self.window, self.gc, pixmap.image(), x0, x1)
     }
 
     /// Где окно принимает клики и указатель — прямоугольники `(x, y, w, h)`
-    /// в координатах окна. В остальных местах клик проходит к окнам под доком.
+    /// в координатах окна (в точках). В остальных местах клик проходит к
+    /// окнам под доком.
     pub fn set_input(&self, d: &Display, rects: &[(i32, i32, u32, u32)]) -> Result<()> {
+        let at = |v: i32| (v as f32 * d.scale()).round() as i32;
         let rects: Vec<Rectangle> = rects
             .iter()
-            .map(|&(x, y, w, h)| Rectangle {
+            .map(|&(x, y, w, h)| (at(x), at(y), d.px(w), d.px(h)))
+            .map(|(x, y, w, h)| Rectangle {
                 x: x as i16,
                 y: y as i16,
                 width: w as u16,
@@ -152,8 +164,9 @@ impl DockWindow {
     }
 
     /// Резерв места вверху экрана (строка меню): развёрнутые окна
-    /// начинаются под ней. `x0..x1` — где по ширине.
+    /// начинаются под ней. `x0..x1` — где по ширине. Всё в точках.
     pub fn set_strut_top(&self, d: &Display, height: u32, x0: u32, x1: u32) -> Result<()> {
+        let (height, x0, x1) = (d.px(height), d.px(x0), d.px(x1));
         let a = &d.atoms;
         let partial = [0, 0, height, 0, 0, 0, 0, 0, x0, x1, 0, 0];
         d.conn.change_property32(
@@ -175,8 +188,9 @@ impl DockWindow {
     }
 
     /// Резерв места внизу экрана: развёрнутые окна заканчиваются над доком
-    /// (`height` — сколько пикселей снизу, `x0..x1` — где по ширине). 0 — без резерва.
+    /// (`height` — сколько точек снизу, `x0..x1` — где по ширине). 0 — без резерва.
     pub fn set_strut(&self, d: &Display, height: u32, x0: u32, x1: u32) -> Result<()> {
+        let (height, x0, x1) = (d.px(height), d.px(x0), d.px(x1));
         let a = &d.atoms;
         let partial = [0, 0, 0, height, 0, 0, 0, 0, 0, 0, x0, x1];
         d.conn.change_property32(

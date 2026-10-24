@@ -2,6 +2,7 @@
 //! (`spotlight.rasi`), чтобы замена была незаметной.
 
 use shell_icons::Icons;
+use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use tiny_skia::{
     Color, FillRule, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke, Transform,
@@ -57,9 +58,9 @@ const DIM: Style = Style {
 
 impl Spotlight {
     /// Рисует окно целиком в картинку размера [`Spotlight::size`].
-    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons) -> Canvas {
         let (w, h) = self.size();
-        let mut pm = Pixmap::new(w, h).expect("размер окна не нулевой");
+        let mut pm = Canvas::new(w, h).expect("размер окна не нулевой");
         let (wf, hf) = (w as f32, h as f32);
 
         // Фон и тонкая светлая рамка.
@@ -182,7 +183,7 @@ pub(crate) fn paint(c: [u8; 4]) -> Paint<'static> {
 }
 
 /// Серая лупа, как в Spotlight на Mac, в квадрате `size` с углом в `x`, `y`.
-pub(crate) fn magnifier(pm: &mut Pixmap, x: f32, y: f32, size: f32, color: [u8; 4]) {
+pub(crate) fn magnifier(pm: &mut Canvas, x: f32, y: f32, size: f32, color: [u8; 4]) {
     let r = size * 0.3;
     let (cx, cy) = (x + size * 0.42, y + size * 0.42);
     let mut pb = PathBuilder::new();
@@ -201,21 +202,21 @@ pub(crate) fn magnifier(pm: &mut Pixmap, x: f32, y: f32, size: f32, color: [u8; 
     }
 }
 
-pub(crate) fn fill_rect(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
+pub(crate) fn fill_rect(pm: &mut Canvas, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
     if let Some(r) = Rect::from_xywh(x, y, w, h) {
         pm.fill_rect(r, &paint(c), Transform::identity(), None);
     }
 }
 
-pub(crate) fn draw_icon(pm: &mut Pixmap, icon: &Pixmap, x: i32, y: i32) {
-    pm.draw_pixmap(
-        x,
-        y,
-        icon.as_ref(),
-        &PixmapPaint::default(),
-        Transform::identity(),
-        None,
-    );
+/// То же на картинке в пикселях (фон Launchpad).
+pub(crate) fn fill_pixels(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
+    if let Some(r) = Rect::from_xywh(x, y, w, h) {
+        pm.fill_rect(r, &paint(c), Transform::identity(), None);
+    }
+}
+
+pub(crate) fn draw_icon(pm: &mut Canvas, icon: &Pixmap, x: i32, y: i32) {
+    pm.draw_icon(icon.as_ref(), x as f32, y as f32, &PixmapPaint::default());
 }
 
 /// Прямоугольник со скруглёнными углами.

@@ -2,11 +2,12 @@
 //! (как тема WhiteSur-Dark для Plank), значки, точки под запущенными,
 //! разделитель и подпись над значком под указателем.
 
+use shell_render::Canvas;
 use std::time::Instant;
 
 use shell_icons::Icons;
 use shell_text::{Fonts, Style};
-use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, FilterQuality, PixmapPaint, Rect, Stroke, Transform};
 
 use crate::Dock;
 use crate::layout::{PAD_BOTTOM, SEPARATOR};
@@ -27,10 +28,10 @@ const TIP_TEXT: Style = Style {
 
 impl Dock {
     /// Рисует окно дока (ширина экрана × [`Dock::window_height`]).
-    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons, now: Instant) -> Pixmap {
+    pub fn render(&self, fonts: &mut Fonts, icons: &mut Icons, now: Instant) -> Canvas {
         let w = self.screen_w.max(1.0) as u32;
         let h = self.window_height();
-        let mut pm = Pixmap::new(w, h).expect("размер не нулевой");
+        let mut pm = Canvas::new(w, h).expect("размер не нулевой");
         let hidden = self.hidden_at(now);
         if hidden >= 1.0 || self.items.is_empty() {
             return pm;
@@ -135,14 +136,14 @@ impl Dock {
 
     /// Картинка перетаскиваемого значка (для окна, которое едет за мышью) и
     /// где в ней середина иконки. Утащен прочь закреплённый — над ним «Удалить».
-    pub fn drag_image(&self, fonts: &mut Fonts, icons: &mut Icons) -> Option<(Pixmap, (f32, f32))> {
+    pub fn drag_image(&self, fonts: &mut Fonts, icons: &mut Icons) -> Option<(Canvas, (f32, f32))> {
         let item = self.items.get(self.drag?.index)?;
         let size = self.max_icon() as f32;
         let label = self.drag_removes().then_some("Удалить");
         let (tw, th) = label.map_or((0.0, 0.0), |t| tip_size(fonts, t));
         let top = if label.is_some() { th + 8.0 } else { 0.0 };
         let w = size.max(tw).ceil();
-        let mut pm = Pixmap::new(w as u32, (top + size).ceil() as u32)?;
+        let mut pm = Canvas::new(w as u32, (top + size).ceil() as u32)?;
         let icon = match (&item.app, item.windows.first()) {
             (Some(app), _) => app.icon.as_deref().and_then(|n| icons.get(n, size as u32)),
             (None, Some(&win)) => self.window_icon(win),
@@ -169,10 +170,10 @@ pub const POOF: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Кадр «облачка» размером `size`: `t` от 0 до 1 — ход анимации. Клубы
 /// разлетаются от середины, растут и тают.
-pub fn poof_image(size: u32, t: f32) -> Pixmap {
+pub fn poof_image(size: u32, t: f32) -> Canvas {
     let s = size as f32;
     let t = t.clamp(0.0, 1.0);
-    let mut pm = Pixmap::new(size.max(1), size.max(1)).expect("размер не нулевой");
+    let mut pm = Canvas::new(size.max(1), size.max(1)).expect("размер не нулевой");
     let alpha = ((1.0 - t) * 230.0) as u8;
     let spread = s * (0.10 + 0.22 * t);
     let r = s * (0.13 + 0.10 * t);
@@ -207,7 +208,7 @@ fn tip_size(fonts: &mut Fonts, text: &str) -> (f32, f32) {
 }
 
 /// Подпись с левым верхним углом в `(x, y)`.
-fn tip(pm: &mut Pixmap, fonts: &mut Fonts, text: &str, x: f32, y: f32) {
+fn tip(pm: &mut Canvas, fonts: &mut Fonts, text: &str, x: f32, y: f32) {
     let (bw, bh) = tip_size(fonts, text);
     if let Some(r) = rounded(x, y, bw, bh, 7.0) {
         pm.fill_path(
@@ -228,7 +229,7 @@ fn tip(pm: &mut Pixmap, fonts: &mut Fonts, text: &str, x: f32, y: f32) {
     fonts.draw(pm, text, &TIP_TEXT, x + 10.0, y + 4.0, Some(bw - 19.0));
 }
 
-fn fill_rect(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
+fn fill_rect(pm: &mut Canvas, x: f32, y: f32, w: f32, h: f32, c: [u8; 4]) {
     if let Some(r) = Rect::from_xywh(x, y, w, h) {
         pm.fill_rect(r, &paint(c), Transform::identity(), None);
     }
@@ -241,7 +242,7 @@ mod tests {
 
     #[test]
     fn poof_fades_out() {
-        let lit = |pm: &Pixmap| pm.pixels().iter().filter(|p| p.alpha() > 20).count();
+        let lit = |pm: &Canvas| pm.pixels().iter().filter(|p| p.alpha() > 20).count();
         let start = poof_image(64, 0.0);
         let mid = poof_image(64, 0.5);
         assert!(lit(&start) > 500 && lit(&mid) > 500);
@@ -282,6 +283,6 @@ mod tests {
         d.slide_to(true, now);
         d.settle(now + crate::SLIDE);
         let pm = d.render(&mut fonts, &mut icons, now + crate::SLIDE);
-        assert!(pm.data().iter().all(|&b| b == 0));
+        assert!(pm.pixmap().data().iter().all(|&b| b == 0));
     }
 }
