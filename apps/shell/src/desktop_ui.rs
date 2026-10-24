@@ -28,7 +28,9 @@ use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_widgets::shape::paint;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
-use shell_x11::{DesktopWindow, Display, Event, Key, KeyPress, Popup, SelectionRenderer};
+use shell_x11::{
+    DesktopWindow, Display, DragTarget, Event, Key, KeyPress, Popup, SelectionRenderer,
+};
 use tiny_skia::{IntRect, Pixmap};
 
 use crate::desktop_files;
@@ -198,6 +200,8 @@ impl DesktopUi {
             painter: painter(tx.clone()),
             tx: tx.clone(),
         };
+        // Картинка, которую тащат, не должна заслонять окно под указателем.
+        ui.drag_popup.pass_through(d)?;
         ui.grid.set_saved(desktop_files::load_places());
         ui.place_icons(d);
         ui.load_wallpaper(d);
@@ -225,10 +229,13 @@ impl DesktopUi {
             );
             (right > left && bottom > top).then_some((left, top, right, bottom))
         });
-        let (left, top, right, bottom) = bounds.unwrap_or_else(|| {
-            let top = my + self.menubar_height as f32;
-            (mx, top, mx + mw, my + mh - DOCK_ROOM)
-        });
+        // Не выше строки меню и не ниже дока: док при «умном» скрытии места не
+        // резервирует, и рабочая область от оконного менеджера его не учитывает —
+        // нижний ряд значков ушёл бы под него.
+        let (min_top, max_bottom) = (my + self.menubar_height as f32, my + mh - DOCK_ROOM);
+        let (left, top, right, bottom) = bounds
+            .map(|(l, t, r, b)| (l, t.max(min_top), r, b.min(max_bottom)))
+            .unwrap_or((mx, min_top, mx + mw, max_bottom));
         let top = top + MARGIN;
         self.grid.set_area((
             left,
@@ -388,7 +395,7 @@ impl DesktopUi {
             }
             Event::Key(k) => self.key(k),
             Event::Motion { window, x, y } if window == self.window.id() => {
-                self.drag_motion(f32::from(x), f32::from(y));
+                self.drag_motion(d, f32::from(x), f32::from(y));
                 Ok(())
             }
             Event::Release {
@@ -478,7 +485,7 @@ impl DesktopUi {
     }
 
     /// Мышь с нажатой кнопкой: сдвинули значок достаточно — тащим.
-    fn drag_motion(&mut self, x: f32, y: f32) {
+    fn drag_motion(&mut self, d: &Display, x: f32, y: f32) {
         if let Some((start, _)) = self.band {
             self.band = Some((start, (x, y)));
             let changed = self
@@ -498,9 +505,24 @@ impl DesktopUi {
             }
             press.dragging = true;
             self.last_click = None;
+            // Стол — источник XDND: значки можно бросить и в окно Проводника.
+            let paths: Vec<PathBuf> = self
+                .grid
+                .selected_items()
+                .iter()
+                .map(|i| i.path.clone())
+                .collect();
+            d.drag_begin(self.window.id(), &paths);
         }
         self.drag_at = (x, y);
         self.drag_dirty = true;
+        // Стол во весь экран от угла: его точки — точки экрана.
+        let over = d.drag_motion(x.round() as i16, y.round() as i16, d.modifiers().0);
+        if over != DragTarget::Own {
+            let changed = self.grid.set_drop_target(None);
+            self.cells_dirty.extend(changed);
+            return;
+        }
         // Папка под указателем (не из переносимых) — подсветить: туда упадут.
         let moving = self.grid.selected_indices().to_vec();
         let target = self
@@ -538,6 +560,12 @@ impl DesktopUi {
         self.drag_popup.hide_passive(d)?;
         let changed = self.grid.set_drop_target(None);
         self.cells_dirty.extend(changed);
+        // Над окном другой программы: согласна — файлы её (переместит или
+        // скопирует сама, стол узнает из слежения за папкой); нет, или окно
+        // файлы не принимает — значки остаются, где были (как в Finder).
+        if d.drag_end() != DragTarget::Own {
+            return Ok(());
+        }
         let moving: Vec<usize> = self.grid.selected_indices().to_vec();
         let target = self
             .grid

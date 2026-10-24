@@ -14,6 +14,7 @@ mod windows;
 
 pub use clipboard::{clipboard_files, copy_files};
 pub use desktop::DesktopWindow;
+pub use dnd::DragTarget;
 pub use dock::DockWindow;
 pub use selection::SelectionRenderer;
 
@@ -125,6 +126,8 @@ x11rb::atom_manager! {
         XdndSelection,
         XdndActionCopy,
         XdndActionMove,
+        XdndActionList,
+        TARGETS,
         TEXT_URI_LIST: b"text/uri-list",
         SHELL_XDND,
         _NET_WM_STATE_SKIP_PAGER,
@@ -530,6 +533,10 @@ impl Display {
             XEvent::ClientMessage(e) => self
                 .dnd_message(e.window, e.type_, e.data.as_data32())
                 .unwrap_or(Event::Other),
+            XEvent::SelectionRequest(e) if e.selection == self.atoms.XdndSelection => {
+                self.dnd_request(&e);
+                Event::Other
+            }
             XEvent::SelectionNotify(e)
                 if e.property == self.atoms.SHELL_XDND
                     || e.selection == self.atoms.XdndSelection =>
@@ -759,6 +766,23 @@ impl Popup {
 
     pub fn id(&self) -> u32 {
         self.window
+    }
+
+    /// Окно не ловит мышь: указатель «видит» окна под ним. Нужно картинке,
+    /// которую тащат, — иначе под указателем всегда она сама.
+    pub fn pass_through(&self, d: &Display) -> Result<()> {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        d.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::INPUT,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            self.window,
+            0,
+            0,
+            &[],
+        )?;
+        d.conn.flush()?;
+        Ok(())
     }
 }
 

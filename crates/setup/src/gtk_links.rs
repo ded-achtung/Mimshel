@@ -65,12 +65,20 @@ fn apply_in(theme_dir: &Path, gtk4: &Path, manifest: &Path) -> io::Result<()> {
         }
         let link = gtk4.join(name);
         let actual = std::fs::read_link(&link).ok();
+        // Ссылки прежних версий Shell (до списка) ведут в файл темы
+        // `…/gtk-4.0/<имя>` — признаём их своими, иначе смена темы окон
+        // на уже установленных системах не дошла бы до программ на GTK4.
+        let ours = actual
+            .as_ref()
+            .is_some_and(|a| owned.get(name) == Some(a) || looks_like_theme_link(a, name));
         if actual.as_deref() == Some(target.as_path()) {
-            // Без манифеста нельзя доказать, что ссылка создана Shell.
+            if ours {
+                owned.insert(name, target);
+            }
             continue;
         }
         match std::fs::symlink_metadata(&link) {
-            Ok(_) if actual.is_none() || actual.as_ref() != owned.get(name) => {
+            Ok(_) if !ours => {
                 eprintln!(
                     "GTK4: {} уже существует и не принадлежит Shell",
                     link.display()
@@ -86,6 +94,15 @@ fn apply_in(theme_dir: &Path, gtk4: &Path, manifest: &Path) -> io::Result<()> {
         owned.insert(name, target);
     }
     save_entries(manifest, &owned)
+}
+
+/// Ссылка ведёт в файл темы с тем же именем: `…/gtk-4.0/gtk.css` и т. п.
+fn looks_like_theme_link(target: &Path, name: &str) -> bool {
+    target.file_name().is_some_and(|f| f == name)
+        && target
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|d| d == "gtk-4.0")
 }
 
 fn owned_links_in(gtk4: &Path, manifest: &Path) -> Vec<PathBuf> {
@@ -180,6 +197,34 @@ mod tests {
         );
         assert_eq!(std::fs::read_link(gtk4.join("assets")).unwrap(), foreign);
         assert!(gtk4.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn links_of_older_shell_are_adopted() {
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("shell-gtk-adopt-{}-{id}", std::process::id()));
+        let gtk4 = root.join("gtk4");
+        let manifest = root.join("links");
+        let (old, new) = (root.join("Old"), root.join("New"));
+        for theme in [&old, &new] {
+            std::fs::create_dir_all(theme.join("gtk-4.0")).unwrap();
+            std::fs::write(theme.join("gtk-4.0/gtk.css"), "x").unwrap();
+        }
+        // Так ссылку делала прежняя версия — без списка.
+        std::fs::create_dir_all(&gtk4).unwrap();
+        std::os::unix::fs::symlink(old.join("gtk-4.0/gtk.css"), gtk4.join("gtk.css")).unwrap();
+        apply_in(&new, &gtk4, &manifest).unwrap();
+        assert_eq!(
+            std::fs::read_link(gtk4.join("gtk.css")).unwrap(),
+            new.join("gtk-4.0/gtk.css"),
+            "тема сменилась"
+        );
+        assert_eq!(owned_links_in(&gtk4, &manifest).len(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 

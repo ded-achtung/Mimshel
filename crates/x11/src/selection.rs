@@ -12,16 +12,19 @@ use x11rb::protocol::xproto::Rectangle;
 
 use crate::{Display, Result};
 
+// XRender ждёт цвет, уже умноженный на прозрачность: полупрозрачный белый —
+// это все каналы, равные прозрачности. «Чистый» белый (0xffff) с малой
+// прозрачностью композитор показывает сплошным белым.
 const FILL: Color = Color {
-    red: 0xffff,
-    green: 0xffff,
-    blue: 0xffff,
+    red: 0x2828,
+    green: 0x2828,
+    blue: 0x2828,
     alpha: 0x2828,
 };
 const EDGE: Color = Color {
-    red: 0xffff,
-    green: 0xffff,
-    blue: 0xffff,
+    red: 0x9090,
+    green: 0x9090,
+    blue: 0x9090,
     alpha: 0x9090,
 };
 const CLEAR: Color = Color {
