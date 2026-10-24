@@ -82,12 +82,17 @@ fn build_with(
     for source in sources {
         for &(ctx, _, _) in CONTEXTS {
             let mut visited = HashSet::new();
-            collect(&icons_dir.join(source).join(ctx), ctx, &mut names, &mut visited);
+            collect(
+                &icons_dir.join(source).join(ctx),
+                ctx,
+                &mut names,
+                &mut visited,
+            );
         }
     }
     let marker = out_dir.join(".shell-cache-version");
-    let cache_current = std::fs::read_to_string(&marker)
-        .is_ok_and(|version| version == CACHE_VERSION);
+    let cache_current =
+        std::fs::read_to_string(&marker).is_ok_and(|version| version == CACHE_VERSION);
     let wanted_apps: BTreeSet<&str> = apps.iter().map(String::as_str).collect();
     let mut stats = Stats::default();
     let mut jobs = Vec::new();

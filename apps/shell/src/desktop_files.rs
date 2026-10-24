@@ -193,7 +193,10 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
         // доступа «свободным именем», а отсутствие источника — успехом.
         match std::fs::symlink_metadata(dest) {
             Ok(_) => {
-                errors.push(format!("Файл назначения {} уже существует.", dest.display()));
+                errors.push(format!(
+                    "Файл назначения {} уже существует.",
+                    dest.display()
+                ));
                 continue;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

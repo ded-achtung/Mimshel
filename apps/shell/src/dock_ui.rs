@@ -2,6 +2,7 @@
 //! (список, активное окно, иконки), клики, меню значка, перетаскивание,
 //! миниатюры окон, «умное» скрытие и анимация.
 
+use inotify::{Inotify, WatchMask};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,7 +10,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
-use inotify::{Inotify, WatchMask};
 
 use shell_apps::App;
 use shell_core::config::{Config, DockHide, set_dock_apps};

@@ -596,7 +596,9 @@ impl DesktopUi {
                 press.grab
             );
         }
-        let old: Vec<_> = (0..self.grid.items().len()).map(|i| self.grid.cell(i)).collect();
+        let old: Vec<_> = (0..self.grid.items().len())
+            .map(|i| self.grid.cell(i))
+            .collect();
         self.grid.move_items(press.index, slot, &moving);
         // Старые и новые клетки перерисуем поверх исходных обоев;
         // промежуточный full-screen буфер для каждого перемещения не нужен.
