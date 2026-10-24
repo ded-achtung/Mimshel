@@ -1,4 +1,7 @@
-//! Поле ввода: текст, курсор и правка — общее для «Поиска» и «Программ».
+//! Поле ввода: текст, курсор и правка — общее для «Поиска», «Программ» и
+//! переименования значков на столе. Может быть выделена часть текста от
+//! начала (при переименовании — имя без расширения, как на Mac): набор
+//! заменяет выделенное, Backspace/Delete стирают его, стрелки — снимают.
 //! Как в полях macOS/GTK: стрелки, Home/End, Backspace/Delete,
 //! Ctrl+W и Ctrl/Alt+Backspace — стереть слово, Ctrl+U — стереть всё.
 
@@ -20,6 +23,8 @@ pub struct TextField {
     text: String,
     /// Позиция курсора в символах (не байтах).
     cursor: usize,
+    /// Выделено от начала до этого символа (0 — ничего).
+    selected: usize,
 }
 
 impl TextField {
@@ -34,6 +39,30 @@ impl TextField {
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.selected = 0;
+    }
+
+    /// Поле с текстом; выделены первые `select` символов, курсор — после них.
+    pub fn with_text(text: &str, select: usize) -> TextField {
+        let select = select.min(text.chars().count());
+        TextField {
+            text: text.to_string(),
+            cursor: select,
+            selected: select,
+        }
+    }
+
+    /// Выделенный текст (от начала).
+    pub fn selection(&self) -> &str {
+        &self.text[..self.byte_index(self.selected)]
+    }
+
+    /// Стереть выделенное (курсор — на его место).
+    fn delete_selection(&mut self) {
+        let end = self.byte_index(self.selected);
+        self.text.replace_range(..end, "");
+        self.cursor = 0;
+        self.selected = 0;
     }
 
     /// Текст до курсора — чтобы узнать, где рисовать курсор.
@@ -42,6 +71,24 @@ impl TextField {
     }
 
     pub fn key(&mut self, k: KeyPress) -> Edit {
+        if self.selected > 0 {
+            match k.key {
+                Key::BackSpace | Key::Delete => {
+                    self.delete_selection();
+                    return Edit::Changed;
+                }
+                Key::Char(_) if !k.ctrl && !k.alt && !k.logo => self.delete_selection(),
+                // Как в полях Mac: стрелка влево — в начало выделения,
+                // вправо — в его конец; Home/End — как обычно.
+                Key::Left | Key::Right => {
+                    self.cursor = if k.key == Key::Left { 0 } else { self.selected };
+                    self.selected = 0;
+                    return Edit::Moved;
+                }
+                Key::Home | Key::End => self.selected = 0,
+                _ => {}
+            }
+        }
         let len = self.text.chars().count();
         match k.key {
             Key::Char('u') if k.ctrl => {
@@ -157,6 +204,25 @@ mod tests {
         press(&mut f, "abc");
         f.key(with(Key::Char('u'), true, false));
         assert!(f.is_empty());
+    }
+
+    #[test]
+    fn selection_is_replaced_by_typing() {
+        // «Новая папка» выделена целиком — набор заменяет её.
+        let mut f = TextField::with_text("Новая папка", 11);
+        assert_eq!(f.selection(), "Новая папка");
+        press(&mut f, "Фото");
+        assert_eq!(f.text(), "Фото");
+        // Выделено имя без расширения: Backspace стирает только его.
+        let mut f = TextField::with_text("отчёт.pdf", 5);
+        f.key(KeyPress::plain(Key::BackSpace));
+        assert_eq!((f.text(), f.before_cursor()), (".pdf", ""));
+        // Стрелка снимает выделение, текст цел.
+        let mut f = TextField::with_text("отчёт.pdf", 5);
+        f.key(KeyPress::plain(Key::Right));
+        assert_eq!(f.selection(), "");
+        press(&mut f, "2");
+        assert_eq!(f.text(), "отчёт2.pdf");
     }
 
     #[test]

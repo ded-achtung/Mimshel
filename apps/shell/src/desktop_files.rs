@@ -1,7 +1,7 @@
 //! Файлы на рабочем столе: слежение за папкой «Рабочий стол» (inotify —
 //! ядро само сообщает о переменах) и действия со значками: открыть,
-//! переименовать, в корзину, новая папка, вставить из буфера обмена,
-//! терминал в этой папке. Всё, что может ждать (окна zenity, копирование),
+//! переименовать, в корзину, новая папка, переложить в папку, вставить из
+//! буфера обмена, терминал в этой папке; места значков в файле. Всё, что может ждать (окна zenity, копирование),
 //! — в отдельных потоках; перемены в папке служба увидит через слежение.
 
 use std::path::{Path, PathBuf};
@@ -10,7 +10,10 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use inotify::{Inotify, WatchMask};
+use std::collections::HashMap;
+
 use shell_desktop::files::{Item, Kind, MimeDb, free_name, scan};
+use shell_desktop::icon_grid::Slot;
 
 use crate::desktop_ui::DesktopMsg;
 use crate::ui::Msg;
@@ -120,53 +123,77 @@ pub fn new_folder(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Переименовать: окно с новым именем (zenity). Выбранное имя — сообщением
-/// `Select`, чтобы выделение перешло на переименованный файл.
-pub fn rename(item: &Item, tx: Sender<Msg>) {
-    let path = item.path.clone();
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+/// Переименовать файл в той же папке. Ошибка — словами для окна.
+pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
+    if new.contains('/') {
+        return Err("В имени не может быть знака «/».".into());
+    }
+    let dir = path.parent().ok_or("нет папки")?;
+    let target = dir.join(new);
+    if target.exists() {
+        return Err(format!("«{new}» уже есть на рабочем столе."));
+    }
+    std::fs::rename(path, &target).map_err(|e| format!("Не удалось переименовать: {e}"))?;
+    Ok(target)
+}
+
+/// Переложить файл в папку (перетащили значок на папку). Имя там занято —
+/// «имя 2».
+pub fn move_into(path: PathBuf, folder: PathBuf) {
     std::thread::spawn(move || {
-        let out = Command::new("zenity")
-            .args([
-                "--entry",
-                "--title=Переименовать",
-                "--text=Новое имя:",
-                &format!("--entry-text={name}"),
-            ])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        let Some(new) = out
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && *s != name)
-        else {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             return;
         };
-        if new.contains('/') {
-            error("В имени не может быть знака «/».");
-            return;
-        }
-        let Some(dir) = path.parent() else {
-            return;
-        };
-        let target = dir.join(&new);
-        if target.exists() {
-            error(&format!("«{new}» уже есть на рабочем столе."));
-            return;
-        }
-        match std::fs::rename(&path, &target) {
-            Ok(()) => {
-                let _ = tx.send(Msg::Desktop(Box::new(DesktopMsg::Select(target))));
-            }
-            Err(e) => error(&format!("Не удалось переименовать: {e}")),
+        let dest = free_name(&folder, &name);
+        let ok = Command::new("mv")
+            .arg("--")
+            .arg(&path)
+            .arg(&dest)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            error(&format!("Не удалось переложить «{name}» в папку."));
         }
     });
+}
+
+/// Где запомнены места значков: строки «столбец строка<Tab>имя файла».
+fn places_file() -> PathBuf {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_default();
+    state.join("shell/desktop-icons")
+}
+
+pub fn load_places() -> HashMap<String, Slot> {
+    std::fs::read_to_string(places_file())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (pos, name) = l.split_once('\t')?;
+            let (c, r) = pos.split_once(' ')?;
+            Some((name.to_string(), (c.parse().ok()?, r.parse().ok()?)))
+        })
+        .collect()
+}
+
+pub fn save_places(places: &HashMap<String, Slot>) {
+    let mut lines: Vec<String> = places
+        .iter()
+        .map(|(name, (c, r))| format!("{c} {r}\t{name}"))
+        .collect();
+    lines.sort();
+    let path = places_file();
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, lines.join("\n") + "\n")?;
+        std::fs::rename(&tmp, &path)
+    };
+    if let Err(e) = write() {
+        eprintln!("Стол: места значков не сохранены: {e}");
+    }
 }
 
 /// Вставить файлы из буфера обмена (скопированные или вырезанные в
@@ -228,7 +255,7 @@ pub fn terminal(terminal: &[String], dir: &Path) {
 }
 
 /// Сообщение об ошибке (окно zenity).
-fn error(text: &str) {
+pub fn error(text: &str) {
     spawn(
         &[
             "zenity",

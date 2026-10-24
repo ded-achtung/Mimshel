@@ -3,6 +3,7 @@
 
 pub mod files;
 pub mod icon_grid;
+pub mod rename_box;
 pub mod wallpaper_picker;
 
 pub use wallpaper_picker::{PickerResult, Tile, WallpaperPicker};

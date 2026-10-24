@@ -11,7 +11,6 @@
 
 mod apps_panel;
 mod common;
-mod field;
 mod search_panel;
 
 pub use apps_panel::{AppsPanel, Grid, backdrop};

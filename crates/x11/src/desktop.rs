@@ -30,7 +30,8 @@ impl Display {
     /// Создаёт окно рабочего стола (пока скрытое).
     pub fn create_desktop(&self) -> Result<DesktopWindow> {
         let window = self.conn.generate_id()?;
-        let events = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE;
+        // Движение с нажатой кнопкой — для перетаскивания значков.
+        let events = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::BUTTON_MOTION;
         self.conn.create_window(
             32,
             window,

@@ -9,7 +9,7 @@ use shell_core::input::{Key, KeyPress};
 pub use draw::{BAR_H, LIST_PAD, MAX_ROWS, ROW_H, WIDTH};
 
 use crate::Action;
-use crate::field::{Edit, TextField};
+use shell_widgets::field::{Edit, TextField};
 
 pub struct SearchPanel {
     apps: Vec<App>,

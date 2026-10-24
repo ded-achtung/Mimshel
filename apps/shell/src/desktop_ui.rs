@@ -2,9 +2,11 @@
 //! каждом мониторе и значками файлов из папки «Рабочий стол», меню по правому
 //! щелчку и окно «Обои».
 //!
-//! - значки: щелчок выделяет, двойной открывает; меню на значке — «Открыть»,
-//!   «Переименовать…», «В корзину»; на пустом месте — «Новая папка»,
-//!   «Вставить», «Открыть терминал здесь», «Изменить обои…»;
+//! - значки: щелчок выделяет, двойной открывает, перетаскивание — на другое
+//!   место (запоминается) или в папку; меню на значке — «Открыть»,
+//!   «Переименовать», «В корзину»; на пустом месте — «Новая папка» (там, где
+//!   щёлкнули, и сразу ввод имени), «Вставить», «Упорядочить», «Открыть
+//!   терминал здесь», «Изменить обои…»; переименование — полем прямо на столе;
 //! - обои — в `desktop_wallpaper`, действия с файлами — в `desktop_files`.
 //!
 //! Картинка стола — обои со значками — лежит на X-сервере фоном окна. Новые
@@ -16,8 +18,9 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use shell_core::config::Config;
-use shell_desktop::files::Item;
+use shell_desktop::files::{Item, Kind};
 use shell_desktop::icon_grid::{self, IconGrid};
+use shell_desktop::rename_box::{RenameBox, RenameResult};
 use shell_desktop::{PickerResult, WallpaperPicker, wallpaper_picker};
 use shell_icons::Icons;
 use shell_render::Canvas;
@@ -36,6 +39,7 @@ pub enum DesktopCommand {
     // На пустом месте.
     NewFolder,
     Paste,
+    Arrange,
     Terminal,
     ChangeWallpaper,
     // На значке.
@@ -55,10 +59,19 @@ pub enum DesktopMsg {
     Picked(Option<String>),
     /// Список файлов на столе (сразу и после каждой перемены в папке).
     Files(Vec<Item>),
-    /// Выделить этот файл, когда он появится (переименовали, создали).
-    Select(PathBuf),
 }
 
+/// Нажали на значок: где, и тащат ли его уже (сдвинули дальше [`DRAG_START`]).
+struct Press {
+    index: usize,
+    at: (f32, f32),
+    /// Точка нажатия относительно угла клетки — значок едет за мышью так же.
+    grab: (f32, f32),
+    dragging: bool,
+}
+
+/// Сколько точек сдвинуть мышь с нажатой кнопкой, чтобы начать тащить.
+const DRAG_START: f32 = 5.0;
 /// Два щелчка по одному значку быстрее этого — «открыть».
 const DOUBLE_CLICK: Duration = Duration::from_millis(450);
 /// Отступы области значков: справа, под строкой меню и над доком.
@@ -84,6 +97,20 @@ pub struct DesktopUi {
     pending_select: Option<PathBuf>,
     /// Последний щелчок по значку — для двойного щелчка.
     last_click: Option<(usize, Instant)>,
+    /// Нажатие на значок и перетаскивание: окно с картинкой значка, где
+    /// сейчас указатель, перерисовать ли картинку.
+    press: Option<Press>,
+    drag_popup: Popup,
+    drag_at: (f32, f32),
+    drag_dirty: bool,
+    /// Переименование полем на столе; `rename_start` — начать, когда значок
+    /// с этим путём появится (новая папка).
+    rename_popup: Popup,
+    rename: Option<RenameBox>,
+    rename_dirty: bool,
+    rename_start: Option<PathBuf>,
+    /// Где щёлкнули правой кнопкой — там и «Новая папка».
+    menu_at: (f32, f32),
     /// Перерисовать: весь стол или клетки этих значков.
     full_dirty: bool,
     cells_dirty: Vec<usize>,
@@ -117,6 +144,15 @@ impl DesktopUi {
             dir: dir.clone(),
             pending_select: None,
             last_click: None,
+            press: None,
+            drag_popup: d.create_popup("desktop-drag")?,
+            drag_at: (0.0, 0.0),
+            drag_dirty: false,
+            rename_popup: d.create_popup("desktop-rename")?,
+            rename: None,
+            rename_dirty: false,
+            rename_start: None,
+            menu_at: (0.0, 0.0),
             full_dirty: false,
             cells_dirty: Vec::new(),
             terminal: config.terminal.clone(),
@@ -126,6 +162,7 @@ impl DesktopUi {
             painter: painter(tx.clone()),
             tx: tx.clone(),
         };
+        ui.grid.set_saved(desktop_files::load_places());
         ui.place_icons(d);
         ui.load_wallpaper(d);
         desktop_files::watch(dir, tx);
@@ -200,22 +237,18 @@ impl DesktopUi {
                 self.last_click = None;
                 self.full_dirty = true;
             }
-            DesktopMsg::Select(path) => {
-                let changed = self.grid.select_path(&path);
-                if self.grid.selected().is_none_or(|i| i.path != path) {
-                    self.pending_select = Some(path);
-                }
-                self.cells_dirty.extend(changed);
-            }
         }
         Ok(())
     }
 
     pub fn wants(&self, d: &Display, ev: &Event) -> bool {
         let own = |w: u32| {
-            w == self.window.id() || w == self.menu_popup.id() || w == self.picker_popup.id()
+            w == self.window.id()
+                || w == self.menu_popup.id()
+                || w == self.picker_popup.id()
+                || w == self.rename_popup.id()
         };
-        let open = self.menu.is_some() || self.picker.is_some();
+        let open = self.menu.is_some() || self.picker.is_some() || self.rename.is_some();
         match *ev {
             Event::Button { window, .. }
             | Event::Release { window, .. }
@@ -237,25 +270,39 @@ impl DesktopUi {
             self.load_wallpaper(d);
             return Ok(());
         }
+        if self.rename.is_some() {
+            return self.rename_event(d, ev);
+        }
         if self.picker.is_some() {
             return self.picker_event(d, ev);
         }
         if self.menu.is_some() {
             return self.menu_event(d, ev);
         }
-        let Event::Button {
-            window,
-            x,
-            y,
-            button,
-        } = ev
-        else {
-            return Ok(());
-        };
-        if window != self.window.id() {
-            return Ok(());
+        match ev {
+            Event::Motion { window, x, y } if window == self.window.id() => {
+                self.drag_motion(f32::from(x), f32::from(y));
+                Ok(())
+            }
+            Event::Release {
+                window,
+                x,
+                y,
+                button: 1,
+            } if window == self.window.id() => self.drop(d, f32::from(x), f32::from(y)),
+            Event::Button {
+                window,
+                x,
+                y,
+                button,
+            } if window == self.window.id() => self.button(d, fonts, x, y, button),
+            _ => Ok(()),
         }
-        let hit = self.grid.item_at(f32::from(x), f32::from(y));
+    }
+
+    fn button(&mut self, d: &Display, fonts: &mut Fonts, x: i16, y: i16, button: u8) -> Result<()> {
+        let (fx, fy) = (f32::from(x), f32::from(y));
+        let hit = self.grid.item_at(fx, fy);
         let changed = self.grid.select(hit);
         self.cells_dirty.extend(changed);
         match button {
@@ -267,15 +314,125 @@ impl DesktopUi {
                         .is_some_and(|(i, t)| Some(i) == hit && now - t < DOUBLE_CLICK);
                 if double {
                     self.last_click = None;
+                    self.press = None;
                     if let Some(item) = self.grid.selected() {
                         desktop_files::open(item);
                     }
                 } else {
                     self.last_click = hit.map(|i| (i, now));
+                    self.press = hit.map(|index| {
+                        let (cx, cy, _, _) = self.grid.cell(index);
+                        Press {
+                            index,
+                            at: (fx, fy),
+                            grab: (fx - cx, fy - cy),
+                            dragging: false,
+                        }
+                    });
                 }
             }
-            3 => self.open_menu(d, fonts, x, y, hit.is_some())?,
+            3 => {
+                self.menu_at = (fx, fy);
+                self.open_menu(d, fonts, x, y, hit.is_some())?;
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// Мышь с нажатой кнопкой: сдвинули значок достаточно — тащим.
+    fn drag_motion(&mut self, x: f32, y: f32) {
+        let Some(press) = &mut self.press else {
+            return;
+        };
+        if !press.dragging {
+            let (dx, dy) = (x - press.at.0, y - press.at.1);
+            if dx * dx + dy * dy < DRAG_START * DRAG_START {
+                return;
+            }
+            press.dragging = true;
+            self.last_click = None;
+        }
+        self.drag_at = (x, y);
+        self.drag_dirty = true;
+    }
+
+    /// Отпустили: на папке — переложить в неё, иначе — значок в клетку, куда
+    /// его принесли (занята — в ближайшую свободную).
+    fn drop(&mut self, d: &Display, x: f32, y: f32) -> Result<()> {
+        let Some(press) = self.press.take() else {
+            return Ok(());
+        };
+        if !press.dragging {
+            return Ok(());
+        }
+        self.drag_popup.hide_passive(d)?;
+        let target = self
+            .grid
+            .item_at(x, y)
+            .filter(|&t| t != press.index)
+            .and_then(|t| self.grid.items().get(t))
+            .filter(|t| t.kind == Kind::Folder)
+            .map(|t| t.path.clone());
+        if let (Some(folder), Some(item)) = (target, self.grid.items().get(press.index)) {
+            desktop_files::move_into(item.path.clone(), folder);
+            return Ok(());
+        }
+        // Клетка — по середине значка, который несли.
+        let cx = x - press.grab.0 + icon_grid::CELL_W / 2.0;
+        let cy = y - press.grab.1 + icon_grid::CELL_H / 2.0;
+        let slot = self.grid.slot_at(cx, cy);
+        if std::env::var_os("SHELL_DEBUG_DESKTOP").is_some() {
+            eprintln!("Стол: отпустили в ({x}, {y}), захват {:?}, клетка {slot:?}", press.grab);
+        }
+        self.grid.move_item(press.index, slot);
+        desktop_files::save_places(self.grid.saved());
+        self.full_dirty = true;
+        Ok(())
+    }
+
+    /// Начать переименование значка с этим путём (поле — в `flush`).
+    fn start_rename(&mut self, path: PathBuf) {
+        self.rename_start = Some(path);
+    }
+
+    fn rename_event(&mut self, d: &Display, ev: Event) -> Result<()> {
+        let Some(rename) = &mut self.rename else {
+            return Ok(());
+        };
+        let popup = self.rename_popup.id();
+        let result = match ev {
+            Event::Key(k) => rename.key(k),
+            // Щелчок мимо поля — сохранить, как на Mac.
+            Event::Button { window, .. } if window != popup => rename.commit(),
+            Event::Expose { window } if window == popup => RenameResult::Redraw,
+            _ => RenameResult::Nothing,
+        };
+        match result {
+            RenameResult::Nothing => {}
+            RenameResult::Redraw => self.rename_dirty = true,
+            RenameResult::Cancel => self.close_rename(d)?,
+            RenameResult::Commit(name) => {
+                let path = rename.path.clone();
+                self.close_rename(d)?;
+                match desktop_files::rename(&path, &name) {
+                    Ok(target) => {
+                        if let Some(old) = path.file_name() {
+                            self.grid.rename_saved(&old.to_string_lossy(), &name);
+                            desktop_files::save_places(self.grid.saved());
+                        }
+                        self.pending_select = Some(target);
+                    }
+                    Err(e) => desktop_files::error(&e),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn close_rename(&mut self, d: &Display) -> Result<()> {
+        if self.rename.take().is_some() {
+            self.rename_popup.hide(d)?;
         }
         Ok(())
     }
@@ -301,13 +458,14 @@ impl DesktopUi {
         let entries = if on_icon {
             vec![
                 entry("Открыть", DesktopCommand::Open, false),
-                entry("Переименовать…", DesktopCommand::Rename, true),
+                entry("Переименовать", DesktopCommand::Rename, true),
                 entry("В корзину", DesktopCommand::Trash, true),
             ]
         } else {
             vec![
                 entry("Новая папка", DesktopCommand::NewFolder, false),
                 entry("Вставить", DesktopCommand::Paste, false),
+                entry("Упорядочить", DesktopCommand::Arrange, true),
                 entry("Открыть терминал здесь", DesktopCommand::Terminal, true),
                 entry("Изменить обои…", DesktopCommand::ChangeWallpaper, true),
             ]
@@ -363,11 +521,25 @@ impl DesktopUi {
         let item = self.grid.selected().cloned();
         match command {
             DesktopCommand::NewFolder => {
+                // Там, где щёлкнули (занято — рядом), и сразу ввод имени.
+                let slot = self
+                    .grid
+                    .free_slot_near(self.grid.slot_at(self.menu_at.0, self.menu_at.1), None);
                 if let Some(path) = desktop_files::new_folder(&self.dir) {
-                    self.pending_select = Some(path);
+                    if let Some(name) = path.file_name() {
+                        self.grid.place_name(&name.to_string_lossy(), slot);
+                        desktop_files::save_places(self.grid.saved());
+                    }
+                    self.pending_select = Some(path.clone());
+                    self.start_rename(path);
                 }
             }
             DesktopCommand::Paste => desktop_files::paste(self.dir.clone()),
+            DesktopCommand::Arrange => {
+                self.grid.arrange();
+                desktop_files::save_places(self.grid.saved());
+                self.full_dirty = true;
+            }
             DesktopCommand::Terminal => desktop_files::terminal(&self.terminal, &self.dir),
             DesktopCommand::ChangeWallpaper => self.open_picker(d)?,
             DesktopCommand::Open => {
@@ -377,7 +549,7 @@ impl DesktopUi {
             }
             DesktopCommand::Rename => {
                 if let Some(item) = &item {
-                    desktop_files::rename(item, self.tx.clone());
+                    self.start_rename(item.path.clone());
                 }
             }
             DesktopCommand::Trash => {
@@ -489,6 +661,7 @@ impl DesktopUi {
     /// Закрыть меню и окно «Обои» (например, перед открытием «Поиска»).
     pub fn close_popups(&mut self, d: &Display) -> Result<()> {
         self.close_menu(d)?;
+        self.close_rename(d)?;
         self.close_picker(d)
     }
 
@@ -505,6 +678,8 @@ impl DesktopUi {
                 self.picker_popup.present(d, &picker.render(fonts))?;
             }
         }
+        self.flush_rename(d, fonts)?;
+        self.flush_drag(d, fonts, icons)?;
         if self.full_dirty {
             self.full_dirty = false;
             self.cells_dirty.clear();
@@ -518,6 +693,88 @@ impl DesktopUi {
             }
         }
         Ok(())
+    }
+
+    /// Поле переименования: открыть (когда значок появился) или перерисовать.
+    fn flush_rename(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
+        if let Some(path) = self.rename_start.take() {
+            match self.grid.items().iter().position(|i| i.path == path) {
+                Some(i) => {
+                    let is_dir = self.grid.items()[i].kind == Kind::Folder;
+                    self.close_menu(d)?;
+                    self.rename = Some(RenameBox::new(path, is_dir));
+                    self.rename_dirty = true;
+                    self.place_rename(d, fonts, i)?;
+                }
+                // Ещё не появился в списке — подождём.
+                None => self.rename_start = Some(path),
+            }
+        }
+        if self.rename_dirty {
+            self.rename_dirty = false;
+            if let Some(rename) = &self.rename {
+                // Ширина поля растёт с текстом.
+                let (w, h) = rename.size(fonts);
+                if let Some(i) = self.grid.items().iter().position(|i| i.path == rename.path) {
+                    let (x, y) = self.rename_pos(i, w);
+                    self.rename_popup
+                        .set_geometry(d, x, y, w as u16, h as u16)?;
+                }
+                self.rename_popup.present(d, &rename.render(fonts))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Где поле переименования: по середине клетки, на месте подписи.
+    fn rename_pos(&self, i: usize, w: u32) -> (i16, i16) {
+        let (lx, ly, lw, _) = self.grid.label_rect(i);
+        (
+            (lx + (lw - w as f32) / 2.0).round() as i16,
+            (ly - 3.0).round() as i16,
+        )
+    }
+
+    fn place_rename(&mut self, d: &Display, fonts: &mut Fonts, i: usize) -> Result<()> {
+        let Some(rename) = &self.rename else {
+            return Ok(());
+        };
+        let (w, h) = rename.size(fonts);
+        let (x, y) = self.rename_pos(i, w);
+        // Поле забирает клавиатуру и мышь: щелчок мимо — сохранить.
+        self.rename_popup.show(d, x, y, w as u16, h as u16)
+    }
+
+    /// Картинка значка, который тащат, — за указателем.
+    fn flush_drag(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        if !self.drag_dirty {
+            return Ok(());
+        }
+        self.drag_dirty = false;
+        let Some(press) = &self.press else {
+            return Ok(());
+        };
+        let i = press.index;
+        let Some(item) = self.grid.items().get(i) else {
+            return Ok(());
+        };
+        let (cx, cy, cw, ch) = self.grid.cell(i);
+        let mut pm = Canvas::new(cw as u32, ch as u32).expect("размер не нулевой");
+        let icon = item_icon(icons, item);
+        self.grid.draw(&mut pm, (cx, cy), i, icon.as_ref(), fonts);
+        // Полупрозрачная, как на Mac.
+        for px in pm.pixmap_mut().data_mut() {
+            *px = (u16::from(*px) * 3 / 4) as u8;
+        }
+        let (x, y) = (self.drag_at.0 - press.grab.0, self.drag_at.1 - press.grab.1);
+        self.drag_popup.show_passive(
+            d,
+            x.round() as i16,
+            y.round() as i16,
+            cw as u16,
+            ch as u16,
+        )?;
+        self.drag_popup.present(d, &pm)
     }
 
     /// Весь стол: обои и все значки — новой картинкой-фоном.

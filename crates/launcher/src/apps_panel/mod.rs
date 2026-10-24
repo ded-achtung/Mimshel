@@ -16,7 +16,7 @@ mod draw;
 pub use draw::backdrop;
 
 use crate::Action;
-use crate::field::{Edit, TextField};
+use shell_widgets::field::{Edit, TextField};
 
 /// Размер сетки (из настроек).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

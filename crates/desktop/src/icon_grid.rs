@@ -2,6 +2,7 @@
 //! значок рисуется. Как на Mac — колонками от правого верхнего угла: сверху
 //! вниз, потом следующая колонка левее.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use shell_render::Canvas;
@@ -38,8 +39,16 @@ const LABEL_SELECTED: [u8; 4] = [0x0a, 0x64, 0xd6, 0xff];
 /// Прямоугольник в точках: (x, y, ширина, высота).
 pub type Rect = (f32, f32, f32, f32);
 
+/// Клетка сетки: (столбец, считая от правого края, строка сверху).
+pub type Slot = (u32, u32);
+
 pub struct IconGrid {
     items: Vec<Item>,
+    /// Клетка каждого значка (по порядку `items`).
+    places: Vec<Slot>,
+    /// Запомненные клетки по имени файла: куда значок перетащили или где
+    /// создали папку. У остальных — первая свободная клетка.
+    saved: HashMap<String, Slot>,
     /// Где можно ставить значки (без строки меню и дока).
     area: Rect,
     selected: Option<usize>,
@@ -49,6 +58,8 @@ impl IconGrid {
     pub fn new(area: Rect) -> IconGrid {
         IconGrid {
             items: Vec::new(),
+            places: Vec::new(),
+            saved: HashMap::new(),
             area,
             selected: None,
         }
@@ -62,15 +73,35 @@ impl IconGrid {
         self.selected.and_then(|i| self.items.get(i))
     }
 
-    /// Новый список (папка изменилась). Выделение остаётся на том же файле.
+    pub fn selected_index(&self) -> Option<usize> {
+        self.selected
+    }
+
+    /// Запомненные клетки (сохранить в файл).
+    pub fn saved(&self) -> &HashMap<String, Slot> {
+        &self.saved
+    }
+
+    /// Клетки, прочитанные из файла.
+    pub fn set_saved(&mut self, saved: HashMap<String, Slot>) {
+        self.saved = saved;
+        self.layout();
+    }
+
+    /// Новый список (папка изменилась). Выделение остаётся на том же файле;
+    /// клетки пропавших файлов забываются.
     pub fn set_items(&mut self, items: Vec<Item>) {
         let keep: Option<PathBuf> = self.selected().map(|i| i.path.clone());
         self.items = items;
+        let names: Vec<String> = self.items.iter().map(file_name).collect();
+        self.saved.retain(|name, _| names.contains(name));
         self.selected = keep.and_then(|p| self.items.iter().position(|i| i.path == p));
+        self.layout();
     }
 
     pub fn set_area(&mut self, area: Rect) {
         self.area = area;
+        self.layout();
     }
 
     /// Выделить значок с этим путём (например, только что созданную папку).
@@ -79,22 +110,123 @@ impl IconGrid {
         self.select(i)
     }
 
-    /// Строк в колонке.
-    fn rows(&self) -> usize {
-        ((self.area.3 / CELL_H) as usize).max(1)
+    /// Строк в колонке и колонок на экране.
+    fn rows(&self) -> u32 {
+        ((self.area.3 / CELL_H) as u32).max(1)
+    }
+
+    fn columns(&self) -> u32 {
+        ((self.area.2 / CELL_W) as u32).max(1)
+    }
+
+    /// Расставить: сначала значки с запомненной клеткой (если она есть на
+    /// экране и не занята), остальные — в свободные клетки колонками справа.
+    fn layout(&mut self) {
+        let (rows, cols) = (self.rows(), self.columns());
+        let mut taken: Vec<Slot> = Vec::new();
+        let mut places: Vec<Option<Slot>> = self
+            .items
+            .iter()
+            .map(|item| {
+                let slot = *self.saved.get(&file_name(item))?;
+                (slot.0 < cols && slot.1 < rows && !taken.contains(&slot)).then(|| {
+                    taken.push(slot);
+                    slot
+                })
+            })
+            .collect();
+        let mut free = (0..u32::MAX)
+            .map(|n| (n / rows, n % rows))
+            .filter(|s| !taken.contains(s));
+        for place in places.iter_mut().filter(|p| p.is_none()) {
+            *place = free.next();
+        }
+        self.places = places.into_iter().map(|p| p.unwrap_or((0, 0))).collect();
+    }
+
+    /// Прямоугольник клетки.
+    pub fn slot_rect(&self, (col, row): Slot) -> Rect {
+        let (ax, ay, aw, _) = self.area;
+        (
+            ax + aw - (col as f32 + 1.0) * CELL_W,
+            ay + row as f32 * CELL_H,
+            CELL_W,
+            CELL_H,
+        )
+    }
+
+    /// Клетка под точкой (ближайшая на экране).
+    pub fn slot_at(&self, x: f32, y: f32) -> Slot {
+        let (ax, ay, aw, _) = self.area;
+        let col = ((ax + aw - x) / CELL_W).floor().max(0.0) as u32;
+        let row = ((y - ay) / CELL_H).floor().max(0.0) as u32;
+        (col.min(self.columns() - 1), row.min(self.rows() - 1))
+    }
+
+    /// Ближайшая к `want` клетка, где нет других значков (`except` — этот
+    /// значок не считается: его и двигаем).
+    pub fn free_slot_near(&self, want: Slot, except: Option<usize>) -> Slot {
+        let busy = |s: Slot| {
+            self.places
+                .iter()
+                .enumerate()
+                .any(|(i, p)| *p == s && Some(i) != except)
+        };
+        let (rows, cols) = (self.rows(), self.columns());
+        let dist = |s: Slot| {
+            let dc = i64::from(s.0) - i64::from(want.0);
+            let dr = i64::from(s.1) - i64::from(want.1);
+            dc * dc + dr * dr
+        };
+        (0..cols)
+            .flat_map(|c| (0..rows).map(move |r| (c, r)))
+            .filter(|&s| !busy(s))
+            .min_by_key(|&s| dist(s))
+            .unwrap_or(want)
+    }
+
+    /// Запомнить клетку для файла с этим именем (значок появится там).
+    pub fn place_name(&mut self, name: &str, slot: Slot) {
+        self.saved.insert(name.to_string(), slot);
+        self.layout();
+    }
+
+    /// Перетащили значок `i` в клетку `slot` (занята — в ближайшую свободную).
+    pub fn move_item(&mut self, i: usize, slot: Slot) {
+        let Some(item) = self.items.get(i) else {
+            return;
+        };
+        let slot = self.free_slot_near(slot, Some(i));
+        self.saved.insert(file_name(item), slot);
+        self.layout();
+    }
+
+    /// Файл переименовали — клетка остаётся за ним.
+    pub fn rename_saved(&mut self, old: &str, new: &str) {
+        if let Some(slot) = self.saved.remove(old) {
+            self.saved.insert(new.to_string(), slot);
+        } else if let Some(i) = self.items.iter().position(|it| file_name(it) == old) {
+            // Значок стоял в клетке по порядку — запомнить её, чтобы новое
+            // имя (другое место по алфавиту) не сдвинуло значок.
+            self.saved.insert(new.to_string(), self.places[i]);
+        }
+    }
+
+    /// «Упорядочить»: забыть все клетки — значки встают по порядку справа.
+    pub fn arrange(&mut self) {
+        self.saved.clear();
+        self.layout();
     }
 
     /// Клетка значка `i`.
     pub fn cell(&self, i: usize) -> Rect {
-        let rows = self.rows();
-        let (col, row) = ((i / rows) as f32, (i % rows) as f32);
-        let (ax, ay, aw, _) = self.area;
-        (
-            ax + aw - (col + 1.0) * CELL_W,
-            ay + row * CELL_H,
-            CELL_W,
-            CELL_H,
-        )
+        self.slot_rect(self.places.get(i).copied().unwrap_or((0, 0)))
+    }
+
+    /// Где подпись значка `i` (для поля переименования).
+    pub fn label_rect(&self, i: usize) -> Rect {
+        let (cx, cy, cw, _) = self.cell(i);
+        (cx, cy + LABEL_TOP, cw, LABEL.line_height())
     }
 
     /// Значок под точкой: картинка или подпись (не вся клетка — между
@@ -182,6 +314,14 @@ impl IconGrid {
     }
 }
 
+/// Имя файла значка — по нему запоминается клетка.
+fn file_name(item: &Item) -> String {
+    item.path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// Подпись в две строки: первая — сколько влезет (по словам, а длинное
 /// слово — по буквам), вторая — остальное, с «…», если не влезло.
 fn label_lines(fonts: &mut Fonts, text: &str) -> Vec<String> {
@@ -238,6 +378,35 @@ mod tests {
         let (x, y, w, _) = g.cell(3);
         assert_eq!(g.item_at(x + w / 2.0, y + 30.0), Some(3));
         assert_eq!(g.item_at(x + 2.0, y + 2.0), None, "угол клетки — это стол");
+    }
+
+    #[test]
+    fn saved_places_moves_and_arrange() {
+        let mut g = IconGrid::new((0.0, 0.0, 4.0 * CELL_W, 3.0 * CELL_H));
+        g.set_items(vec![item("а"), item("б"), item("в")]);
+        assert_eq!(g.cell(1), g.slot_rect((0, 1)), "по порядку справа");
+        // Перетащили «б» в третью колонку от края.
+        g.move_item(1, (2, 0));
+        assert_eq!(g.cell(1), g.slot_rect((2, 0)));
+        assert_eq!(g.cell(2), g.slot_rect((0, 1)), "«в» заняла место «б»");
+        // На занятое место — в ближайшую свободную клетку.
+        g.move_item(2, (2, 0));
+        assert_ne!(g.cell(2), g.slot_rect((2, 0)));
+        assert_eq!(g.saved().len(), 2);
+        // Новую папку создают в клетке под щелчком — значок появится там.
+        let (x, y, _, _) = g.slot_rect((3, 2));
+        let slot = g.slot_at(x + 10.0, y + 10.0);
+        assert_eq!(slot, (3, 2));
+        g.place_name("Новая папка", slot);
+        g.set_items(vec![item("а"), item("б"), item("в"), item("Новая папка")]);
+        assert_eq!(g.cell(3), g.slot_rect((3, 2)));
+        // Переименовали — клетка осталась за ним.
+        g.rename_saved("Новая папка", "Фото");
+        g.set_items(vec![item("а"), item("б"), item("в"), item("Фото")]);
+        assert_eq!(g.cell(3), g.slot_rect((3, 2)));
+        g.arrange();
+        assert_eq!(g.cell(3), g.slot_rect((1, 0)), "по порядку");
+        assert!(g.saved().is_empty());
     }
 
     #[test]
