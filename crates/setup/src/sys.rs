@@ -277,14 +277,20 @@ pub fn spawn(args: &[&str]) {
 /// Остановить свои процессы с этим именем и дождаться, пока они выйдут (до 3 с).
 pub fn kill(name: &str) {
     let pattern = format!(r"^(\S*/)?{name}(\s|$)");
-    let _ = command("pkill")
-        .args(["-u", &uid().to_string(), "-f", &pattern])
-        .status();
-    for _ in 0..30 {
-        if !running(name) {
-            return;
+    let uid = uid().to_string();
+    // Не вышла за 3 с — остановить силой: иначе новая служба увидит старую,
+    // решит «уже запущена» и уйдёт, а старая выйдет следом — не останется ни
+    // одной (так пропадали строка меню и док).
+    for signal in ["-TERM", "-KILL"] {
+        let _ = command("pkill")
+            .args([signal, "-u", &uid, "-f", &pattern])
+            .status();
+        for _ in 0..30 {
+            if !running(name) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
