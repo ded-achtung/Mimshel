@@ -242,9 +242,9 @@ impl SelectionRenderer {
 
     /// При окончании выделения очищаем слой перед следующим показом.
     pub fn reset(&mut self, d: &Display) -> Result<()> {
-        let (w, h) = d.screen_pixels();
-        if let Some(all) = Rect::new(0, 0, i32::from(w), i32::from(h)) {
-            self.fill(d, CLEAR, vec![all])?;
+        // Стираем только ранее занятую область, а не весь 4K экран.
+        if let Some(previous) = self.previous {
+            self.fill(d, CLEAR, vec![previous])?;
         }
         d.conn.flush()?;
         self.previous = None;

@@ -139,6 +139,8 @@ pub struct DesktopUi {
     /// Перерисовать: весь стол или клетки этих значков.
     full_dirty: bool,
     cells_dirty: Vec<usize>,
+    /// Старые и новые прямоугольники после переноса значков: фон вокруг них.
+    regions_dirty: Vec<(f32, f32, f32, f32)>,
     terminal: Vec<String>,
     /// Папки открывать своим окном папки (`parts.folders`), а не Thunar.
     folders: bool,
@@ -194,6 +196,7 @@ impl DesktopUi {
             typed_at: Instant::now(),
             full_dirty: false,
             cells_dirty: Vec::new(),
+            regions_dirty: Vec::new(),
             terminal: config.terminal.clone(),
             folders: config.folders,
             menubar_height: config.menubar_height,
@@ -592,9 +595,17 @@ impl DesktopUi {
                 press.grab
             );
         }
+        let old: Vec<_> = (0..self.grid.items().len()).map(|i| self.grid.cell(i)).collect();
         self.grid.move_items(press.index, slot, &moving);
+        // Старые и новые клетки перерисуем поверх исходных обоев;
+        // промежуточный full-screen буфер для каждого перемещения не нужен.
+        for (i, previous) in old.into_iter().enumerate() {
+            let next = self.grid.cell(i);
+            if previous != next {
+                self.regions_dirty.extend([previous, next]);
+            }
+        }
         desktop_files::save_places(self.grid.saved());
-        self.full_dirty = true;
         Ok(())
     }
 
@@ -1070,8 +1081,13 @@ impl DesktopUi {
         if self.full_dirty {
             self.full_dirty = false;
             self.cells_dirty.clear();
+            self.regions_dirty.clear();
             self.draw_all(d, fonts, icons)?;
-        } else if !self.cells_dirty.is_empty() {
+        } else {
+            // Старые клетки нужно очистить даже если значка в них больше нет.
+            for region in std::mem::take(&mut self.regions_dirty) {
+                self.draw_region(d, fonts, icons, region)?;
+            }
             let mut cells = std::mem::take(&mut self.cells_dirty);
             cells.sort_unstable();
             cells.dedup();
@@ -1245,6 +1261,44 @@ impl DesktopUi {
             );
         }
         Ok(())
+    }
+
+    /// Перерисовать часть стола, включая все значки, которые с ней
+    /// пересекаются. Это важно: новые значки могут оказаться в старой клетке.
+    fn draw_region(
+        &self,
+        d: &Display,
+        fonts: &mut Fonts,
+        icons: &mut Icons,
+        (x, y, w, h): (f32, f32, f32, f32),
+    ) -> Result<()> {
+        let Some(wall) = &self.wall else {
+            return Ok(());
+        };
+        let k = d.scale();
+        let rect = IntRect::from_ltrb(
+            (x * k).floor().max(0.0) as i32,
+            (y * k).floor().max(0.0) as i32,
+            ((x + w) * k).ceil().min(wall.width() as f32) as i32,
+            ((y + h) * k).ceil().min(wall.height() as f32) as i32,
+        );
+        let Some(rect) = rect else {
+            return Ok(());
+        };
+        let Some(piece) = wall.clone_rect(rect) else {
+            return Ok(());
+        };
+        let mut canvas = Canvas::from_pixmap(piece, k);
+        let (x0, y0) = (rect.left(), rect.top());
+        let origin = (x0 as f32 / k, y0 as f32 / k);
+        for (i, item) in self.grid.items().iter().enumerate() {
+            let (cx, cy, cw, ch) = self.grid.cell(i);
+            if cx < x + w && x < cx + cw && cy < y + h && y < cy + ch {
+                let icon = item_icon(icons, item);
+                self.grid.draw(&mut canvas, origin, i, icon.as_ref(), fonts);
+            }
+        }
+        self.window.update(d, canvas.pixmap(), x0, y0)
     }
 
     /// Только клетка значка `i`: кусок обоев и значок на нём.
