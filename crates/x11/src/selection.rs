@@ -108,7 +108,9 @@ impl Rect {
 
     /// Непересекающиеся полосы обводки толщиной stroke.
     fn border(self, stroke: i32) -> Vec<Self> {
-        let n = stroke.min((self.x1 - self.x0 + 1) / 2).min((self.y1 - self.y0 + 1) / 2);
+        let n = stroke
+            .min((self.x1 - self.x0 + 1) / 2)
+            .min((self.y1 - self.y0 + 1) / 2);
         [
             Self::new(self.x0, self.y0, self.x1, (self.y0 + n).min(self.y1)),
             Self::new(self.x0, (self.y1 - n).max(self.y0 + n), self.x1, self.y1),
@@ -128,7 +130,10 @@ fn delta(new: &[Rect], old: &[Rect]) -> Vec<Rect> {
     for &r in new {
         let mut pieces = vec![r];
         for &prev in old {
-            pieces = pieces.into_iter().flat_map(|piece| piece.minus(prev)).collect();
+            pieces = pieces
+                .into_iter()
+                .flat_map(|piece| piece.minus(prev))
+                .collect();
         }
         out.extend(pieces);
     }
@@ -167,7 +172,11 @@ impl SelectionRenderer {
             .format;
         // Сначала проверяем InputShape. При ошибке переходим на прежний путь.
         let region = d.conn.generate_id().ok()?;
-        d.conn.xfixes_create_region(region, &[]).ok()?.check().ok()?;
+        d.conn
+            .xfixes_create_region(region, &[])
+            .ok()?
+            .check()
+            .ok()?;
         let pass = d
             .conn
             .xfixes_set_window_shape_region(window, SK::INPUT, 0, 0, region)
@@ -179,8 +188,7 @@ impl SelectionRenderer {
             return None;
         }
         let picture = d.conn.generate_id().ok()?;
-        if d
-            .conn
+        if d.conn
             .render_create_picture(picture, window, format, &CreatePictureAux::default())
             .ok()?
             .check()
@@ -279,9 +287,8 @@ mod tests {
                 };
                 let fills = delta(&new_fill, &old_fill);
                 let edges = delta(&new_edge, &old_edge);
-                let covered = |r: &Rect, x: i32, y: i32| {
-                    r.x0 <= x && x < r.x1 && r.y0 <= y && y < r.y1
-                };
+                let covered =
+                    |r: &Rect, x: i32, y: i32| r.x0 <= x && x < r.x1 && r.y0 <= y && y < r.y1;
                 for y in 0..16 {
                     for x in 0..16 {
                         let mut color = pixel(old, x, y);
@@ -294,7 +301,11 @@ mod tests {
                         if edges.iter().any(|r| covered(r, x, y)) {
                             color = 2;
                         }
-                        assert_eq!(color, pixel(new, x, y), "old={old:?} new={new:?} x={x} y={y}");
+                        assert_eq!(
+                            color,
+                            pixel(new, x, y),
+                            "old={old:?} new={new:?} x={x} y={y}"
+                        );
                     }
                 }
             }
