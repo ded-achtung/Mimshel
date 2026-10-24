@@ -608,6 +608,12 @@ impl DesktopUi {
                 self.regions_dirty.extend([previous, next]);
             }
         }
+        // При большом пакетном перемещении десятки мелких областей
+        // дороже одной полной композиции. Ограничиваем число обновлений.
+        if self.regions_dirty.len() > 16 {
+            self.regions_dirty.clear();
+            self.full_dirty = true;
+        }
         desktop_files::save_places(self.grid.saved());
         Ok(())
     }
