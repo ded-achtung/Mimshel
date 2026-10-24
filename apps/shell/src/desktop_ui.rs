@@ -19,6 +19,7 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use shell_core::config::Config;
+use shell_core::input::latin;
 use shell_desktop::files::{Item, Kind};
 use shell_desktop::icon_grid::{self, Direction, IconGrid};
 use shell_desktop::rename_box::{RenameBox, RenameResult};
@@ -66,8 +67,6 @@ pub enum DesktopMsg {
     Picked(Option<String>),
     /// Список файлов на столе (сразу и после каждой перемены в папке).
     Files(Vec<Item>),
-    /// Завершённый перенос файлов из другой программы — подтвердить XDND.
-    DropFinished { ticket: u64, success: bool },
 }
 
 /// Нажали на значок: где, и тащат ли его уже (сдвинули дальше [`DRAG_START`]).
@@ -141,6 +140,8 @@ pub struct DesktopUi {
     full_dirty: bool,
     cells_dirty: Vec<usize>,
     terminal: Vec<String>,
+    /// Папки открывать своим окном папки (`parts.folders`), а не Thunar.
+    folders: bool,
     menubar_height: u32,
     /// Когда выбрали нынешние обои (для замера в журнале) и сколько прежних
     /// выборов не дождались своих обоев (выбрали другие раньше).
@@ -194,6 +195,7 @@ impl DesktopUi {
             full_dirty: false,
             cells_dirty: Vec::new(),
             terminal: config.terminal.clone(),
+            folders: config.folders,
             menubar_height: config.menubar_height,
             chosen_at: None,
             skipped: 0,
@@ -283,9 +285,6 @@ impl DesktopUi {
                     self.apply(d, &path);
                 }
                 self.open_picker(d)?;
-            }
-            DesktopMsg::DropFinished { ticket, success } => {
-                d.finish_drop(ticket, success);
             }
             DesktopMsg::Files(items) => {
                 self.grid.set_items(items);
@@ -455,7 +454,7 @@ impl DesktopUi {
                     self.last_click = None;
                     self.press = None;
                     for item in self.grid.selected_items() {
-                        desktop_files::open(item);
+                        self.open_item(item);
                     }
                 } else {
                     self.last_click = hit.map(|i| (i, now));
@@ -612,12 +611,10 @@ impl DesktopUi {
     /// значками там, где отпустили (несколько — рядом друг с другом).
     fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, moving: bool, ticket: u64) {
         if paths.is_empty() {
-            let _ = self
-                .tx
-                .send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
-                    ticket,
-                    success: false,
-                })));
+            let _ = self.tx.send(Msg::DropFinished {
+                ticket,
+                success: false,
+            });
             return;
         }
         let folder = self
@@ -708,7 +705,7 @@ impl DesktopUi {
         match k.key {
             Key::Return => {
                 for item in self.grid.selected_items() {
-                    desktop_files::open(item);
+                    self.open_item(item);
                 }
             }
             Key::F2 => {
@@ -906,7 +903,7 @@ impl DesktopUi {
             DesktopCommand::ChangeWallpaper => self.open_picker(d)?,
             DesktopCommand::Open => {
                 for item in self.grid.selected_items() {
-                    desktop_files::open(item);
+                    self.open_item(item);
                 }
             }
             DesktopCommand::Rename => {
@@ -1044,6 +1041,16 @@ impl DesktopUi {
             self.skipped += 1;
         }
         self.load_wallpaper(d);
+    }
+
+    /// Открыть значок: папку — своим окном папки (если оно включено),
+    /// остальное — программой по умолчанию.
+    fn open_item(&self, item: &Item) {
+        if self.folders && item.kind == Kind::Folder {
+            let _ = self.tx.send(Msg::OpenFolder(item.path.clone()));
+        } else {
+            desktop_files::open(item);
+        }
     }
 
     /// Закрыть меню и окно «Обои» (например, перед открытием «Поиска»).
@@ -1279,18 +1286,6 @@ impl DesktopUi {
         );
         self.window.update(d, pm.pixmap(), x0, y0)
     }
-}
-
-/// Буква сочетания по месту на клавиатуре: в русской раскладке Ctrl+Ф —
-/// это Ctrl+A, Ctrl+С — Ctrl+C и так далее (ЙЦУКЕН → QWERTY).
-fn latin(c: char) -> char {
-    const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбю";
-    const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.";
-    let c = c.to_lowercase().next().unwrap_or(c);
-    RU.chars()
-        .position(|r| r == c)
-        .and_then(|i| EN.chars().nth(i))
-        .unwrap_or(c)
 }
 
 /// Рамка выделения: светлая полупрозрачная с краем, как на Mac.

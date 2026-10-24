@@ -53,6 +53,8 @@ pub struct Config {
     pub notify: bool,
     /// Рабочий стол: обои и меню по правому щелчку (иначе xfdesktop).
     pub desktop: bool,
+    /// Окна папок — свой Проводник (иначе Thunar).
+    pub folders: bool,
     pub search_panel: bool,
     pub apps_panel: bool,
     /// Высота строки меню, иконка меню яблока и формат часов (как у `date`) —
@@ -79,6 +81,11 @@ pub const PARTS: &[(&str, &str, &str)] = &[
     ("menubar", "xfce", "строка меню (прежняя — панель Xfce)"),
     ("notify", "xfce", "уведомления (прежние — xfce4-notifyd)"),
     ("desktop", "xfce", "рабочий стол (прежний — xfdesktop)"),
+    (
+        "folders",
+        "thunar",
+        "окна папок — Проводник (прежний — Thunar)",
+    ),
     ("search_panel", "rofi", "окно «Поиск»"),
     ("apps_panel", "rofi", "окно «Программы»"),
 ];
@@ -118,6 +125,7 @@ impl Default for Config {
             clock_format: "%a %-d %b  %H:%M".into(),
             notify: false,
             desktop: false,
+            folders: false,
             lock_placeholder: "Введите пароль".into(),
             lock_idle: 10,
             lock_screen_off: 15,
@@ -198,6 +206,7 @@ impl Config {
             "menubar" => self.menubar,
             "notify" => self.notify,
             "desktop" => self.desktop,
+            "folders" => self.folders,
             "search_panel" => self.search_panel,
             "apps_panel" => self.apps_panel,
             _ => return None,
@@ -210,6 +219,7 @@ impl Config {
             "menubar" => self.menubar = shell,
             "notify" => self.notify = shell,
             "desktop" => self.desktop = shell,
+            "folders" => self.folders = shell,
             "search_panel" => self.search_panel = shell,
             "apps_panel" => self.apps_panel = shell,
             _ => {}
@@ -388,10 +398,12 @@ impl Config {
 # notify — \"shell\" или \"xfce\" (xfce4-notifyd);
 # search_panel (окно «Поиск») и apps_panel (окно «Программы») — \"shell\" или \"rofi\".
 # desktop (рабочий стол: обои, меню по правому щелчку) — \"shell\" или \"xfce\" (xfdesktop).
+# folders (окна папок, Проводник) — \"shell\" или \"thunar\".
 dock = {p_dock}
 menubar = {p_menubar}
 notify = {p_notify}
 desktop = {p_desktop}
+folders = {p_folders}
 search_panel = {p_search}
 apps_panel = {p_apps}
 
@@ -474,6 +486,7 @@ rename = {rename}
             p_menubar = part("menubar"),
             p_notify = part("notify"),
             p_desktop = part("desktop"),
+            p_folders = part("folders"),
             p_search = part("search_panel"),
             p_apps = part("apps_panel"),
         )
@@ -657,6 +670,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
     (
         "parts.desktop",
         "рабочий стол: \"shell\" или \"xfce\" (xfdesktop)",
+    ),
+    (
+        "parts.folders",
+        "окна папок (Проводник): \"shell\" или \"thunar\"",
     ),
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),

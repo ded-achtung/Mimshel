@@ -246,7 +246,7 @@ pub(crate) fn percent_encode(path: &str) -> String {
 }
 
 /// `%D0%9F` → байты UTF-8.
-fn percent_decode(s: &str) -> String {
+pub fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

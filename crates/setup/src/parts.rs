@@ -25,6 +25,7 @@ pub const APPLY_PARTS: &[&str] = &[
     "dock",
     "notify",
     "desktop",
+    "folders",
     "launchers",
     "lock",
     "power",
@@ -45,6 +46,8 @@ const PLANK_DCONF: &str = "/net/launchpad/plank/docks/dock1/";
 /// Launchpad: под ним значок закреплён в доке у тех, кто ставил раньше).
 const APPS_ICON: &str = "pop-cosmic-launcher";
 pub const APPS_DESKTOP: &str = "macos-launchpad";
+/// Ярлык своего Проводника (он же класс его окон).
+const FOLDER_DESKTOP: &str = "shell-folder";
 
 /// Свойство модуля панели Xfce: (имя, тип, значение).
 type Prop<'a> = (&'a str, &'a str, &'a str);
@@ -84,6 +87,9 @@ pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     }
     if want("desktop") {
         plan.desktop();
+    }
+    if want("folders") {
+        plan.folders();
     }
     // Значки — до перезапуска службы: тему она читает при запуске.
     if want("icons") {
@@ -387,6 +393,47 @@ impl Plan<'_> {
         }
         if !running("xfdesktop") {
             self.later(&["xfdesktop"]);
+        }
+    }
+
+    /// Окна папок: свой Проводник (ярлык `shell-folder.desktop` открывает
+    /// папки через службу и стоит программой для папок) или Thunar.
+    fn folders(&mut self) {
+        let file = self
+            .paths
+            .applications
+            .join(format!("{FOLDER_DESKTOP}.desktop"));
+        if self.config.folders {
+            println!("▶ Окна папок — свой Проводник");
+            write(
+                &file,
+                &desktop_entry(
+                    "Проводник",
+                    &format!("{} folder %U", self.paths.shell_bin.display()),
+                    "system-file-manager",
+                    &format!(
+                        "Comment=Папки и файлы\nCategories=System;FileTools;FileManager;\n\
+                         MimeType=inode/directory;\nStartupWMClass={FOLDER_DESKTOP}\n\
+                         {MANAGED_MARK}\n"
+                    ),
+                ),
+            );
+            run(&[
+                "xdg-mime",
+                "default",
+                &format!("{FOLDER_DESKTOP}.desktop"),
+                "inode/directory",
+            ]);
+        } else {
+            println!("▶ Окна папок — Thunar");
+            remove(&file);
+            run(&["xdg-mime", "default", "thunar.desktop", "inode/directory"]);
+        }
+        if crate::sys::which("update-desktop-database").is_some() {
+            run(&[
+                "update-desktop-database",
+                &self.paths.applications.display().to_string(),
+            ]);
         }
     }
 

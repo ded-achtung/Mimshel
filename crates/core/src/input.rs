@@ -48,3 +48,15 @@ impl KeyPress {
         }
     }
 }
+
+/// Буква сочетания по месту на клавиатуре: в русской раскладке Ctrl+Ф —
+/// это Ctrl+A, Ctrl+С — Ctrl+C и так далее (ЙЦУКЕН → QWERTY).
+pub fn latin(c: char) -> char {
+    const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбю";
+    const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.";
+    let c = c.to_lowercase().next().unwrap_or(c);
+    RU.chars()
+        .position(|r| r == c)
+        .and_then(|i| EN.chars().nth(i))
+        .unwrap_or(c)
+}

@@ -24,6 +24,7 @@ use shell_x11::{Display, Event, Key, KeyPress, Popup};
 
 use crate::desktop_ui::DesktopUi;
 use crate::dock_ui::DockUi;
+use crate::folder_ui::FolderUi;
 use crate::menubar_ui::MenubarUi;
 use crate::notify_ui::NotifyUi;
 use tiny_skia::Pixmap;
@@ -95,6 +96,38 @@ pub(crate) enum Msg {
     Fonts(Box<Fonts>),
     /// Рабочему столу — из его потоков (обои, миниатюры, выбранный файл).
     Desktop(Box<crate::desktop_ui::DesktopMsg>),
+    /// Окнам папок — из их потоков (список файлов).
+    Folder(Box<crate::folder_ui::FolderMsg>),
+    /// Открыть папку в окне (команда `shell folder`, двойной щелчок на столе).
+    OpenFolder(PathBuf),
+    /// Перенос брошенных файлов закончен — сообщить источнику (XDND).
+    DropFinished {
+        ticket: u64,
+        success: bool,
+    },
+}
+
+impl Msg {
+    /// Что за сообщение — для журнала замеров.
+    fn name(&self) -> String {
+        match self {
+            Msg::X(ev) => format!("X {ev:?}"),
+            Msg::Toggle(_) => "окно".into(),
+            Msg::Apps(_) => "программы".into(),
+            Msg::Tick => "кадр".into(),
+            Msg::Trash(_) => "корзина".into(),
+            Msg::Clock(_) => "часы".into(),
+            Msg::Sound(_) | Msg::Control(..) | Msg::Battery(_) | Msg::Dnd(_) => "состояние".into(),
+            Msg::Tray(_) => "трей".into(),
+            Msg::AppMenu(_) => "меню программы".into(),
+            Msg::Notify(_) | Msg::ToggleCenter => "уведомления".into(),
+            Msg::Fonts(_) => "шрифты".into(),
+            Msg::Desktop(_) => "стол".into(),
+            Msg::Folder(_) => "окно папки".into(),
+            Msg::OpenFolder(_) => "открыть папку".into(),
+            Msg::DropFinished { .. } => "перенос".into(),
+        }
+    }
 }
 
 /// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
@@ -135,6 +168,14 @@ pub fn config_path() -> Option<PathBuf> {
 /// Только ярлыки, видимые в меню, — для «Поиска» и «Программ».
 fn visible(apps: &[App]) -> Vec<App> {
     apps.iter().filter(|a| !a.no_display).cloned().collect()
+}
+
+/// Просит службу открыть папку в окне. `false` — службы нет.
+pub fn ask_daemon_folder(path: &std::path::Path) -> bool {
+    crate::ipc::socket_path()
+        .and_then(UnixStream::connect)
+        .and_then(|mut s| s.write_all(format!("folder {}\n", path.display()).as_bytes()))
+        .is_ok()
 }
 
 /// Служба уже запущена (кто-то слушает её сокет)?
@@ -247,6 +288,11 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         None
     };
     step("рабочий стол");
+    let folders = if daemon && config.folders {
+        Some(FolderUi::new(&display, &config, tx.clone())?)
+    } else {
+        None
+    };
 
     let settings = app_settings(&config);
     let all_apps = shell_apps::load_all(&settings);
@@ -312,6 +358,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         terminal: config.terminal,
         dock,
         desktop,
+        folders,
         menubar,
         notify,
     };
@@ -324,6 +371,9 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         for name in &preload {
             ui.icons.get(name, ROW_ICON);
             ui.icons.get(name, config.apps_icon);
+        }
+        if let Some(folders) = &ui.folders {
+            folders.preload(&mut ui.icons);
         }
         step("значки");
         // Полный набор шрифтов (значки ●, ✓, другие языки в уведомлениях) —
@@ -349,15 +399,31 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         }
     }
 
+    let timing = std::env::var_os("SHELL_TIMING").is_some();
+    // Медленный шаг основного потока — в журнал (с SHELL_TIMING): пока он
+    // идёт, всё остальное ждёт.
+    let slow = |what: &str, t: Instant| {
+        if timing && t.elapsed() > std::time::Duration::from_millis(30) {
+            eprintln!("Медленно: {what} — {:?}", t.elapsed());
+        }
+    };
     while let Ok(msg) = rx.recv() {
+        let t = Instant::now();
+        let what = if timing { msg.name() } else { String::new() };
         ui.message(msg)?;
+        slow(&what, t);
         // Всё, что накопилось, пока шёл прошлый кадр, — разом, а док
         // рисуем один раз по итогу. Иначе при быстром движении мыши кадры
         // отстают от событий и док ещё секунды «доигрывает» старые движения.
         while let Ok(msg) = rx.try_recv() {
+            let t = Instant::now();
+            let what = if timing { msg.name() } else { String::new() };
             ui.message(msg)?;
+            slow(&what, t);
         }
+        let t = Instant::now();
         ui.flush()?;
+        slow("перерисовка", t);
         if !daemon && ui.shown.is_none() {
             break;
         }
@@ -381,6 +447,7 @@ struct Ui<'a> {
     terminal: Vec<String>,
     dock: Option<DockUi>,
     desktop: Option<DesktopUi>,
+    folders: Option<FolderUi>,
     menubar: Option<MenubarUi>,
     notify: Option<NotifyUi>,
 }
@@ -392,6 +459,9 @@ impl Ui<'_> {
         }
         if let Some(desktop) = &mut self.desktop {
             desktop.close_popups(self.display)?;
+        }
+        if let Some(folders) = &mut self.folders {
+            folders.close_popups(self.display)?;
         }
         if let Some(menubar) = &mut self.menubar {
             menubar.close_popup(self.display)?;
@@ -519,6 +589,13 @@ impl Ui<'_> {
 
     /// Перерисовать строку меню и док, если в них что-то изменилось.
     fn flush(&mut self) -> Result<()> {
+        let timing = std::env::var_os("SHELL_TIMING").is_some();
+        let t = Instant::now();
+        // Окна папок — первыми: их ждут (только что открыли папку).
+        if let Some(folders) = &mut self.folders {
+            folders.flush(self.display, &mut self.fonts, &mut self.icons)?;
+        }
+        let folders_time = t.elapsed();
         if let Some(menubar) = &mut self.menubar {
             menubar.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
@@ -529,11 +606,22 @@ impl Ui<'_> {
                 menubar.set_center_open(notify.center_open());
             }
         }
+        let bar_time = t.elapsed();
         if let Some(dock) = &mut self.dock {
             dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
+        let dock_time = t.elapsed();
         if let Some(desktop) = &mut self.desktop {
             desktop.flush(self.display, &mut self.fonts, &mut self.icons)?;
+        }
+        if timing && t.elapsed() > std::time::Duration::from_millis(30) {
+            eprintln!(
+                "  перерисовка: окна папок {folders_time:?}, строка меню и уведомления {:?}, \
+                 док {:?}, стол {:?}",
+                bar_time - folders_time,
+                dock_time - bar_time,
+                t.elapsed() - dock_time
+            );
         }
         Ok(())
     }
@@ -565,12 +653,39 @@ impl Ui<'_> {
             Msg::Apps(apps) => self.set_apps(apps),
             Msg::Fonts(fonts) => {
                 self.fonts = *fonts;
+                // Новый набор шрифтов ещё не рисовал букв окна папки —
+                // нарисовать его один раз невидимо, чтобы первое окно
+                // открылось без задержки.
+                if let Some(folders) = &self.folders {
+                    folders.warm_up(&mut self.fonts, &mut self.icons);
+                }
                 Ok(())
             }
             Msg::Desktop(msg) => match &mut self.desktop {
                 Some(desktop) => desktop.message(self.display, *msg),
                 None => Ok(()),
             },
+            // Список файлов пришёл — нарисовать окно сразу, не дожидаясь,
+            // пока док и строка меню разберут появление нового окна.
+            Msg::Folder(msg) => match &mut self.folders {
+                Some(folders) => {
+                    folders.message(*msg);
+                    folders.flush(self.display, &mut self.fonts, &mut self.icons)
+                }
+                None => Ok(()),
+            },
+            Msg::OpenFolder(path) => match &mut self.folders {
+                Some(folders) => folders.open(self.display, path),
+                // Свой Проводник выключен — прежний (Thunar).
+                None => {
+                    crate::folder_ui::open_elsewhere(&path);
+                    Ok(())
+                }
+            },
+            Msg::DropFinished { ticket, success } => {
+                self.display.finish_drop(ticket, success);
+                Ok(())
+            }
             Msg::X(ev) => {
                 if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
                     eprintln!("X: {ev:?}");
@@ -673,6 +788,12 @@ impl Ui<'_> {
             && desktop.wants(self.display, &ev)
         {
             desktop.event(self.display, &mut self.fonts, ev)?;
+            handled = true;
+        }
+        if let Some(folders) = &mut self.folders
+            && folders.wants(self.display, &ev)
+        {
+            folders.event(self.display, &mut self.fonts, ev)?;
             handled = true;
         }
         if handled {

@@ -19,6 +19,8 @@ shell-notify = { path = "../../crates/notify" }
 shell-widgets = { path = "../../crates/widgets" }
 shell-setup = { path = "../../crates/setup" }
 shell-desktop = { path = "../../crates/desktop" }
+shell-folder = { path = "../../crates/folder" }
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 inotify = { version = "0.11.5", default-features = false }
 shell-wallpaper = { path = "../../crates/wallpaper" }
 tiny-skia = "0.12.0"

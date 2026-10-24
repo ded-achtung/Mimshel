@@ -55,7 +55,8 @@ fn runtime_socket(
 }
 
 const MAX_CLIENTS: usize = 32;
-const MAX_COMMAND: usize = 64;
+/// Команда с путём к папке (`folder ПУТЬ`) бывает длинной.
+const MAX_COMMAND: usize = 4096;
 const DEADLINE: Duration = Duration::from_millis(250);
 
 struct Client {
@@ -90,11 +91,8 @@ impl Client {
                 }
                 self.bytes.extend_from_slice(&buf[..count]);
                 if end.is_some() {
-                    if let Some(panel) = std::str::from_utf8(&self.bytes)
-                        .ok()
-                        .and_then(|s| Panel::parse(s.trim()))
-                    {
-                        let _ = tx.send(Msg::Toggle(panel));
+                    if let Some(msg) = std::str::from_utf8(&self.bytes).ok().and_then(command) {
+                        let _ = tx.send(msg);
                     }
                     return false;
                 }
@@ -106,6 +104,15 @@ impl Client {
             ),
         }
     }
+}
+
+/// Команда службе: окно (`search`, `apps`) или `folder ПУТЬ`.
+fn command(text: &str) -> Option<Msg> {
+    if let Some(path) = text.strip_prefix("folder ") {
+        let path = std::path::PathBuf::from(path);
+        return path.is_absolute().then_some(Msg::OpenFolder(path));
+    }
+    Panel::parse(text.trim()).map(Msg::Toggle)
 }
 
 fn poll(listener: &UnixListener, clients: &mut Vec<Client>, tx: &Sender<Msg>) -> io::Result<()> {

@@ -143,7 +143,7 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
     let dir = path.parent().ok_or("нет папки")?;
     let target = dir.join(new);
     if target.exists() {
-        return Err(format!("«{new}» уже есть на рабочем столе."));
+        return Err(format!("«{new}» уже есть в этой папке."));
     }
     // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
     // GNU mv с none-fail не заменяет назначения даже при гонке.
@@ -223,10 +223,19 @@ pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool, ticket: u64, tx: Send
         for message in errors {
             error(&message);
         }
-        let _ = tx.send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
-            ticket,
-            success,
-        })));
+        let _ = tx.send(Msg::DropFinished { ticket, success });
+    });
+}
+
+/// Перенести или скопировать в фоне (перетащили внутри окна папки).
+pub fn transfer_async(pairs: Vec<(PathBuf, PathBuf)>, moving: bool) {
+    if pairs.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for message in transfer(&pairs, moving) {
+            error(&message);
+        }
     });
 }
 

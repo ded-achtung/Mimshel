@@ -3,6 +3,7 @@
 //! раскладки (us/ru) и регистра. Для дока — окна программ ([`windows`]) и
 //! окно-док ([`dock`]).
 
+mod app_window;
 mod clipboard;
 mod desktop;
 mod dnd;
@@ -12,7 +13,8 @@ mod selection;
 mod shm;
 mod windows;
 
-pub use clipboard::{clipboard_files, copy_files};
+pub use app_window::AppWindow;
+pub use clipboard::{clipboard_files, copy_files, percent_decode};
 pub use desktop::DesktopWindow;
 pub use dnd::DragTarget;
 pub use dock::DockWindow;
@@ -22,7 +24,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 pub use shell_core::input::{Key, KeyPress};
-use shell_render::Image;
+pub use shell_render::Image;
 use tiny_skia::Pixmap;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event as XEvent;
@@ -94,6 +96,8 @@ x11rb::atom_manager! {
     /// Имена свойств EWMH/ICCCM, которые нужны оболочке.
     pub(crate) Atoms: AtomsCookie {
         UTF8_STRING,
+        WM_PROTOCOLS,
+        WM_DELETE_WINDOW,
         WM_STATE,
         WM_CHANGE_STATE,
         _NET_CLIENT_LIST,
@@ -221,6 +225,11 @@ pub enum Event {
         y: i16,
         moving: bool,
         ticket: u64,
+    },
+    /// Нажали «закрыть» в рамке окна программы ([`AppWindow`]) или окно
+    /// уничтожили снаружи.
+    Close {
+        window: u32,
     },
     /// Включилась раскладка с этим номером (с 0).
     KeyboardGroup(u8),
@@ -529,7 +538,15 @@ impl Display {
                 }
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
+            // Окно уничтожили снаружи (не через «закрыть») — забыть его.
+            XEvent::DestroyNotify(e) => Event::Close { window: e.window },
             XEvent::MapNotify(e) => Event::Mapped { window: e.window },
+            XEvent::ClientMessage(e)
+                if e.type_ == self.atoms.WM_PROTOCOLS
+                    && e.data.as_data32()[0] == self.atoms.WM_DELETE_WINDOW =>
+            {
+                Event::Close { window: e.window }
+            }
             XEvent::ClientMessage(e) => self
                 .dnd_message(e.window, e.type_, e.data.as_data32())
                 .unwrap_or(Event::Other),

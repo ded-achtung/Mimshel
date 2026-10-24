@@ -505,7 +505,7 @@ impl IconGrid {
         if self.renaming.as_ref() == Some(&item.path) {
             return;
         }
-        let lines = label_lines(fonts, &item.name);
+        let lines = label_lines(fonts, &item.name, &LABEL, LABEL_W);
         let lh = LABEL.line_height();
         for (n, line) in lines.iter().enumerate() {
             let tw = fonts.measure(line, &LABEL).min(LABEL_W);
@@ -531,10 +531,11 @@ fn file_name(item: &Item) -> String {
         .unwrap_or_default()
 }
 
-/// Подпись в две строки: первая — сколько влезет (по словам, а длинное
-/// слово — по буквам), вторая — остальное, с «…», если не влезло.
-fn label_lines(fonts: &mut Fonts, text: &str) -> Vec<String> {
-    if fonts.measure(text, &LABEL) <= LABEL_W {
+/// Подпись в две строки шириной `width`: первая — сколько влезет (по
+/// словам, а длинное слово — по буквам), вторая — остальное, с «…», если не
+/// влезло. Общая для стола и окна папки.
+pub fn label_lines(fonts: &mut Fonts, text: &str, style: &Style, width: f32) -> Vec<String> {
+    if fonts.measure(text, style) <= width {
         return vec![text.to_string()];
     }
     let chars: Vec<char> = text.chars().collect();
@@ -542,7 +543,7 @@ fn label_lines(fonts: &mut Fonts, text: &str) -> Vec<String> {
     let mut fit = 0;
     for n in 1..=chars.len() {
         let part: String = chars[..n].iter().collect();
-        if fonts.measure(&part, &LABEL) > LABEL_W {
+        if fonts.measure(&part, style) > width {
             break;
         }
         fit = n;
@@ -685,8 +686,16 @@ mod tests {
     #[test]
     fn long_names_wrap_in_two_lines() {
         let mut fonts = Fonts::new("Inter");
-        assert_eq!(label_lines(&mut fonts, "Проекты"), ["Проекты"]);
-        let lines = label_lines(&mut fonts, "Очень длинное название документа.pdf");
+        assert_eq!(
+            label_lines(&mut fonts, "Проекты", &LABEL, LABEL_W),
+            ["Проекты"]
+        );
+        let lines = label_lines(
+            &mut fonts,
+            "Очень длинное название документа.pdf",
+            &LABEL,
+            LABEL_W,
+        );
         assert_eq!(lines.len(), 2);
         assert!(fonts.measure(&lines[0], &LABEL) <= LABEL_W);
         assert_eq!(lines[0], "Очень", "по пробелу, не посреди слова");

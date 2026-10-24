@@ -101,8 +101,14 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     };
     let (section, name) = key.split_once('.').expect("ключи из SETTINGS с точкой");
     if let Err(e) = config_store(path.clone()).edit(|text| {
-        set_value(text, section, name, value)
-            .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))
+        let text = set_value(text, section, name, value)
+            .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))?;
+        if key == "parts.folders" {
+            let shell = config::Config::from_toml(&text).folders;
+            return swap_file_manager(&text, shell)
+                .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"));
+        }
+        Ok(text)
     }) {
         println!("✘ Не записать {}: {e}", path.display());
         return 1;
@@ -132,6 +138,51 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
         _ => vec!["service"],
     };
     run_apply(&config, &parts)
+}
+
+/// Свой Проводник включили (`shell`) или вернули Thunar: значок в доке —
+/// того, кто открывает папки, а Thunar при своём Проводнике не показывается
+/// в окнах «Программы» и «Поиск» (иначе там два «Проводника»).
+fn swap_file_manager(text: &str, shell: bool) -> Option<String> {
+    let (from, to) = if shell {
+        ("thunar", crate::folder_ui::DESKTOP_ID)
+    } else {
+        (crate::folder_ui::DESKTOP_ID, "thunar")
+    };
+    // Записи — как написаны в файле: чтение настроек их нормализует, а
+    // менять можно только одну.
+    let raw = |section: &str, key: &str| -> Vec<String> {
+        let doc: toml_edit::DocumentMut = text.parse().ok().unwrap_or_default();
+        doc.get(section)
+            .and_then(|t| t.get(key))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut dock = raw("dock", "apps");
+    if dock.iter().any(|a| config::dock_entry(a) == to) {
+        dock.retain(|a| config::dock_entry(a) != from);
+    } else {
+        for app in &mut dock {
+            if config::dock_entry(app) == from {
+                *app = to.to_string();
+            }
+        }
+    }
+    let text = config::set_dock_apps(text, &dock)?;
+    let mut hide: Vec<String> = raw("apps", "hide")
+        .into_iter()
+        .filter(|h| h != "thunar")
+        .collect();
+    if shell {
+        hide.push("thunar".into());
+    }
+    let hide: toml_edit::Array = hide.iter().map(String::as_str).collect();
+    set_value(&text, "apps", "hide", toml_edit::Value::Array(hide))
 }
 
 /// `shell apply [части]`.
@@ -238,5 +289,28 @@ pub fn restore(args: &[String]) -> i32 {
             println!("✘ Откат прерван: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_manager_swap_keeps_other_entries() {
+        let text =
+            "[dock]\napps = [\"thunar\", \"org.telegram.desktop\"]\n\n[apps]\nhide = [\"rofi\"]\n";
+        let on = swap_file_manager(text, true).unwrap();
+        assert!(
+            on.contains("[\"shell-folder\", \"org.telegram.desktop\"]"),
+            "{on}"
+        );
+        assert!(on.contains("[\"rofi\", \"thunar\"]"), "{on}");
+        let off = swap_file_manager(&on, false).unwrap();
+        assert!(
+            off.contains("[\"thunar\", \"org.telegram.desktop\"]"),
+            "{off}"
+        );
+        assert!(off.contains("hide = [\"rofi\"]"), "{off}");
     }
 }

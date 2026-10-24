@@ -6,6 +6,7 @@ mod desktop_files;
 mod desktop_ui;
 mod desktop_wallpaper;
 mod dock_ui;
+mod folder_ui;
 mod guard;
 mod ipc;
 mod lock_ui;
@@ -28,6 +29,8 @@ const HELP: &str = "\
                         упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
   shell snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
+  shell folder [ПАПКА…] открыть папку в окне (по умолчанию — домашнюю; через службу,
+                        без неё или при parts.folders = thunar — в Thunar)
   shell test-apps       список программ, которые увидит окно «Программы»
   shell test-search ТЕКСТ
                         что найдёт окно «Поиск» по этому тексту
@@ -113,6 +116,13 @@ fn main() {
         }
         Some("backups") => std::process::exit(setup::backups()),
         Some("restore") => std::process::exit(setup::restore(&args[1..])),
+        Some("folder") => {
+            for path in folder_ui::folder_args(&args[1..]) {
+                if !ui::ask_daemon_folder(&path) {
+                    folder_ui::open_elsewhere(&path);
+                }
+            }
+        }
         Some("action") if args.len() == 2 => {
             std::process::exit(shell_setup::actions::action(&args[1], &guard::own_exe()))
         }
@@ -122,6 +132,9 @@ fn main() {
                 exit_on_error(ui::run(Some(panel)));
             }
         }
+        Some("snapshot") if args.len() == 4 && args[1] == "folder" => exit_on_error(
+            folder_ui::snapshot(std::path::Path::new(&args[2]), &args[3]),
+        ),
         Some("snapshot") if args.len() == 4 && args[1] == "lock" => {
             exit_on_error(lock_ui::snapshot(&args[2], &args[3]))
         }

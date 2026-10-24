@@ -1161,6 +1161,7 @@ dependencies = [
  "shell-dbus",
  "shell-desktop",
  "shell-dock",
+ "shell-folder",
  "shell-icons",
  "shell-launcher",
  "shell-lock",
@@ -1173,6 +1174,7 @@ dependencies = [
  "shell-widgets",
  "shell-x11",
  "tiny-skia",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1214,6 +1216,19 @@ version = "0.1.0"
 dependencies = [
  "shell-apps",
  "shell-core",
+ "shell-icons",
+ "shell-render",
+ "shell-text",
+ "shell-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "shell-folder"
+version = "0.1.0"
+dependencies = [
+ "shell-core",
+ "shell-desktop",
  "shell-icons",
  "shell-render",
  "shell-text",

@@ -1,0 +1,17 @@
+[package]
+name = "shell-folder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shell-core = { path = "../core" }
+shell-desktop = { path = "../desktop" }
+shell-icons = { path = "../icons" }
+shell-render = { path = "../render" }
+shell-text = { path = "../text" }
+shell-widgets = { path = "../widgets" }
+tiny-skia = "0.12.0"
+
+[lints]
+workspace = true

@@ -369,7 +369,15 @@ impl Display {
         if kind == a.XdndPosition {
             st.source = data[0];
             st.target = window;
-            st.at = ((data[2] >> 16) as i16, (data[2] & 0xffff) as i16);
+            // Источник присылает точку экрана — переводим в точку окна (стол
+            // во весь экран с угла, а окно папки — где угодно).
+            let (rx, ry) = ((data[2] >> 16) as i16, (data[2] & 0xffff) as i16);
+            st.at = self
+                .conn
+                .translate_coordinates(self.root, window, rx, ry)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map_or((rx, ry), |r| (r.dst_x, r.dst_y));
             // Как в Finder: без Ctrl — переместить, если источник это
             // разрешает (Проводник предлагает «копировать», но в списке
             // действий есть и «переместить»); с Ctrl — скопировать.
