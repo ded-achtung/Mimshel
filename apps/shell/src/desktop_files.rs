@@ -188,7 +188,10 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
         // недоступен. Проверка препятствует ложному успеху для уже занятых путей,
         // а --no-clobber защищает назначение от конкурентной записи.
         if std::fs::symlink_metadata(dest).is_ok() {
-            errors.push(format!("Файл назначения {} уже существует.", dest.display()));
+            errors.push(format!(
+                "Файл назначения {} уже существует.",
+                dest.display()
+            ));
             continue;
         }
         let mut cmd = Command::new(if moving { "mv" } else { "cp" });
