@@ -142,8 +142,11 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
     }
     let dir = path.parent().ok_or("нет папки")?;
     let target = dir.join(new);
-    if target.exists() {
+    if std::fs::symlink_metadata(&target).is_ok() {
         return Err(format!("«{new}» уже есть в этой папке."));
+    }
+    if target == path {
+        return Ok(target);
     }
     // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
     // GNU mv с none-fail не заменяет назначения даже при гонке.
@@ -153,7 +156,9 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
         .arg(&target)
         .status()
         .map_err(|e| format!("Не удалось переименовать: {e}"))?;
-    if !status.success() {
+    if !status.success() || std::fs::symlink_metadata(path).is_ok()
+        || std::fs::symlink_metadata(&target).is_err()
+    {
         return Err("Переименование не выполнено: имя занято или файл недоступен.".into());
     }
     Ok(target)
@@ -173,7 +178,9 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
             .arg(&dest)
             .status()
             .is_ok_and(|s| s.success());
-        if !ok {
+        if !ok || std::fs::symlink_metadata(&path).is_ok()
+            || std::fs::symlink_metadata(&dest).is_err()
+        {
             error(&format!("Не удалось переложить «{name}» в папку."));
         }
     });
@@ -205,7 +212,11 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
             .arg(dest)
             .status()
             .is_ok_and(|s| s.success());
-        if !ok {
+        // GNU cp/mv --no-clobber может возвращать код 0, пропустив
+        // существующий файл. Проверяем фактическое состояние после команды.
+        let actually_done = std::fs::symlink_metadata(dest).is_ok()
+            && (!moving || std::fs::symlink_metadata(src).is_err());
+        if !ok || !actually_done {
             let name = src.file_name().unwrap_or_default().to_string_lossy();
             errors.push(format!(
                 "Не удалось перенести «{name}»: файл назначения занят или недоступен."
