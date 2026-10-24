@@ -152,6 +152,8 @@ pub struct DesktopUi {
 impl DesktopUi {
     pub fn new(d: &Display, config: &Config, tx: Sender<Msg>) -> Result<DesktopUi> {
         let window = d.create_desktop()?;
+        // Xfwm4 обновляет _NET_WORKAREA при изменении резервов Dock/панелей.
+        d.watch_root()?;
         window.show(d)?;
         let dir = desktop_files::desktop_dir();
         let band_popup = d.create_popup("desktop-band")?;
@@ -211,12 +213,28 @@ impl DesktopUi {
             .first()
             .map(|&(x, y, w, h)| (x as f32 / k, y as f32 / k, w as f32 / k, h as f32 / k))
             .unwrap_or((0.0, 0.0, f32::from(sw), f32::from(sh)));
-        let top = my + self.menubar_height as f32 + MARGIN;
+        // Приоритет — EWMH _NET_WORKAREA от оконного менеджера: фактические
+        // резервы панелей, Plank и нашего Dock уже вычислены на стороне WM.
+        // Пересекаем глобальную область с выбранным монитором, не смешивая
+        // пиксели и точки на HiDPI.
+        let bounds = d.workarea().and_then(|(x, y, w, h)| {
+            let (left, top) = ((x as f32 / k).max(mx), (y as f32 / k).max(my));
+            let (right, bottom) = (
+                ((i64::from(x) + i64::from(w)) as f32 / k).min(mx + mw),
+                ((i64::from(y) + i64::from(h)) as f32 / k).min(my + mh),
+            );
+            (right > left && bottom > top).then_some((left, top, right, bottom))
+        });
+        let (left, top, right, bottom) = bounds.unwrap_or_else(|| {
+            let top = my + self.menubar_height as f32;
+            (mx, top, mx + mw, my + mh - DOCK_ROOM)
+        });
+        let top = top + MARGIN;
         self.grid.set_area((
-            mx,
+            left,
             top,
-            mw - MARGIN,
-            (my + mh - DOCK_ROOM - top).max(icon_grid::CELL_H),
+            (right - left - MARGIN).max(icon_grid::CELL_W),
+            (bottom - top - MARGIN).max(icon_grid::CELL_H),
         ));
         self.full_dirty = true;
     }
@@ -299,6 +317,9 @@ impl DesktopUi {
             | Event::Dropped { window, .. } => window == self.window.id(),
             // Сменился размер экрана (корневое окно) — стол во весь экран заново.
             Event::Configure { window } => window == d.root(),
+            Event::Property { window, what: shell_x11::Property::WorkArea } => {
+                window == d.root()
+            },
             _ => false,
         }
     }
@@ -310,6 +331,15 @@ impl DesktopUi {
             self.window.show(d)?;
             self.place_icons(d);
             self.load_wallpaper(d);
+            return Ok(());
+        }
+        if let Event::Property {
+            window,
+            what: shell_x11::Property::WorkArea,
+        } = ev
+            && window == d.root()
+        {
+            self.place_icons(d);
             return Ok(());
         }
         if self.rename.is_some() {

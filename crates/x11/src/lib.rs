@@ -130,6 +130,8 @@ x11rb::atom_manager! {
         _NET_WM_STATE_SKIP_PAGER,
         _NET_WM_STRUT,
         _NET_WM_STRUT_PARTIAL,
+        _NET_WORKAREA,
+        _NET_CURRENT_DESKTOP,
         _NET_FRAME_EXTENTS,
         _GTK_FRAME_EXTENTS,
     }
@@ -142,6 +144,7 @@ pub enum Property {
     ClientList,
     /// Активное окно (у корневого окна).
     ActiveWindow,
+    WorkArea,
     /// Свёрнуто/развёрнуто и т. п.
     State,
     Title,
@@ -508,6 +511,9 @@ impl Display {
                         Property::ClientList
                     }
                     x if x == a._NET_ACTIVE_WINDOW => Property::ActiveWindow,
+                    x if x == a._NET_WORKAREA || x == a._NET_CURRENT_DESKTOP => {
+                        Property::WorkArea
+                    },
                     x if x == a._NET_WM_STATE || x == a.WM_STATE => Property::State,
                     x if x == a._NET_WM_NAME || x == u32::from(AtomEnum::WM_NAME) => {
                         Property::Title
