@@ -51,7 +51,11 @@ pub struct IconGrid {
     saved: HashMap<String, Slot>,
     /// Где можно ставить значки (без строки меню и дока).
     area: Rect,
-    selected: Option<usize>,
+    /// Выделенные значки (по возрастанию).
+    selected: Vec<usize>,
+    /// Значок, который сейчас переименовывают: его подпись не рисуется
+    /// (поверх — поле ввода).
+    renaming: Option<PathBuf>,
 }
 
 impl IconGrid {
@@ -61,7 +65,8 @@ impl IconGrid {
             places: Vec::new(),
             saved: HashMap::new(),
             area,
-            selected: None,
+            selected: Vec::new(),
+            renaming: None,
         }
     }
 
@@ -69,12 +74,41 @@ impl IconGrid {
         &self.items
     }
 
+    /// Выделенный значок, если он один.
     pub fn selected(&self) -> Option<&Item> {
-        self.selected.and_then(|i| self.items.get(i))
+        match self.selected[..] {
+            [i] => self.items.get(i),
+            _ => None,
+        }
     }
 
-    pub fn selected_index(&self) -> Option<usize> {
+    /// Все выделенные значки.
+    pub fn selected_items(&self) -> Vec<&Item> {
         self.selected
+            .iter()
+            .filter_map(|&i| self.items.get(i))
+            .collect()
+    }
+
+    pub fn selected_indices(&self) -> &[usize] {
+        &self.selected
+    }
+
+    /// Переименовывают этот значок (`None` — никакой). Возвращает, какие
+    /// значки перерисовать.
+    pub fn set_renaming(&mut self, path: Option<PathBuf>) -> Vec<usize> {
+        let changed: Vec<usize> = (0..self.items.len())
+            .filter(|&i| {
+                let p = Some(&self.items[i].path);
+                p == self.renaming.as_ref() || p == path.as_ref()
+            })
+            .collect();
+        self.renaming = path;
+        changed
+    }
+
+    pub fn is_selected(&self, i: usize) -> bool {
+        self.selected.contains(&i)
     }
 
     /// Запомненные клетки (сохранить в файл).
@@ -91,11 +125,17 @@ impl IconGrid {
     /// Новый список (папка изменилась). Выделение остаётся на том же файле;
     /// клетки пропавших файлов забываются.
     pub fn set_items(&mut self, items: Vec<Item>) {
-        let keep: Option<PathBuf> = self.selected().map(|i| i.path.clone());
+        let keep: Vec<PathBuf> = self
+            .selected_items()
+            .iter()
+            .map(|i| i.path.clone())
+            .collect();
         self.items = items;
         let names: Vec<String> = self.items.iter().map(file_name).collect();
         self.saved.retain(|name, _| names.contains(name));
-        self.selected = keep.and_then(|p| self.items.iter().position(|i| i.path == p));
+        self.selected = (0..self.items.len())
+            .filter(|&i| keep.contains(&self.items[i].path))
+            .collect();
         self.layout();
     }
 
@@ -185,8 +225,20 @@ impl IconGrid {
             .unwrap_or(want)
     }
 
+    /// Запомнить нынешние клетки всех значков: после того как значок
+    /// передвинули руками, остальные не должны сами «затекать» в
+    /// освободившиеся клетки (как на Mac).
+    fn freeze(&mut self) {
+        for (i, item) in self.items.iter().enumerate() {
+            if let Some(&slot) = self.places.get(i) {
+                self.saved.insert(file_name(item), slot);
+            }
+        }
+    }
+
     /// Запомнить клетку для файла с этим именем (значок появится там).
     pub fn place_name(&mut self, name: &str, slot: Slot) {
+        self.freeze();
         self.saved.insert(name.to_string(), slot);
         self.layout();
     }
@@ -196,8 +248,10 @@ impl IconGrid {
         let Some(item) = self.items.get(i) else {
             return;
         };
+        let name = file_name(item);
         let slot = self.free_slot_near(slot, Some(i));
-        self.saved.insert(file_name(item), slot);
+        self.freeze();
+        self.saved.insert(name, slot);
         self.layout();
     }
 
@@ -247,15 +301,80 @@ impl IconGrid {
         })
     }
 
-    /// Выделить значок (`None` — снять). Возвращает значки, которые надо
-    /// перерисовать.
+    /// Выделить один значок (`None` — снять всё). Возвращает значки, которые
+    /// надо перерисовать.
     pub fn select(&mut self, i: Option<usize>) -> Vec<usize> {
-        if i == self.selected {
-            return Vec::new();
-        }
-        let changed: Vec<usize> = [self.selected, i].into_iter().flatten().collect();
-        self.selected = i;
+        self.set_selection(i.into_iter().collect())
+    }
+
+    /// Выделить эти значки (рамкой). Возвращает, какие перерисовать.
+    pub fn set_selection(&mut self, mut new: Vec<usize>) -> Vec<usize> {
+        new.sort_unstable();
+        new.dedup();
+        let changed: Vec<usize> = self
+            .selected
+            .iter()
+            .filter(|i| !new.contains(i))
+            .chain(new.iter().filter(|i| !self.selected.contains(i)))
+            .copied()
+            .collect();
+        self.selected = new;
         changed
+    }
+
+    /// Где значок виден: картинка и две строки подписи.
+    fn item_rect(&self, i: usize) -> Rect {
+        let (cx, cy, cw, _) = self.cell(i);
+        (
+            cx + 4.0,
+            cy + ICON_TOP - 2.0,
+            cw - 8.0,
+            LABEL_TOP - ICON_TOP + 2.0 + 2.0 * LABEL.line_height(),
+        )
+    }
+
+    /// Значки, которых касается рамка `rect`.
+    pub fn items_in(&self, (x, y, w, h): Rect) -> Vec<usize> {
+        (0..self.items.len())
+            .filter(|&i| {
+                let (ix, iy, iw, ih) = self.item_rect(i);
+                ix < x + w && x < ix + iw && iy < y + h && y < iy + ih
+            })
+            .collect()
+    }
+
+    /// Клетка значка `i` (для перетаскивания группы).
+    pub fn slot(&self, i: usize) -> Slot {
+        self.places.get(i).copied().unwrap_or((0, 0))
+    }
+
+    /// Перетащили несколько значков: каждый сдвигается так же, как значок
+    /// `lead` (его принесли в `to`).
+    pub fn move_items(&mut self, lead: usize, to: Slot, items: &[usize]) {
+        let from = self.slot(lead);
+        let (dc, dr) = (
+            i64::from(to.0) - i64::from(from.0),
+            i64::from(to.1) - i64::from(from.1),
+        );
+        let (cols, rows) = (i64::from(self.columns()), i64::from(self.rows()));
+        // Ведущий — первым: он встаёт ровно туда, куда принесли. Куда
+        // каждому — считаем по клеткам до переноса.
+        let mut order: Vec<usize> = vec![lead];
+        order.extend(items.iter().copied().filter(|&i| i != lead));
+        let targets: Vec<(usize, Slot)> = order
+            .into_iter()
+            .map(|i| {
+                let (c, r) = self.slot(i);
+                let t = (
+                    (i64::from(c) + dc).clamp(0, cols - 1) as u32,
+                    (i64::from(r) + dr).clamp(0, rows - 1) as u32,
+                );
+                (i, t)
+            })
+            .collect();
+        for (i, target) in targets {
+            self.move_item(i, target);
+        }
     }
 
     /// Нарисовать значок `i` на холсте, левый верхний угол которого — в точке
@@ -273,7 +392,7 @@ impl IconGrid {
         };
         let (cx, cy, cw, _) = self.cell(i);
         let (x, y) = (cx - origin.0, cy - origin.1);
-        let selected = self.selected == Some(i);
+        let selected = self.is_selected(i);
         let id = Transform::identity();
         let ix = x + (cw - ICON as f32) / 2.0;
         if selected
@@ -295,6 +414,9 @@ impl IconGrid {
                 ..PixmapPaint::default()
             };
             pm.draw_pixmap(0, 0, img.as_ref(), &quality, t, None);
+        }
+        if self.renaming.as_ref() == Some(&item.path) {
+            return;
         }
         let lines = label_lines(fonts, &item.name);
         let lh = LABEL.line_height();
@@ -388,11 +510,19 @@ mod tests {
         // Перетащили «б» в третью колонку от края.
         g.move_item(1, (2, 0));
         assert_eq!(g.cell(1), g.slot_rect((2, 0)));
-        assert_eq!(g.cell(2), g.slot_rect((0, 1)), "«в» заняла место «б»");
+        assert_eq!(
+            g.cell(2),
+            g.slot_rect((0, 2)),
+            "«в» не затекает на место «б»"
+        );
         // На занятое место — в ближайшую свободную клетку.
         g.move_item(2, (2, 0));
         assert_ne!(g.cell(2), g.slot_rect((2, 0)));
-        assert_eq!(g.saved().len(), 2);
+        assert_eq!(
+            g.saved().len(),
+            3,
+            "передвинули руками — места всех запомнены"
+        );
         // Новую папку создают в клетке под щелчком — значок появится там.
         let (x, y, _, _) = g.slot_rect((3, 2));
         let slot = g.slot_at(x + 10.0, y + 10.0);
@@ -407,6 +537,27 @@ mod tests {
         g.arrange();
         assert_eq!(g.cell(3), g.slot_rect((1, 0)), "по порядку");
         assert!(g.saved().is_empty());
+    }
+
+    #[test]
+    fn rubber_band_and_group_move() {
+        let mut g = IconGrid::new((0.0, 0.0, 4.0 * CELL_W, 3.0 * CELL_H));
+        g.set_items(vec![item("а"), item("б"), item("в"), item("г")]);
+        // Рамка по первым двум значкам колонки (справа сверху).
+        let (x, y, _, _) = g.cell(0);
+        let band = (x + 20.0, y + 10.0, 40.0, CELL_H + 20.0);
+        let changed = g.set_selection(g.items_in(band));
+        assert_eq!(changed, [0, 1]);
+        assert_eq!(g.selected_items().len(), 2);
+        assert!(g.selected().is_none(), "не один — переименовать нечего");
+        // Сдвинули группу на две колонки левее (там свободно).
+        g.move_items(0, (2, 0), &[0, 1]);
+        assert_eq!((g.slot(0), g.slot(1)), ((2, 0), (2, 1)));
+        assert_eq!(g.slot(3), (1, 0), "«г» на месте");
+        // Новый список — выделение по путям сохраняется.
+        g.set_items(vec![item("а"), item("б"), item("в"), item("г"), item("д")]);
+        assert_eq!(g.selected_indices(), [0, 1]);
+        assert_eq!(g.select(None), [0, 1]);
     }
 
     #[test]

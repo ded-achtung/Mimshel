@@ -123,6 +123,18 @@ pub fn new_folder(dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Новый пустой текстовый файл «Новый документ.txt» (или «… 2.txt»).
+pub fn new_text_file(dir: &Path) -> Option<PathBuf> {
+    let path = free_name(dir, "Новый документ.txt");
+    match std::fs::File::create_new(&path) {
+        Ok(_) => Some(path),
+        Err(e) => {
+            eprintln!("Стол: файл не создан: {e}");
+            None
+        }
+    }
+}
+
 /// Переименовать файл в той же папке. Ошибка — словами для окна.
 pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
     if new.contains('/') {
