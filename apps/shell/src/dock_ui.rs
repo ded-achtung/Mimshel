@@ -860,7 +860,7 @@ fn watch_trash(tx: Sender<Msg>) {
         loop {
             if watcher.is_none() {
                 watcher = trash_dir().and_then(|dir| {
-                    let mut io = Inotify::init().ok()?;
+                    let io = Inotify::init().ok()?;
                     io.watches()
                         .add(
                             &dir,
