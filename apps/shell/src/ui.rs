@@ -93,8 +93,8 @@ pub(crate) enum Msg {
     ToggleCenter,
     /// Полный набор шрифтов загружен (вместо быстрого, с одним семейством).
     Fonts(Box<Fonts>),
-    /// Обои для рабочего стола нарисованы (во весь экран, в пикселях).
-    Wallpaper(Box<Pixmap>),
+    /// Рабочему столу — из его потоков (обои, миниатюры, выбранный файл).
+    Desktop(Box<crate::desktop_ui::DesktopMsg>),
 }
 
 /// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
@@ -567,8 +567,8 @@ impl Ui<'_> {
                 self.fonts = *fonts;
                 Ok(())
             }
-            Msg::Wallpaper(image) => match &self.desktop {
-                Some(desktop) => desktop.set_wallpaper(self.display, &image),
+            Msg::Desktop(msg) => match &mut self.desktop {
+                Some(desktop) => desktop.message(self.display, *msg),
                 None => Ok(()),
             },
             Msg::X(ev) => {

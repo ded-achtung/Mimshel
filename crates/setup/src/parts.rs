@@ -658,6 +658,14 @@ fn parse_monitors(text: &str) -> Vec<(i32, i32, u32, u32)> {
         .collect()
 }
 
+/// Где хранятся свои обои `style`, нарисованные под `w`×`h` пикселей.
+pub fn wallpaper_path(style: shell_wallpaper::Style, w: u32, h: u32) -> std::path::PathBuf {
+    home().join(format!(
+        ".local/share/shell/wallpapers/{}-{w}x{h}.png",
+        style.name()
+    ))
+}
+
 /// Файл обоев: свои (`space`, `waves`, `aurora`) рисуются под экран `w`×`h`
 /// один раз и хранятся в `~/.local/share/shell/wallpapers`; иначе — путь к
 /// картинке как есть. Нарисовать не вышло или файла нет — `None`.
@@ -667,10 +675,7 @@ pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf>
         return path.is_file().then_some(path);
     };
     let (w, h) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
-    let out = home().join(format!(
-        ".local/share/shell/wallpapers/{}-{w}x{h}.png",
-        style.name()
-    ));
+    let out = wallpaper_path(style, w, h);
     if out.exists() {
         return Some(out);
     }

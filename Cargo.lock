@@ -1158,6 +1158,7 @@ dependencies = [
  "shell-apps",
  "shell-core",
  "shell-dbus",
+ "shell-desktop",
  "shell-dock",
  "shell-icons",
  "shell-launcher",
@@ -1167,6 +1168,7 @@ dependencies = [
  "shell-render",
  "shell-setup",
  "shell-text",
+ "shell-wallpaper",
  "shell-widgets",
  "shell-x11",
  "tiny-skia",
@@ -1191,6 +1193,17 @@ name = "shell-dbus"
 version = "0.1.0"
 dependencies = [
  "zbus",
+]
+
+[[package]]
+name = "shell-desktop"
+version = "0.1.0"
+dependencies = [
+ "shell-core",
+ "shell-render",
+ "shell-text",
+ "shell-widgets",
+ "tiny-skia",
 ]
 
 [[package]]
