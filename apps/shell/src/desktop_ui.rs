@@ -28,7 +28,7 @@ use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_widgets::shape::paint;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
-use shell_x11::{DesktopWindow, Display, Event, Key, KeyPress, Popup};
+use shell_x11::{DesktopWindow, Display, Event, Key, KeyPress, Popup, SelectionRenderer};
 use tiny_skia::{IntRect, Pixmap};
 
 use crate::desktop_files;
@@ -124,6 +124,7 @@ pub struct DesktopUi {
     /// Рамка выделения: где начали и где указатель; окно рамки.
     band: Option<((f32, f32), (f32, f32))>,
     band_popup: Popup,
+    selection_renderer: Option<SelectionRenderer>,
     band_dirty: bool,
     /// Окно рамки (во весь экран, прозрачное) показано; где рамка нарисована
     /// в нём сейчас — этот участок и стираем при следующем движении.
@@ -153,6 +154,8 @@ impl DesktopUi {
         let window = d.create_desktop()?;
         window.show(d)?;
         let dir = desktop_files::desktop_dir();
+        let band_popup = d.create_popup("desktop-band")?;
+        let selection_renderer = SelectionRenderer::new(d, band_popup.id());
         let mut ui = DesktopUi {
             window,
             menu_popup: d.create_popup("desktop-menu")?,
@@ -176,7 +179,8 @@ impl DesktopUi {
             rename_dirty: false,
             rename_start: None,
             band: None,
-            band_popup: d.create_popup("desktop-band")?,
+            band_popup,
+            selection_renderer,
             band_dirty: false,
             band_shown: false,
             band_last: None,
@@ -482,6 +486,9 @@ impl DesktopUi {
     fn drop(&mut self, d: &Display, x: f32, y: f32) -> Result<()> {
         if self.band.take().is_some() {
             if std::mem::take(&mut self.band_shown) {
+                if let Some(renderer) = &mut self.selection_renderer {
+                    renderer.reset(d)?;
+                }
                 self.band_popup.hide_passive(d)?;
             }
             self.band_last = None;
@@ -1087,6 +1094,11 @@ impl DesktopUi {
             self.band_shown = true;
         }
         let rect = band_rect(start, end);
+        if let Some(renderer) = &mut self.selection_renderer {
+            renderer.paint(d, rect)?;
+            return Ok(());
+        }
+        // Совместимость с X-серверами без XRender/XFixes.
         // Участок: старая рамка и новая (с запасом на край и сглаживание).
         let (mut x0, mut y0) = (rect.0, rect.1);
         let (mut x1, mut y1) = (rect.0 + rect.2, rect.1 + rect.3);

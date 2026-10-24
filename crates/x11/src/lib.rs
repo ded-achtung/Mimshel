@@ -9,10 +9,12 @@ mod dnd;
 mod dock;
 mod keyboard;
 mod shm;
+mod selection;
 mod windows;
 
 pub use clipboard::{clipboard_files, copy_files};
 pub use desktop::DesktopWindow;
+pub use selection::SelectionRenderer;
 pub use dock::DockWindow;
 
 use std::sync::Mutex;
