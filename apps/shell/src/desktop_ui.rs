@@ -13,6 +13,7 @@
 //! обои или другой список файлов — стол отправляется целиком; выделение —
 //! только клетки затронутых значков.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
@@ -27,7 +28,9 @@ use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_widgets::shape::paint;
 use shell_widgets::{Menu, MenuEntry, MenuResult};
-use shell_x11::{DesktopWindow, Display, Event, Key, KeyPress, Popup};
+use shell_x11::{
+    DesktopWindow, Display, DragTarget, Event, Key, KeyPress, Popup, SelectionRenderer,
+};
 use tiny_skia::{IntRect, Pixmap};
 
 use crate::desktop_files;
@@ -63,6 +66,8 @@ pub enum DesktopMsg {
     Picked(Option<String>),
     /// Список файлов на столе (сразу и после каждой перемены в папке).
     Files(Vec<Item>),
+    /// Завершённый перенос файлов из другой программы — подтвердить XDND.
+    DropFinished { ticket: u64, success: bool },
 }
 
 /// Нажали на значок: где, и тащат ли его уже (сдвинули дальше [`DRAG_START`]).
@@ -121,6 +126,7 @@ pub struct DesktopUi {
     /// Рамка выделения: где начали и где указатель; окно рамки.
     band: Option<((f32, f32), (f32, f32))>,
     band_popup: Popup,
+    selection_renderer: Option<SelectionRenderer>,
     band_dirty: bool,
     /// Окно рамки (во весь экран, прозрачное) показано; где рамка нарисована
     /// в нём сейчас — этот участок и стираем при следующем движении.
@@ -148,8 +154,12 @@ pub struct DesktopUi {
 impl DesktopUi {
     pub fn new(d: &Display, config: &Config, tx: Sender<Msg>) -> Result<DesktopUi> {
         let window = d.create_desktop()?;
+        // Xfwm4 обновляет _NET_WORKAREA при изменении резервов Dock/панелей.
+        d.watch_root()?;
         window.show(d)?;
         let dir = desktop_files::desktop_dir();
+        let band_popup = d.create_popup("desktop-band")?;
+        let selection_renderer = SelectionRenderer::new(d, band_popup.id());
         let mut ui = DesktopUi {
             window,
             menu_popup: d.create_popup("desktop-menu")?,
@@ -173,7 +183,8 @@ impl DesktopUi {
             rename_dirty: false,
             rename_start: None,
             band: None,
-            band_popup: d.create_popup("desktop-band")?,
+            band_popup,
+            selection_renderer,
             band_dirty: false,
             band_shown: false,
             band_last: None,
@@ -189,6 +200,8 @@ impl DesktopUi {
             painter: painter(tx.clone()),
             tx: tx.clone(),
         };
+        // Картинка, которую тащат, не должна заслонять окно под указателем.
+        ui.drag_popup.pass_through(d)?;
         ui.grid.set_saved(desktop_files::load_places());
         ui.place_icons(d);
         ui.load_wallpaper(d);
@@ -204,12 +217,31 @@ impl DesktopUi {
             .first()
             .map(|&(x, y, w, h)| (x as f32 / k, y as f32 / k, w as f32 / k, h as f32 / k))
             .unwrap_or((0.0, 0.0, f32::from(sw), f32::from(sh)));
-        let top = my + self.menubar_height as f32 + MARGIN;
+        // Приоритет — EWMH _NET_WORKAREA от оконного менеджера: фактические
+        // резервы панелей, Plank и нашего Dock уже вычислены на стороне WM.
+        // Пересекаем глобальную область с выбранным монитором, не смешивая
+        // пиксели и точки на HiDPI.
+        let bounds = d.workarea().and_then(|(x, y, w, h)| {
+            let (left, top) = ((x as f32 / k).max(mx), (y as f32 / k).max(my));
+            let (right, bottom) = (
+                ((i64::from(x) + i64::from(w)) as f32 / k).min(mx + mw),
+                ((i64::from(y) + i64::from(h)) as f32 / k).min(my + mh),
+            );
+            (right > left && bottom > top).then_some((left, top, right, bottom))
+        });
+        // Не выше строки меню и не ниже дока: док при «умном» скрытии места не
+        // резервирует, и рабочая область от оконного менеджера его не учитывает —
+        // нижний ряд значков ушёл бы под него.
+        let (min_top, max_bottom) = (my + self.menubar_height as f32, my + mh - DOCK_ROOM);
+        let (left, top, right, bottom) = bounds
+            .map(|(l, t, r, b)| (l, t.max(min_top), r, b.min(max_bottom)))
+            .unwrap_or((mx, min_top, mx + mw, max_bottom));
+        let top = top + MARGIN;
         self.grid.set_area((
-            mx,
+            left,
             top,
-            mw - MARGIN,
-            (my + mh - DOCK_ROOM - top).max(icon_grid::CELL_H),
+            (right - left - MARGIN).max(icon_grid::CELL_W),
+            (bottom - top - MARGIN).max(icon_grid::CELL_H),
         ));
         self.full_dirty = true;
     }
@@ -252,6 +284,9 @@ impl DesktopUi {
                 }
                 self.open_picker(d)?;
             }
+            DesktopMsg::DropFinished { ticket, success } => {
+                d.finish_drop(ticket, success);
+            }
             DesktopMsg::Files(items) => {
                 self.grid.set_items(items);
                 if let Some(path) = self.pending_select.take() {
@@ -289,6 +324,10 @@ impl DesktopUi {
             | Event::Dropped { window, .. } => window == self.window.id(),
             // Сменился размер экрана (корневое окно) — стол во весь экран заново.
             Event::Configure { window } => window == d.root(),
+            Event::Property {
+                window,
+                what: shell_x11::Property::WorkArea,
+            } => window == d.root(),
             _ => false,
         }
     }
@@ -300,6 +339,15 @@ impl DesktopUi {
             self.window.show(d)?;
             self.place_icons(d);
             self.load_wallpaper(d);
+            return Ok(());
+        }
+        if let Event::Property {
+            window,
+            what: shell_x11::Property::WorkArea,
+        } = ev
+            && window == d.root()
+        {
+            self.place_icons(d);
             return Ok(());
         }
         if self.rename.is_some() {
@@ -326,19 +374,28 @@ impl DesktopUi {
                 self.cells_dirty.extend(changed);
                 Ok(())
             }
-            Event::Dropped { x, y, .. } => {
+            Event::Dropped {
+                x,
+                y,
+                moving,
+                ticket,
+                ..
+            } => {
                 let changed = self.grid.set_drop_target(None);
                 self.cells_dirty.extend(changed);
-                // Как в Проводнике и Finder: на том же диске — переместить,
-                // с Ctrl или с другого диска (флешки) — скопировать. Что
-                // предложил источник, не важно: Thunar всегда просит копию.
-                let (ctrl, _) = d.modifiers();
-                self.dropped(d.take_drop(), f32::from(x), f32::from(y), ctrl);
+                // Выполняем именно подтверждённое источнику действие.
+                self.dropped(
+                    d.take_drop(ticket),
+                    f32::from(x),
+                    f32::from(y),
+                    moving,
+                    ticket,
+                );
                 Ok(())
             }
             Event::Key(k) => self.key(k),
             Event::Motion { window, x, y } if window == self.window.id() => {
-                self.drag_motion(f32::from(x), f32::from(y));
+                self.drag_motion(d, f32::from(x), f32::from(y));
                 Ok(())
             }
             Event::Release {
@@ -428,7 +485,7 @@ impl DesktopUi {
     }
 
     /// Мышь с нажатой кнопкой: сдвинули значок достаточно — тащим.
-    fn drag_motion(&mut self, x: f32, y: f32) {
+    fn drag_motion(&mut self, d: &Display, x: f32, y: f32) {
         if let Some((start, _)) = self.band {
             self.band = Some((start, (x, y)));
             let changed = self
@@ -448,9 +505,24 @@ impl DesktopUi {
             }
             press.dragging = true;
             self.last_click = None;
+            // Стол — источник XDND: значки можно бросить и в окно Проводника.
+            let paths: Vec<PathBuf> = self
+                .grid
+                .selected_items()
+                .iter()
+                .map(|i| i.path.clone())
+                .collect();
+            d.drag_begin(self.window.id(), &paths);
         }
         self.drag_at = (x, y);
         self.drag_dirty = true;
+        // Стол во весь экран от угла: его точки — точки экрана.
+        let over = d.drag_motion(x.round() as i16, y.round() as i16, d.modifiers().0);
+        if over != DragTarget::Own {
+            let changed = self.grid.set_drop_target(None);
+            self.cells_dirty.extend(changed);
+            return;
+        }
         // Папка под указателем (не из переносимых) — подсветить: туда упадут.
         let moving = self.grid.selected_indices().to_vec();
         let target = self
@@ -467,6 +539,9 @@ impl DesktopUi {
     fn drop(&mut self, d: &Display, x: f32, y: f32) -> Result<()> {
         if self.band.take().is_some() {
             if std::mem::take(&mut self.band_shown) {
+                if let Some(renderer) = &mut self.selection_renderer {
+                    renderer.reset(d)?;
+                }
                 self.band_popup.hide_passive(d)?;
             }
             self.band_last = None;
@@ -485,6 +560,12 @@ impl DesktopUi {
         self.drag_popup.hide_passive(d)?;
         let changed = self.grid.set_drop_target(None);
         self.cells_dirty.extend(changed);
+        // Над окном другой программы: согласна — файлы её (переместит или
+        // скопирует сама, стол узнает из слежения за папкой); нет, или окно
+        // файлы не принимает — значки остаются, где были (как в Finder).
+        if d.drag_end() != DragTarget::Own {
+            return Ok(());
+        }
         let moving: Vec<usize> = self.grid.selected_indices().to_vec();
         let target = self
             .grid
@@ -529,8 +610,14 @@ impl DesktopUi {
 
     /// Бросили файлы из другой программы: на папку — в неё, иначе — на стол,
     /// значками там, где отпустили (несколько — рядом друг с другом).
-    fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, copy: bool) {
+    fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, moving: bool, ticket: u64) {
         if paths.is_empty() {
+            let _ = self
+                .tx
+                .send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
+                    ticket,
+                    success: false,
+                })));
             return;
         }
         let folder = self
@@ -541,6 +628,8 @@ impl DesktopUi {
             .map(|t| t.path.clone());
         let into = folder.clone().unwrap_or_else(|| self.dir.clone());
         let mut pairs = Vec::new();
+        // Имена всех файлов должны быть разными ещё до начала копирования.
+        let mut reserved = HashSet::new();
         let mut slot = self.grid.slot_at(x, y);
         for src in paths {
             let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else {
@@ -550,12 +639,13 @@ impl DesktopUi {
             if src == into {
                 continue;
             }
-            let dest = if src.parent() == Some(into.as_path()) {
-                // Уже здесь (перетащили из окна «Рабочий стол») — только место.
+            let dest = if moving && src.parent() == Some(into.as_path()) {
+                // Перемещение на свой стол меняет только положение значка.
                 src.clone()
             } else {
-                shell_desktop::files::free_name(&into, &name)
+                shell_desktop::files::free_name_reserved(&into, &name, &reserved)
             };
+            reserved.insert(dest.clone());
             if folder.is_none() {
                 slot = self.grid.free_slot_near(slot, None);
                 if let Some(n) = dest.file_name() {
@@ -572,11 +662,8 @@ impl DesktopUi {
             desktop_files::save_places(self.grid.saved());
             self.full_dirty = true;
         }
-        let (moves, copies): (Vec<_>, Vec<_>) = pairs
-            .into_iter()
-            .partition(|(src, _)| !copy && desktop_files::same_disk(src, &into));
-        desktop_files::bring(moves, true);
-        desktop_files::bring(copies, false);
+        // В одном рабочем потоке: один результат на весь пакет, затем XDND ack.
+        desktop_files::bring(pairs, moving, ticket, self.tx.clone());
     }
 
     /// Клавиши, когда стол активен. Сочетания с Ctrl — по месту клавиши,
@@ -1066,6 +1153,11 @@ impl DesktopUi {
             self.band_shown = true;
         }
         let rect = band_rect(start, end);
+        if let Some(renderer) = &mut self.selection_renderer {
+            renderer.paint(d, rect)?;
+            return Ok(());
+        }
+        // Совместимость с X-серверами без XRender/XFixes.
         // Участок: старая рамка и новая (с запасом на край и сглаживание).
         let (mut x0, mut y0) = (rect.0, rect.1);
         let (mut x1, mut y1) = (rect.0 + rect.2, rect.1 + rect.3);

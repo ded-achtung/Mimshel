@@ -19,6 +19,28 @@ impl Display {
         self.root
     }
 
+    /// Доступная рабочая область по EWMH в физических пикселях. У xfwm4 она
+    /// учитывает резервы панелей и Dock. Нет свойства — вызывающий применит
+    /// прежние безопасные отступы.
+    pub fn workarea(&self) -> Option<(i32, i32, u32, u32)> {
+        let a = &self.atoms;
+        let desk = self
+            .cardinals(self.root, a._NET_CURRENT_DESKTOP, AtomEnum::CARDINAL)
+            .first()
+            .copied()
+            .unwrap_or(0) as usize;
+        let all = self.cardinals(self.root, a._NET_WORKAREA, AtomEnum::CARDINAL);
+        let index = desk.checked_mul(4)?;
+        let r = all.get(index..index + 4)?;
+        let (x, y, w, h) = (
+            i32::try_from(r[0]).ok()?,
+            i32::try_from(r[1]).ok()?,
+            r[2],
+            r[3],
+        );
+        (w > 0 && h > 0).then_some((x, y, w, h))
+    }
+
     /// Получать события о списке окон, активном окне и размере экрана.
     pub fn watch_root(&self) -> Result<()> {
         let mask = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;

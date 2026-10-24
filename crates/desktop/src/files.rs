@@ -6,7 +6,7 @@
 //! `generic-icons`, например `image-x-generic`). Ярлык `.desktop` — значком
 //! и названием своей программы.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use shell_apps::Locale;
@@ -180,9 +180,18 @@ pub fn scan(dir: &Path, mime: &MimeDb, locale: Option<&Locale>) -> Vec<Item> {
 
 /// Свободное имя в папке `dir`: `имя`, `имя 2`, `имя 3`… (у файла — перед
 /// расширением: `фото 2.jpg`).
-pub fn free_name(dir: &Path, name: &str) -> PathBuf {
+/// Свободное имя с учётом уже назначенных имён в пакетной операции.
+/// Проверяем и битые символьные ссылки: Path::exists их пропускает.
+pub fn free_name_reserved(dir: &Path, name: &str, reserved: &HashSet<PathBuf>) -> PathBuf {
+    let available = |p: &Path| {
+        !reserved.contains(p)
+            && matches!(
+                std::fs::symlink_metadata(p),
+                Err(ref e) if e.kind() == std::io::ErrorKind::NotFound
+            )
+    };
     let first = dir.join(name);
-    if !first.exists() {
+    if available(&first) {
         return first;
     }
     let (stem, ext) = match name.rsplit_once('.') {
@@ -191,8 +200,12 @@ pub fn free_name(dir: &Path, name: &str) -> PathBuf {
     };
     (2..)
         .map(|n| dir.join(format!("{stem} {n}{ext}")))
-        .find(|p| !p.exists())
+        .find(|p| available(p))
         .expect("свободное имя найдётся")
+}
+
+pub fn free_name(dir: &Path, name: &str) -> PathBuf {
+    free_name_reserved(dir, name, &HashSet::new())
 }
 
 #[cfg(test)]
@@ -260,5 +273,28 @@ mod tests {
         assert_eq!(free_name(&dir, "заметка.txt"), dir.join("заметка 2.txt"));
         assert_eq!(free_name(&dir, "новый.txt"), dir.join("новый.txt"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+    #[test]
+    fn reserved_names_and_dangling_symlinks_are_occupied() {
+        use std::os::unix::fs::symlink;
+
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("shell-safe-names-{}-{id}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("документ.txt"), "старый").unwrap();
+        let mut reserved = HashSet::new();
+        let first = free_name_reserved(&dir, "документ.txt", &reserved);
+        assert_eq!(first.file_name().unwrap(), "документ 2.txt");
+        reserved.insert(first);
+        let second = free_name_reserved(&dir, "документ.txt", &reserved);
+        assert_eq!(second.file_name().unwrap(), "документ 3.txt");
+
+        symlink(dir.join("нет-файла"), dir.join("битая ссылка")).unwrap();
+        assert_eq!(free_name(&dir, "битая ссылка"), dir.join("битая ссылка 2"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

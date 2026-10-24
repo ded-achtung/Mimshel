@@ -8,12 +8,15 @@ mod desktop;
 mod dnd;
 mod dock;
 mod keyboard;
+mod selection;
 mod shm;
 mod windows;
 
 pub use clipboard::{clipboard_files, copy_files};
 pub use desktop::DesktopWindow;
+pub use dnd::DragTarget;
 pub use dock::DockWindow;
+pub use selection::SelectionRenderer;
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -123,11 +126,15 @@ x11rb::atom_manager! {
         XdndSelection,
         XdndActionCopy,
         XdndActionMove,
+        XdndActionList,
+        TARGETS,
         TEXT_URI_LIST: b"text/uri-list",
         SHELL_XDND,
         _NET_WM_STATE_SKIP_PAGER,
         _NET_WM_STRUT,
         _NET_WM_STRUT_PARTIAL,
+        _NET_WORKAREA,
+        _NET_CURRENT_DESKTOP,
         _NET_FRAME_EXTENTS,
         _GTK_FRAME_EXTENTS,
     }
@@ -140,6 +147,7 @@ pub enum Property {
     ClientList,
     /// Активное окно (у корневого окна).
     ActiveWindow,
+    WorkArea,
     /// Свёрнуто/развёрнуто и т. п.
     State,
     Title,
@@ -205,13 +213,14 @@ pub enum Event {
     DropLeave {
         window: u32,
     },
-    /// Файлы бросили на окно: переместить (`moving`) или скопировать. Пути —
-    /// [`Display::take_drop`].
+    /// Файлы бросили на окно; действие определено протоколом XDND.
+    /// Пути читаются через [`Display::take_drop`], затем [`Display::finish_drop`].
     Dropped {
         window: u32,
         x: i16,
         y: i16,
         moving: bool,
+        ticket: u64,
     },
     /// Включилась раскладка с этим номером (с 0).
     KeyboardGroup(u8),
@@ -505,6 +514,7 @@ impl Display {
                         Property::ClientList
                     }
                     x if x == a._NET_ACTIVE_WINDOW => Property::ActiveWindow,
+                    x if x == a._NET_WORKAREA || x == a._NET_CURRENT_DESKTOP => Property::WorkArea,
                     x if x == a._NET_WM_STATE || x == a.WM_STATE => Property::State,
                     x if x == a._NET_WM_NAME || x == u32::from(AtomEnum::WM_NAME) => {
                         Property::Title
@@ -523,6 +533,10 @@ impl Display {
             XEvent::ClientMessage(e) => self
                 .dnd_message(e.window, e.type_, e.data.as_data32())
                 .unwrap_or(Event::Other),
+            XEvent::SelectionRequest(e) if e.selection == self.atoms.XdndSelection => {
+                self.dnd_request(&e);
+                Event::Other
+            }
             XEvent::SelectionNotify(e)
                 if e.property == self.atoms.SHELL_XDND
                     || e.selection == self.atoms.XdndSelection =>
@@ -752,6 +766,23 @@ impl Popup {
 
     pub fn id(&self) -> u32 {
         self.window
+    }
+
+    /// Окно не ловит мышь: указатель «видит» окна под ним. Нужно картинке,
+    /// которую тащат, — иначе под указателем всегда она сама.
+    pub fn pass_through(&self, d: &Display) -> Result<()> {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        d.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::INPUT,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            self.window,
+            0,
+            0,
+            &[],
+        )?;
+        d.conn.flush()?;
+        Ok(())
     }
 }
 

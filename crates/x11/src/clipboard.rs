@@ -165,13 +165,13 @@ fn serve(paths: &[PathBuf], cut: bool) -> crate::Result<()> {
 }
 
 /// Что отдать просящей программе.
-enum Data {
+pub(crate) enum Data {
     Atoms(Vec<Atom>),
     Text(String),
 }
 
 /// Ответить просящей программе: данные — в её свойство, и сообщить.
-fn answer(
+pub(crate) fn answer(
     conn: &RustConnection,
     req: &SelectionRequestEvent,
     data: Option<(Atom, Data)>,
@@ -233,7 +233,7 @@ pub(crate) fn parse(text: &str) -> Option<(bool, Vec<PathBuf>)> {
 }
 
 /// Путь → адрес `file://` (всё, кроме букв, цифр и `/-._~`, — `%XX`).
-fn percent_encode(path: &str) -> String {
+pub(crate) fn percent_encode(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for b in path.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'.' | b'_' | b'~') {

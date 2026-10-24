@@ -137,15 +137,25 @@ pub fn new_text_file(dir: &Path) -> Option<PathBuf> {
 
 /// Переименовать файл в той же папке. Ошибка — словами для окна.
 pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
-    if new.contains('/') {
-        return Err("В имени не может быть знака «/».".into());
+    if new.is_empty() || matches!(new, "." | "..") || new.contains('/') {
+        return Err("Недопустимое имя файла.".into());
     }
     let dir = path.parent().ok_or("нет папки")?;
     let target = dir.join(new);
     if target.exists() {
         return Err(format!("«{new}» уже есть на рабочем столе."));
     }
-    std::fs::rename(path, &target).map_err(|e| format!("Не удалось переименовать: {e}"))?;
+    // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
+    // GNU mv с none-fail не заменяет назначения даже при гонке.
+    let status = Command::new("mv")
+        .args(["--no-clobber", "-T", "--"])
+        .arg(path)
+        .arg(&target)
+        .status()
+        .map_err(|e| format!("Не удалось переименовать: {e}"))?;
+    if !status.success() {
+        return Err("Переименование не выполнено: имя занято или файл недоступен.".into());
+    }
     Ok(target)
 }
 
@@ -158,7 +168,7 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
         };
         let dest = free_name(&folder, &name);
         let ok = Command::new("mv")
-            .arg("--")
+            .args(["--no-clobber", "-T", "--"])
             .arg(&path)
             .arg(&dest)
             .status()
@@ -169,35 +179,54 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
     });
 }
 
-/// Лежат ли файл и папка на одном диске (тогда перенос — просто переезд).
-pub fn same_disk(file: &Path, dir: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (std::fs::symlink_metadata(file), std::fs::metadata(dir)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev(),
-        _ => false,
+/// Файловая операция выполняется последовательно для всей группы.
+/// Ошибки возвращаются вызывающему: тесты не открывают окна zenity.
+fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (src, dest) in pairs {
+        // GNU coreutils на Ubuntu CI может быть старше 9.5: --update=none-fail
+        // недоступен. Проверка препятствует ложному успеху для уже занятых путей,
+        // а --no-clobber защищает назначение от конкурентной записи.
+        if std::fs::symlink_metadata(dest).is_ok() {
+            errors.push(format!(
+                "Файл назначения {} уже существует.",
+                dest.display()
+            ));
+            continue;
+        }
+        let mut cmd = Command::new(if moving { "mv" } else { "cp" });
+        cmd.args(["--no-clobber", "-T"]);
+        if !moving {
+            cmd.arg("-a");
+        }
+        let ok = cmd
+            .arg("--")
+            .arg(src)
+            .arg(dest)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            let name = src.file_name().unwrap_or_default().to_string_lossy();
+            errors.push(format!(
+                "Не удалось перенести «{name}»: файл назначения занят или недоступен."
+            ));
+        }
     }
+    errors
 }
 
-/// Перенести (`moving`) или скопировать файлы `src` → `dest` (перетащили из
-/// другой программы на стол или на папку).
-pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool) {
+/// Перенести или скопировать и отправить событие XDND только после операции.
+pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool, ticket: u64, tx: Sender<Msg>) {
     std::thread::spawn(move || {
-        for (src, dest) in pairs {
-            let mut cmd = Command::new(if moving { "mv" } else { "cp" });
-            if !moving {
-                cmd.arg("-a");
-            }
-            let ok = cmd
-                .arg("--")
-                .arg(&src)
-                .arg(&dest)
-                .status()
-                .is_ok_and(|s| s.success());
-            if !ok {
-                let name = src.file_name().unwrap_or_default().to_string_lossy();
-                error(&format!("Не удалось перенести «{name}»."));
-            }
+        let errors = transfer(&pairs, moving);
+        let success = errors.is_empty();
+        for message in errors {
+            error(&message);
         }
+        let _ = tx.send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
+            ticket,
+            success,
+        })));
     });
 }
 
@@ -264,6 +293,7 @@ pub fn paste(dir: PathBuf) {
                 ("cp", "скопировать")
             };
             let mut cmd = Command::new(program);
+            cmd.args(["--no-clobber", "-T"]);
             if !cut {
                 cmd.arg("-a");
             }
@@ -334,5 +364,36 @@ pub fn spawn(args: &[&str], dir: Option<&Path>) {
             std::thread::spawn(move || child.wait());
         }
         Err(e) => eprintln!("Не запустить {program}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    #[test]
+    fn move_and_copy_never_replace_an_existing_file() {
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("shell-transfer-{}-{id}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("source.txt");
+        let existing = root.join("destination.txt");
+        let new = root.join("new.txt");
+        std::fs::write(&source, "new").unwrap();
+        std::fs::write(&existing, "original").unwrap();
+
+        for moving in [false, true] {
+            assert!(!transfer(&[(source.clone(), existing.clone())], moving).is_empty());
+            assert_eq!(std::fs::read_to_string(&existing).unwrap(), "original");
+            assert_eq!(std::fs::read_to_string(&source).unwrap(), "new");
+        }
+        assert!(transfer(&[(source.clone(), new.clone())], false).is_empty());
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), "new");
+        assert!(source.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

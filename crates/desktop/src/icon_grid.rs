@@ -376,13 +376,35 @@ impl IconGrid {
     pub fn set_selection(&mut self, mut new: Vec<usize>) -> Vec<usize> {
         new.sort_unstable();
         new.dedup();
-        let changed: Vec<usize> = self
-            .selected
-            .iter()
-            .filter(|i| !new.contains(i))
-            .chain(new.iter().filter(|i| !self.selected.contains(i)))
-            .copied()
-            .collect();
+        // Оба списка отсортированы; симметрическая разность двух указателей
+        // вместо O(N²) повторных Vec::contains.
+        let mut changed = Vec::new();
+        let (mut a, mut b) = (0, 0);
+        while a < self.selected.len() || b < new.len() {
+            match (self.selected.get(a), new.get(b)) {
+                (Some(&old), Some(&next)) if old == next => {
+                    a += 1;
+                    b += 1;
+                }
+                (Some(&old), Some(&next)) if old < next => {
+                    changed.push(old);
+                    a += 1;
+                }
+                (Some(_), Some(&next)) => {
+                    changed.push(next);
+                    b += 1;
+                }
+                (Some(&old), None) => {
+                    changed.push(old);
+                    a += 1;
+                }
+                (None, Some(&next)) => {
+                    changed.push(next);
+                    b += 1;
+                }
+                (None, None) => break,
+            }
+        }
         self.selected = new;
         changed
     }
