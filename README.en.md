@@ -1,6 +1,8 @@
-# shell (working title)
+# Mimshel
 
 [Русский](README.md) · **English**
+
+**Mimshel** is the project name, inspired by Saturn's moon Mimas, its Herschel crater, and the word *shell*. The command-line executable is still named `shell`; renaming it is a separate compatibility-sensitive change.
 
 A macOS-style desktop shell for Linux/X11, written in Rust. Windows are managed
 by xfwm4; shell draws the dock, the menu bar, the Search and Apps windows and
