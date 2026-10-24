@@ -1,4 +1,4 @@
-//! Как выглядит Launchpad: размытый затемнённый рабочий стол, поле поиска,
+//! Как выглядит окно «Программы»: размытый затемнённый рабочий стол, поле поиска,
 //! сетка иконок с подписями, точки страниц. Размеры сетки — из настроек
 //! (как в rofi-теме macos-look: 7×4, иконки 72 px).
 
@@ -7,8 +7,8 @@ use shell_render::Canvas;
 use shell_text::{Fonts, Style};
 use tiny_skia::{FillRule, IntSize, Pixmap, Transform};
 
-use crate::Launchpad;
-use crate::draw::{draw_icon, fill_pixels, fill_rect, magnifier, paint, rounded};
+use super::AppsPanel;
+use crate::common::{draw_icon, fill_pixels, fill_rect, magnifier, paint, rounded};
 
 /// Во сколько раз уменьшать снимок экрана перед размытием: и быстрее,
 /// и само уменьшение — часть размытия.
@@ -54,7 +54,7 @@ const NOTHING: Style = Style {
     weight: 400,
 };
 
-/// Фон Launchpad из снимка экрана: уменьшить, размыть, растянуть обратно,
+/// Фон окна «Программы» из снимка экрана: уменьшить, размыть, растянуть обратно,
 /// затемнить. Без снимка — ровный тёмный фон размера `size`.
 pub fn backdrop(screen: Option<&Pixmap>, size: (u32, u32)) -> Pixmap {
     let size = (size.0.max(1), size.1.max(1));
@@ -200,8 +200,8 @@ fn box_pass(src: &[u8], dst: &mut [u8], len: usize, lines: usize, step: usize, l
     }
 }
 
-impl Launchpad {
-    /// Рисует экран Launchpad поверх готового фона (см. [`backdrop`]; фон —
+impl AppsPanel {
+    /// Рисует окно поверх готового фона (см. [`backdrop`]; фон —
     /// в пикселях экрана, `scale` — сколько их в точке).
     pub fn render(
         &self,
@@ -318,8 +318,8 @@ impl Launchpad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launchpad::Grid;
-    use crate::spotlight::tests::app;
+    use crate::apps_panel::Grid;
+    use crate::search_panel::tests::app;
     use shell_core::input::{Key, KeyPress};
 
     #[test]
@@ -360,7 +360,7 @@ mod tests {
             icon: 72,
         };
         let apps = ["А", "Б", "В", "Г", "Д", "Е", "Ж"].map(app).to_vec();
-        let mut l = Launchpad::new(apps, (900, 600), grid);
+        let mut l = AppsPanel::new(apps, (900, 600), grid);
         let bg = backdrop(None, l.size());
         let pm = l.render(&bg, 1.0, &mut fonts, &mut icons);
         assert_eq!((pm.width(), pm.height()), (900, 600));

@@ -3,14 +3,14 @@
 [Русский](README.md) · **English**
 
 A macOS-style desktop shell for Linux/X11, written in Rust. Windows are managed
-by xfwm4; shell draws the dock, the menu bar, Spotlight, Launchpad and
+by xfwm4; shell draws the dock, the menu bar, the Search and Apps windows and
 notifications. Rendering is done on the CPU with tiny-skia, text with
 cosmic-text, X11 through x11rb and D-Bus through zbus. Wayland is not supported.
 
 ## Features
 
-- Spotlight with application search, including when typed in the wrong keyboard
-  layout, and Launchpad.
+- The Search window (Super+Space) finds applications, including when typed in the
+  wrong keyboard layout; the Apps window (Super+A) shows all applications in a grid.
 - Dock: pinning and reordering icons, window grouping, window previews, Trash.
 - Menu bar: global menu (GTK and DBusMenu), StatusNotifierItem tray, keyboard
   layout, clock with a calendar, volume, battery and Control Center. The legacy XEmbed tray is
@@ -65,7 +65,7 @@ path to Xvfb if it is not in PATH. The D-Bus test checks notifications, actions,
 closing, and reconnecting after the service restarts.
 
 A normal test run skips the Xvfb test (run it with the separate command above)
-and the Launchpad background speed benchmark. The tests do not cover a real
+and the Apps window background speed benchmark. The tests do not cover a real
 screen lock, Wi-Fi/Bluetooth hardware, or compatibility with every application.
 
 Running shell needs an X11 session with D-Bus; it uses `pactl`,
@@ -83,7 +83,7 @@ PAM. The font and icon theme are set in the config; the defaults are Inter and C
 ```
 
 The last command starts the service in the current graphical session. From
-another terminal, `shell spotlight` and `shell launchpad` open those windows.
+another terminal, `shell search` and `shell apps` open the Search and Apps windows.
 Commands go through `$XDG_RUNTIME_DIR/shell.sock`. If that variable is not set,
 `/run/user/UID/shell.sock` is used, and if that directory does not exist,
 `/tmp/shell-runtime-UID/shell.sock`. The directory must belong to the user and
@@ -98,7 +98,7 @@ and applies it, restarting the service if needed. `shell doctor` checks the
 environment, and `shell doctor --fix` changes it to fix the problems it finds.
 
 The file is checked for syntax, key names, types and value ranges. Icon sizes:
-16–256, menu bar height: 16–128, dock magnification: 100–300 %, Launchpad grid:
+16–256, menu bar height: 16–128, dock magnification: 100–300 %, Apps window grid:
 1–32 rows and columns. A broken file never replaces the last good copy,
 `$XDG_STATE_HOME/shell/config.good.toml` (by default
 `~/.local/state/shell/config.good.toml`). The service falls back to that copy on

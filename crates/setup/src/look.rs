@@ -88,6 +88,12 @@ pub struct Names {
 /// оформление, он должен видеть то же, что и shell, иначе вернёт прежнюю
 /// программу.
 pub fn set_macos_look_engine(part: &str, value: &str) -> std::io::Result<()> {
+    // У macos-look окна «Поиск» и «Программы» — по-старому.
+    let part = match part {
+        "search_panel" => "spotlight",
+        "apps_panel" => "launchpad",
+        p => p,
+    };
     let path = home().join(".config/macos-look/config.ini");
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -198,7 +204,7 @@ impl Look {
         }
     }
 
-    /// Программы, скрытые из Launchpad.
+    /// Программы, скрытые из окна «Программы».
     pub fn hidden_apps(&self) -> Vec<String> {
         self.get("launchpad", "hide")
             .split(',')
@@ -208,14 +214,46 @@ impl Look {
             .collect()
     }
 
-    /// Команда для сочетания клавиш и значка Launchpad: своя программа
-    /// напрямую (запуск Python добавил бы к открытию ~0,1 с) или rofi через
-    /// macos-look.
-    pub fn shortcut_command(paths: &Paths, action: &str, shell: bool) -> String {
-        let program = if shell { &paths.shell_bin } else { &paths.tool };
-        format!("{} {action}", program.display())
+    /// Команда для сочетания клавиш и значка окна: своя программа напрямую
+    /// (запуск Python добавил бы к открытию ~0,1 с) или rofi через macos-look.
+    pub fn shortcut_command(paths: &Paths, s: &Shortcut, shell: bool) -> String {
+        if shell {
+            format!("{} {}", paths.shell_bin.display(), s.command)
+        } else {
+            format!("{} {}", paths.tool.display(), s.old_command)
+        }
     }
 }
+
+/// Сочетание клавиш, открывающее окно оболочки.
+pub struct Shortcut {
+    /// Клавиши, как их пишет xfconf.
+    pub keys: &'static str,
+    /// Часть в `[parts]`: кто показывает окно — shell или rofi.
+    pub part: &'static str,
+    /// Команда shell (`shell search`).
+    pub command: &'static str,
+    /// Команда macos-look для rofi (`macos-look spotlight`).
+    pub old_command: &'static str,
+}
+
+/// Окно «Поиск».
+pub const SEARCH_SHORTCUT: Shortcut = Shortcut {
+    keys: "<Super>space",
+    part: "search_panel",
+    command: "search",
+    old_command: "spotlight",
+};
+
+/// Окно «Программы» (и значок в доке).
+pub const APPS_SHORTCUT: Shortcut = Shortcut {
+    keys: "<Super>a",
+    part: "apps_panel",
+    command: "apps",
+    old_command: "launchpad",
+};
+
+pub const SHORTCUTS: &[Shortcut] = &[SEARCH_SHORTCUT, APPS_SHORTCUT];
 
 #[cfg(test)]
 mod tests {

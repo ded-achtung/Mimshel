@@ -141,7 +141,7 @@ impl DockUi {
         Ok(())
     }
 
-    /// Программа запущена (из Spotlight или Launchpad) — пусть значок прыгает.
+    /// Программа запущена (из «Поиска» или «Программ») — пусть значок прыгает.
     pub fn launched(&mut self, app: &App) {
         self.dock.launched(&app.id, Instant::now());
         self.start_ticking();
@@ -572,7 +572,7 @@ impl DockUi {
         Ok(())
     }
 
-    /// Закрыть меню и миниатюры (если открыты): например, перед открытием Spotlight.
+    /// Закрыть меню и миниатюры (если открыты): например, перед открытием «Поиска».
     pub fn close_popups(&mut self, d: &Display) -> Result<()> {
         self.close_preview(d)?;
         self.preview_blocked = true;

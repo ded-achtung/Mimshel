@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-use shell_core::config::{PARTS, SETTINGS, set_value, setting_value};
+use shell_core::config::{self, PARTS, SETTINGS, set_value, setting_value};
 use shell_setup::doctor::{Check, checks, fix_parts};
 use shell_setup::look::{Look, Paths, set_macos_look_engine};
 use shell_setup::parts::{APPLY_PARTS, apply};
@@ -112,6 +112,7 @@ fn print_check(c: &Check) {
 /// `apply` = false (`shell set --no-apply`) — только записать: установщик
 /// пишет несколько настроек и применяет всё разом.
 pub fn set(key: &str, input: &str, apply: bool) -> i32 {
+    let key = &config::current_key(key);
     let value = match setting_value(key, input) {
         Ok(v) => v,
         Err(e) => {
@@ -150,7 +151,7 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     // настройки поменялись (Plank, панель Xfce). Служба перезапускается всегда.
     let parts: Vec<&str> = match section {
         "parts" => {
-            vec![if name == "spotlight" || name == "launchpad" {
+            vec![if name == "search_panel" || name == "apps_panel" {
                 "launchers"
             } else {
                 name
@@ -173,7 +174,7 @@ pub fn apply_cmd(parts: &[String]) -> i32 {
     let mut list = Vec::new();
     for p in parts {
         let p = match p.as_str() {
-            "spotlight" | "launchpad" => "launchers",
+            "search" | "apps" | "spotlight" | "launchpad" => "launchers",
             p => p,
         };
         let Some(&known) = APPLY_PARTS.iter().find(|&&a| a == p) else {

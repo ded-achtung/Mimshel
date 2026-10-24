@@ -1,5 +1,5 @@
 //! Список установленных программ из файлов .desktop (стандарт freedesktop
-//! «Desktop Entry»). Отсюда его берут Spotlight, Launchpad и док.
+//! «Desktop Entry»). Отсюда его берут «Поиск», «Программы» и док.
 //! [`Watcher`] сообщает, когда список пора перечитать.
 
 pub mod entry;

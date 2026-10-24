@@ -206,11 +206,11 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let _idle = UnixStream::connect(&path).unwrap();
         let mut active = UnixStream::connect(&path).unwrap();
-        active.write_all(b"launchpad\n").unwrap();
+        active.write_all(b"apps\n").unwrap();
         let (tx, rx) = mpsc::channel();
         let mut clients = Vec::new();
         poll(&listener, &mut clients, &tx).unwrap();
-        assert!(matches!(rx.try_recv(), Ok(Msg::Toggle(Panel::Launchpad))));
+        assert!(matches!(rx.try_recv(), Ok(Msg::Toggle(Panel::Apps))));
         assert_eq!(clients.len(), 1);
         std::fs::remove_file(path).unwrap();
     }
@@ -228,7 +228,7 @@ mod tests {
         peer.write_all(b"light\n").unwrap();
         assert!(clients[0].poll(&tx));
         assert!(!clients[1].poll(&tx));
-        assert!(matches!(rx.try_recv(), Ok(Msg::Toggle(Panel::Spotlight))));
+        assert!(matches!(rx.try_recv(), Ok(Msg::Toggle(Panel::Search))));
     }
 
     #[test]
@@ -247,7 +247,7 @@ mod tests {
         let (stream, mut peer) = UnixStream::pair().unwrap();
         let mut client = Client::new(stream).unwrap();
         client.started = Instant::now() - DEADLINE;
-        peer.write_all(b"launchpad\n").unwrap();
+        peer.write_all(b"apps\n").unwrap();
         assert!(!client.poll(&tx));
         assert!(rx.try_recv().is_err());
     }

@@ -35,8 +35,8 @@ pub struct App {
     pub terminal: bool,
     /// Класс окна программы — пригодится доку, чтобы узнавать её окна.
     pub startup_wm_class: Option<String>,
-    /// `NoDisplay=true`: не показывать в Spotlight и Launchpad. Доку такие
-    /// ярлыки всё равно нужны (значок Launchpad, окна служебных программ).
+    /// `NoDisplay=true`: не показывать в окнах «Поиск» и «Программы». Доку такие
+    /// ярлыки всё равно нужны (значок «Программы», окна служебных программ).
     pub no_display: bool,
 }
 
@@ -50,7 +50,7 @@ pub struct Settings {
     pub desktops: Vec<String>,
     /// Папки, где ищутся программы из `TryExec`.
     pub path: Vec<PathBuf>,
-    /// Идентификаторы ярлыков, скрытые из Launchpad и Spotlight (`[apps] hide`).
+    /// Идентификаторы ярлыков, скрытые из окон «Программы» и «Поиск» (`[apps] hide`).
     pub hide: Vec<String>,
     /// Названия программ: (идентификатор ярлыка, новое название) — `[apps] rename`.
     pub rename: Vec<(String, String)>,
@@ -305,7 +305,7 @@ mod tests {
             ("kde-konsole".into(), "Консоль".into()),
         ];
 
-        // Скрытое не видно в Launchpad/Spotlight, переименованное — под новым
+        // Скрытое не видно в «Программах» и «Поиске», переименованное — под новым
         // именем и на своём месте по алфавиту.
         let apps = load(&s);
         assert_eq!(names(&apps), ["Консоль", "Проводник"]);

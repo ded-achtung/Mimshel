@@ -1,24 +1,17 @@
-//! Состояние Spotlight и реакция на клавиши и мышь.
+//! Окно «Поиск»: поле поиска и список подходящих программ. Состояние и
+//! реакция на клавиши и мышь; как оно выглядит — в `draw`.
+
+mod draw;
 
 use shell_apps::App;
 use shell_core::input::{Key, KeyPress};
 
-use crate::draw::{BAR_H, LIST_PAD, MAX_ROWS, ROW_H, WIDTH};
+pub use draw::{BAR_H, LIST_PAD, MAX_ROWS, ROW_H, WIDTH};
+
+use crate::Action;
 use crate::field::{Edit, TextField};
 
-/// Что сделать после события.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Action {
-    Nothing,
-    /// Картинка изменилась — перерисовать (и, возможно, поменять высоту окна).
-    Redraw,
-    /// Спрятать окно.
-    Close,
-    /// Спрятать окно и запустить программу.
-    Launch(Box<App>),
-}
-
-pub struct Spotlight {
+pub struct SearchPanel {
     apps: Vec<App>,
     /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
     prepared: Vec<shell_core::search::Prepared>,
@@ -30,10 +23,10 @@ pub struct Spotlight {
     pub(crate) scroll: usize,
 }
 
-impl Spotlight {
-    pub fn new(apps: Vec<App>) -> Spotlight {
+impl SearchPanel {
+    pub fn new(apps: Vec<App>) -> SearchPanel {
         let prepared = crate::prepare_all(&apps);
-        Spotlight {
+        SearchPanel {
             apps,
             prepared,
             field: TextField::default(),
@@ -222,7 +215,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub fn spotlight() -> Spotlight {
+    pub fn panel() -> SearchPanel {
         let names = [
             "Терминал",
             "Текстовый редактор",
@@ -240,22 +233,22 @@ pub(crate) mod tests {
             "Тест 8",
             "Тест 9",
         ];
-        Spotlight::new(names.iter().map(|n| app(n)).collect())
+        SearchPanel::new(names.iter().map(|n| app(n)).collect())
     }
 
-    fn press(s: &mut Spotlight, text: &str) {
+    fn press(s: &mut SearchPanel, text: &str) {
         for c in text.chars() {
             s.key(KeyPress::plain(Key::Char(c)));
         }
     }
 
-    fn names(s: &Spotlight) -> Vec<&str> {
+    fn names(s: &SearchPanel) -> Vec<&str> {
         s.results().map(|a| a.name.as_str()).collect()
     }
 
     #[test]
     fn typing_searches() {
-        let mut s = spotlight();
+        let mut s = panel();
         assert_eq!(s.size(), (WIDTH, BAR_H));
         press(&mut s, "те");
         assert_eq!(names(&s)[..2], ["Терминал", "Текстовый редактор"]);
@@ -266,7 +259,7 @@ pub(crate) mod tests {
 
     #[test]
     fn enter_launches_selected() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "f");
         s.key(KeyPress::plain(Key::Down));
         match s.key(KeyPress::plain(Key::Return)) {
@@ -277,7 +270,7 @@ pub(crate) mod tests {
 
     #[test]
     fn escape_clears_then_closes() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "fi");
         assert_eq!(s.key(KeyPress::plain(Key::Escape)), Action::Redraw);
         assert_eq!(s.query(), "");
@@ -286,7 +279,7 @@ pub(crate) mod tests {
 
     #[test]
     fn editing_searches_again() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "терм");
         assert_eq!(names(&s), ["Терминал"]);
         s.key(KeyPress::plain(Key::BackSpace));
@@ -296,7 +289,7 @@ pub(crate) mod tests {
 
     #[test]
     fn scrolling_keeps_selection_visible() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "тест");
         assert_eq!(s.result_count(), 9); // «Тест 1…9»
         for _ in 0..8 {
@@ -309,7 +302,7 @@ pub(crate) mod tests {
 
     #[test]
     fn mouse() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "f");
         let row2 = (BAR_H + 1 + LIST_PAD + ROW_H + ROW_H / 2) as i32;
         assert_eq!(s.motion(100, row2), Action::Redraw);
@@ -321,7 +314,7 @@ pub(crate) mod tests {
 
     #[test]
     fn super_space_closes() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "fi");
         let super_space = KeyPress {
             logo: true,
@@ -338,7 +331,7 @@ pub(crate) mod tests {
 
     #[test]
     fn nothing_found_row() {
-        let mut s = spotlight();
+        let mut s = panel();
         press(&mut s, "zzzz");
         assert_eq!(s.result_count(), 0);
         assert_eq!(s.visible_rows(), 1);

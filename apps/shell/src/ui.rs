@@ -1,9 +1,9 @@
-//! Окна оболочки на экране — Spotlight и Launchpad: служба (`shell daemon`)
+//! Окна оболочки на экране — «Поиск» и «Программы»: служба (`shell daemon`)
 //! или разовый запуск.
 //!
 //! Служба заранее загружает шрифты, иконки и список программ и ждёт команды
 //! через сокет `$XDG_RUNTIME_DIR/shell.sock`; поэтому окна открываются сразу.
-//! Без службы `shell spotlight` / `shell launchpad` делают всё сами —
+//! Без службы `shell search` / `shell apps` делают всё сами —
 //! медленнее, но работают. Открыто не больше одного окна: открытие одного
 //! закрывает другое.
 
@@ -17,7 +17,7 @@ use std::time::Instant;
 use shell_apps::{App, Settings, Watcher};
 use shell_core::config::Config;
 use shell_icons::Icons;
-use shell_launcher::{Action, Grid, Launchpad, Spotlight, backdrop};
+use shell_launcher::{Action, AppsPanel, Grid, SearchPanel, backdrop};
 use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_x11::{Display, Event, Key, KeyPress, Popup};
@@ -29,9 +29,9 @@ use tiny_skia::Pixmap;
 
 pub(crate) type Result<T> = shell_x11::Result<T>;
 
-/// Иконки программ в списке Spotlight — такого размера (см. его оформление).
+/// Иконки программ в списке «Поиска» — такого размера (см. его оформление).
 const ROW_ICON: u32 = 26;
-/// Spotlight стоит на этой доле высоты экрана сверху, как в macOS.
+/// «Поиск» стоит на этой доле высоты экрана сверху, как в macOS.
 const TOP: f32 = 0.22;
 /// Сколько ждать перерисовки композитора после того, как окно спрятано.
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
@@ -39,23 +39,29 @@ const SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
 /// Какое окно.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
-    Spotlight,
-    Launchpad,
+    /// Окно «Поиск».
+    Search,
+    /// Окно «Программы».
+    Apps,
 }
 
 impl Panel {
     /// Имя команды — и в командной строке, и в сокете.
     pub fn name(self) -> &'static str {
         match self {
-            Panel::Spotlight => "spotlight",
-            Panel::Launchpad => "launchpad",
+            Panel::Search => "search",
+            Panel::Apps => "apps",
         }
     }
 
+    /// По имени команды. Прежние имена (`spotlight`, `launchpad`) тоже: ими
+    /// ещё вызывают окна сочетания клавиш, поставленные до переименования.
     pub fn parse(s: &str) -> Option<Panel> {
-        [Panel::Spotlight, Panel::Launchpad]
-            .into_iter()
-            .find(|p| p.name() == s)
+        match s {
+            "search" | "spotlight" => Some(Panel::Search),
+            "apps" | "launchpad" => Some(Panel::Apps),
+            _ => None,
+        }
     }
 }
 
@@ -126,7 +132,7 @@ pub fn config_path() -> Option<PathBuf> {
         })
 }
 
-/// Только ярлыки, видимые в меню, — для Spotlight и Launchpad.
+/// Только ярлыки, видимые в меню, — для «Поиска» и «Программ».
 fn visible(apps: &[App]) -> Vec<App> {
     apps.iter().filter(|a| !a.no_display).cloned().collect()
 }
@@ -148,9 +154,9 @@ pub fn ask_daemon(panel: Panel) -> bool {
 
 fn grid(config: &Config) -> Grid {
     Grid {
-        columns: config.launchpad_columns,
-        rows: config.launchpad_rows,
-        icon: config.launchpad_icon,
+        columns: config.apps_columns,
+        rows: config.apps_rows,
+        icon: config.apps_icon,
     }
 }
 
@@ -282,10 +288,10 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         display: &display,
         fonts,
         icons,
-        spot_popup: display.create_popup("spotlight")?,
-        pad_popup: display.create_popup("launchpad")?,
-        spotlight: Spotlight::new(apps.clone()),
-        launchpad: Launchpad::new(apps, (u32::from(sw), u32::from(sh)), grid(&config)),
+        search_popup: display.create_popup("search")?,
+        apps_popup: display.create_popup("apps")?,
+        search: SearchPanel::new(apps.clone()),
+        apps_panel: AppsPanel::new(apps, (u32::from(sw), u32::from(sh)), grid(&config)),
         background: None,
         frame: None,
         shown: None,
@@ -297,12 +303,12 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     ui.flush()?;
     step("окна");
     if daemon {
-        // Иконки всех программ — заранее, чтобы первое открытие Spotlight и
-        // Launchpad было мгновенным. Уже после показа строки меню и дока:
+        // Иконки всех программ — заранее, чтобы первое открытие «Поиска» и
+        // «Программ» было мгновенным. Уже после показа строки меню и дока:
         // им эти иконки не нужны.
         for name in &preload {
             ui.icons.get(name, ROW_ICON);
-            ui.icons.get(name, config.launchpad_icon);
+            ui.icons.get(name, config.apps_icon);
         }
         step("значки");
     }
@@ -341,11 +347,11 @@ struct Ui<'a> {
     display: &'a Display,
     fonts: Fonts,
     icons: Icons,
-    spot_popup: Popup,
-    pad_popup: Popup,
-    spotlight: Spotlight,
-    launchpad: Launchpad,
-    /// Размытый снимок стола под Launchpad — делается при каждом открытии.
+    search_popup: Popup,
+    apps_popup: Popup,
+    search: SearchPanel,
+    apps_panel: AppsPanel,
+    /// Размытый снимок стола под окном «Программы» — делается при каждом открытии.
     background: Option<Pixmap>,
     /// Последняя нарисованная картинка — чтобы быстро повторить её по Expose.
     frame: Option<Canvas>,
@@ -374,36 +380,36 @@ impl Ui<'_> {
         if was == Some(panel) {
             return Ok(());
         }
-        if was.is_some() && panel == Panel::Launchpad {
-            // Переход из Spotlight: композитор должен успеть убрать его с экрана,
+        if was.is_some() && panel == Panel::Apps {
+            // Переход из «Поиска»: композитор должен успеть убрать его с экрана,
             // иначе он попадёт в снимок под размытый фон.
             self.display.sync()?;
             std::thread::sleep(SETTLE);
         }
         match panel {
-            Panel::Spotlight => self.show_spotlight(),
-            Panel::Launchpad => self.show_launchpad(),
+            Panel::Search => self.show_search(),
+            Panel::Apps => self.show_apps(),
         }
     }
 
-    fn show_spotlight(&mut self) -> Result<()> {
-        self.spotlight.reset();
-        let frame = self.spotlight.render(&mut self.fonts, &mut self.icons);
-        let (x, y) = self.spotlight_position(frame.width());
+    fn show_search(&mut self) -> Result<()> {
+        self.search.reset();
+        let frame = self.search.render(&mut self.fonts, &mut self.icons);
+        let (x, y) = self.search_position(frame.width());
         let (w, h) = (frame.width() as u16, frame.height() as u16);
-        self.spot_popup.show(self.display, x, y, w, h)?;
-        self.spot_popup.present(self.display, &frame)?;
+        self.search_popup.show(self.display, x, y, w, h)?;
+        self.search_popup.present(self.display, &frame)?;
         self.frame = Some(frame);
-        self.shown = Some(Panel::Spotlight);
+        self.shown = Some(Panel::Search);
         Ok(())
     }
 
-    fn show_launchpad(&mut self) -> Result<()> {
+    fn show_apps(&mut self) -> Result<()> {
         let start = Instant::now();
         let (w, h) = self.display.screen_size();
-        self.launchpad.set_screen(u32::from(w), u32::from(h));
-        self.launchpad.reset();
-        // Снимок — до показа окна, иначе в него попадёт сам Launchpad.
+        self.apps_panel.set_screen(u32::from(w), u32::from(h));
+        self.apps_panel.reset();
+        // Снимок — до показа окна, иначе в него попадёт само окно.
         let shot = match self.display.capture_screen() {
             Ok(shot) => Some(shot),
             Err(e) => {
@@ -412,33 +418,33 @@ impl Ui<'_> {
             }
         };
         let shot_time = start.elapsed();
-        // Фон — в пикселях экрана, всё остальное Launchpad считает в точках.
+        // Фон — в пикселях экрана, всё остальное окно считает в точках.
         let (pw, ph) = self.display.screen_pixels();
         let background = backdrop(shot.as_ref(), (u32::from(pw), u32::from(ph)));
         let blur_time = start.elapsed();
         let scale = self.display.scale();
         let frame = self
-            .launchpad
+            .apps_panel
             .render(&background, scale, &mut self.fonts, &mut self.icons);
         let render_time = start.elapsed();
-        self.pad_popup.show(self.display, 0, 0, w, h)?;
-        self.pad_popup.present(self.display, &frame)?;
+        self.apps_popup.show(self.display, 0, 0, w, h)?;
+        self.apps_popup.present(self.display, &frame)?;
         eprintln!(
-            "Launchpad: снимок {shot_time:?}, размытие {:?}, рисование {:?}, вывод {:?}",
+            "Программы: снимок {shot_time:?}, размытие {:?}, рисование {:?}, вывод {:?}",
             blur_time - shot_time,
             render_time - blur_time,
             start.elapsed() - render_time
         );
         self.background = Some(background);
         self.frame = Some(frame);
-        self.shown = Some(Panel::Launchpad);
+        self.shown = Some(Panel::Apps);
         Ok(())
     }
 
     fn hide(&mut self) -> Result<()> {
         match self.shown {
-            Some(Panel::Spotlight) => self.spot_popup.hide(self.display)?,
-            Some(Panel::Launchpad) => self.pad_popup.hide(self.display)?,
+            Some(Panel::Search) => self.search_popup.hide(self.display)?,
+            Some(Panel::Apps) => self.apps_popup.hide(self.display)?,
             None => {}
         }
         self.shown = None;
@@ -448,8 +454,8 @@ impl Ui<'_> {
         Ok(())
     }
 
-    /// Левый верхний угол Spotlight: по центру, на 22 % высоты экрана.
-    fn spotlight_position(&self, width: u32) -> (i16, i16) {
+    /// Левый верхний угол «Поиска»: по центру, на 22 % высоты экрана.
+    fn search_position(&self, width: u32) -> (i16, i16) {
         let (sw, sh) = self.display.screen_size();
         let x = (i32::from(sw) - width as i32) / 2;
         let y = (f32::from(sh) * TOP) as i32;
@@ -458,26 +464,26 @@ impl Ui<'_> {
 
     fn redraw(&mut self) -> Result<()> {
         match self.shown {
-            Some(Panel::Spotlight) => {
-                let frame = self.spotlight.render(&mut self.fonts, &mut self.icons);
+            Some(Panel::Search) => {
+                let frame = self.search.render(&mut self.fonts, &mut self.icons);
                 let old = self.frame.as_ref().map(|f| (f.width(), f.height()));
                 if old != Some((frame.width(), frame.height())) {
-                    let (x, y) = self.spotlight_position(frame.width());
+                    let (x, y) = self.search_position(frame.width());
                     let (w, h) = (frame.width() as u16, frame.height() as u16);
-                    self.spot_popup.set_geometry(self.display, x, y, w, h)?;
+                    self.search_popup.set_geometry(self.display, x, y, w, h)?;
                 }
-                self.spot_popup.present(self.display, &frame)?;
+                self.search_popup.present(self.display, &frame)?;
                 self.frame = Some(frame);
             }
-            Some(Panel::Launchpad) => {
+            Some(Panel::Apps) => {
                 let Some(background) = &self.background else {
                     return Ok(());
                 };
                 let scale = self.display.scale();
                 let frame =
-                    self.launchpad
+                    self.apps_panel
                         .render(background, scale, &mut self.fonts, &mut self.icons);
-                self.pad_popup.present(self.display, &frame)?;
+                self.apps_popup.present(self.display, &frame)?;
                 self.frame = Some(frame);
             }
             None => {}
@@ -507,8 +513,8 @@ impl Ui<'_> {
         // Новые программы могли принести свои значки.
         self.icons.refresh();
         let apps = visible(&all);
-        self.spotlight.set_apps(apps.clone());
-        self.launchpad.set_apps(apps);
+        self.search.set_apps(apps.clone());
+        self.apps_panel.set_apps(apps);
         if let Some(menubar) = &mut self.menubar {
             menubar.set_apps(self.display, all.clone());
         }
@@ -633,22 +639,22 @@ impl Ui<'_> {
             return Ok(());
         };
         let action = match (panel, ev) {
-            (Panel::Spotlight, Event::Key(k)) => self.spotlight.key(k),
-            (Panel::Launchpad, Event::Key(k)) => self.launchpad.key(k),
-            (Panel::Spotlight, Event::Button { x, y, button, .. }) => {
-                self.spotlight.click(i32::from(x), i32::from(y), button)
+            (Panel::Search, Event::Key(k)) => self.search.key(k),
+            (Panel::Apps, Event::Key(k)) => self.apps_panel.key(k),
+            (Panel::Search, Event::Button { x, y, button, .. }) => {
+                self.search.click(i32::from(x), i32::from(y), button)
             }
-            (Panel::Launchpad, Event::Button { x, y, button, .. }) => {
-                self.launchpad.click(i32::from(x), i32::from(y), button)
+            (Panel::Apps, Event::Button { x, y, button, .. }) => {
+                self.apps_panel.click(i32::from(x), i32::from(y), button)
             }
-            (Panel::Spotlight, Event::Motion { x, y, .. }) => {
-                self.spotlight.motion(i32::from(x), i32::from(y))
+            (Panel::Search, Event::Motion { x, y, .. }) => {
+                self.search.motion(i32::from(x), i32::from(y))
             }
             (_, Event::Expose { .. }) => {
                 if let Some(frame) = &self.frame {
                     let popup = match panel {
-                        Panel::Spotlight => &self.spot_popup,
-                        Panel::Launchpad => &self.pad_popup,
+                        Panel::Search => &self.search_popup,
+                        Panel::Apps => &self.apps_popup,
                     };
                     popup.present(self.display, frame)?;
                 }
@@ -656,7 +662,7 @@ impl Ui<'_> {
             }
             _ => Action::Nothing,
         };
-        // Из Spotlight Super+A сразу открывает Launchpad и наоборот.
+        // Из «Поиска» Super+A сразу открывает «Программы» и наоборот.
         if let Event::Key(k) = ev
             && k.logo
             && let Some(other) = switch_to(panel, k)
@@ -683,11 +689,11 @@ impl Ui<'_> {
     }
 }
 
-/// Сочетание другого окна: Super+Пробел в Launchpad, Super+A в Spotlight.
+/// Сочетание другого окна: Super+Пробел в «Программах», Super+A в «Поиске».
 fn switch_to(panel: Panel, k: KeyPress) -> Option<Panel> {
     match (panel, k.key) {
-        (Panel::Spotlight, Key::Char('a')) => Some(Panel::Launchpad),
-        (Panel::Launchpad, Key::Char(' ')) => Some(Panel::Spotlight),
+        (Panel::Search, Key::Char('a')) => Some(Panel::Apps),
+        (Panel::Apps, Key::Char(' ')) => Some(Panel::Search),
         _ => None,
     }
 }
@@ -729,7 +735,7 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
     });
 }
 
-/// Рисует окно с набранным текстом в PNG. Для Launchpad, если доступен
+/// Рисует окно с набранным текстом в PNG. Для «Программ», если доступен
 /// экран, берёт его размер и снимок для фона; иначе — 1920×1080, ровный фон.
 pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let config = load_config();
@@ -742,21 +748,21 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let keys = text.chars().map(|c| KeyPress::plain(Key::Char(c)));
     let start = Instant::now();
     let frame = match panel {
-        Panel::Spotlight => {
-            let mut s = Spotlight::new(apps);
+        Panel::Search => {
+            let mut s = SearchPanel::new(apps);
             keys.for_each(|k| {
                 s.key(k);
             });
             s.render(&mut fonts, &mut icons)
         }
-        Panel::Launchpad => {
+        Panel::Apps => {
             let display = Display::connect().ok();
             let size = display.as_ref().map_or((1920, 1080), |d| {
                 let (w, h) = d.screen_size();
                 (u32::from(w), u32::from(h))
             });
             let shot = display.and_then(|d| d.capture_screen().ok());
-            let mut l = Launchpad::new(apps, size, grid(&config));
+            let mut l = AppsPanel::new(apps, size, grid(&config));
             keys.for_each(|k| {
                 l.key(k);
             });

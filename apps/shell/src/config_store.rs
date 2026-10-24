@@ -32,6 +32,15 @@ impl Store {
         let _lock = lock(&self.path)?;
         let mut text = match fs::read_to_string(&self.path) {
             Ok(text) => {
+                // Прежние имена настроек — переписать в файле на новые.
+                let text = match config::migrate_names(&text) {
+                    Some(new) => {
+                        validate(&new)?;
+                        atomic_write(&self.path, &new)?;
+                        new
+                    }
+                    None => text,
+                };
                 validate(&text)?;
                 text
             }
@@ -73,6 +82,7 @@ impl Store {
             .good
             .as_ref()
             .and_then(|p| fs::read_to_string(p).ok())
+            .map(|t| config::migrate_names(&t).unwrap_or(t))
             .filter(|text| validate(text).is_ok())
         {
             let mut config = Config::from_toml(&text);
@@ -101,15 +111,16 @@ impl Store {
     /// Нечитаемый или повреждённый файл не перезаписывается.
     pub fn edit(&self, edit: impl FnOnce(&str) -> io::Result<String>) -> io::Result<()> {
         let _lock = lock(&self.path)?;
-        let text = match fs::read_to_string(&self.path) {
+        let read = match fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => self.fallback(None).to_toml(),
             Err(e) => return Err(e),
         };
+        let text = config::migrate_names(&read).unwrap_or_else(|| read.clone());
         validate(&text)?;
         let next = edit(&text)?;
         validate(&next)?;
-        if next != text || !self.path.exists() {
+        if next != read || !self.path.exists() {
             atomic_write(&self.path, &next)?;
         }
         self.remember(&next);

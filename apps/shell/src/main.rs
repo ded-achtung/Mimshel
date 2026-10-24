@@ -1,4 +1,5 @@
-//! Оболочка рабочего стола: Spotlight, Launchpad и проверочные команды.
+//! Оболочка рабочего стола: служба, окна «Поиск» и «Программы», настройка
+//! и проверочные команды.
 
 mod config_store;
 mod dock_ui;
@@ -18,21 +19,23 @@ use shell_core::search::{Query, best};
 
 const HELP: &str = "\
 Использование:
-  shell apps            список программ, которые увидит Launchpad
-  shell search ТЕКСТ    что найдёт Spotlight по этому тексту
-  shell watch           следить за ярлыками и печатать, что появилось и пропало
-  shell daemon          служба: держит Spotlight и Launchpad наготове, рисует док;
+  shell search          открыть или закрыть окно «Поиск» (через службу, без неё — сам)
+  shell apps            открыть или закрыть окно «Программы» (так же)
+  shell daemon          служба: строка меню, док, уведомления, окна «Поиск» и «Программы»;
                         упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
-  shell spotlight       открыть или закрыть Spotlight (через службу, без неё — сам)
-  shell launchpad       открыть или закрыть Launchpad (через службу, без неё — сам)
-  shell snapshot spotlight|launchpad ТЕКСТ ФАЙЛ.png
+  shell snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
+  shell test-apps       список программ, которые увидит окно «Программы»
+  shell test-search ТЕКСТ
+                        что найдёт окно «Поиск» по этому тексту
+  shell watch           следить за ярлыками и печатать, что появилось и пропало
   shell doctor [--fix]  проверить, что всё на месте; --fix — починить
   shell config          где файл настроек и что в нём можно менять
   shell set [--no-apply] КЛЮЧ ЗНАЧЕНИЕ
                         поменять настройку и применить (например: shell set dock.icon_size 56,
                         shell set parts.dock plank — вернуть Plank)
   shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
+                        (launchers — сочетания клавиш окон «Поиск» и «Программы»)
                         (без частей — все)
   shell lock            заблокировать экран (свой экран блокировки; упадёт без пароля —
                         сторож запустит снова)
@@ -48,8 +51,8 @@ const HELP: &str = "\
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("apps") => list_apps(),
-        Some("search") if args.len() > 1 => search(&args[1..].join(" ")),
+        Some("test-apps") => list_apps(),
+        Some("test-search") if args.len() > 1 => search(&args[1..].join(" ")),
         Some("watch") => watch(),
         Some("daemon") if args.get(1).map(String::as_str) == Some("--child") => {
             if ui::daemon_running() {

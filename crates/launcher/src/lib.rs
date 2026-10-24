@@ -1,24 +1,36 @@
-//! Spotlight и Launchpad: поиск и запуск программ.
+//! Окна «Поиск» и «Программы»: поиск и запуск программ.
 //!
-//! Spotlight — поле поиска и список подходящих программ.
+//! «Поиск» (`search_panel`) — поле поиска и список подходящих программ,
+//! «Программы» (`apps_panel`) — все программы сеткой по страницам, с полем
+//! поиска сверху. Общее для обоих — `common` (рисование) и `field` (поле ввода).
 //!
-//! Поведение как на Mac: пока ничего не набрано — только поле; результаты
+//! Поведение «Поиска» как на Mac: пока ничего не набрано — только поле; результаты
 //! появляются по мере ввода; стрелки выбирают, Enter запускает, Esc сначала
 //! стирает набранное, затем закрывает; клик мимо окна закрывает.
 //! Здесь нет окон и X11: состояние, реакция на ввод и рисование в картинку.
 
-mod draw;
+mod apps_panel;
+mod common;
 mod field;
-mod launchpad;
-mod launchpad_draw;
-mod spotlight;
+mod search_panel;
 
-pub use launchpad::{Grid, Launchpad};
-pub use launchpad_draw::backdrop;
-pub use spotlight::{Action, Spotlight};
+pub use apps_panel::{AppsPanel, Grid, backdrop};
+pub use search_panel::SearchPanel;
 
 use shell_apps::App;
 use shell_core::search::{Fields, Prepared, Query, best_prepared};
+
+/// Что сделать после события.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Nothing,
+    /// Картинка изменилась — перерисовать (и, возможно, поменять высоту окна).
+    Redraw,
+    /// Спрятать окно.
+    Close,
+    /// Спрятать окно и запустить программу.
+    Launch(Box<App>),
+}
 
 /// Где искать для программы: названия, ключевые слова, описание и имя
 /// команды (переименованный ярлык «Блокнот» находится и по «mousepad»).
@@ -62,7 +74,7 @@ mod tests {
 
     #[test]
     fn found_by_program_name() {
-        let mut app = crate::spotlight::tests::app("Блокнот");
+        let mut app = crate::search_panel::tests::app("Блокнот");
         app.command = vec!["/usr/bin/mousepad".into()];
         assert!(Query::new("mousep").score(&fields(&app)).is_some());
     }

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use shell_core::config::Config;
 
-use crate::look::{APPLE_MENU, Look, Paths};
+use crate::look::{APPLE_MENU, APPS_SHORTCUT, Look, Paths, SHORTCUTS};
 use crate::sys::{
     bus_owner, home, in_desktop_session, keyboard_ok, output, output_any, parent, pgrep, read,
     running, succeeds, xget, xget_list,
@@ -63,8 +63,6 @@ const PANEL_PLUGINS: &[&str] = &[
 /// Строка списка запуска сеанса, которой macos-look заменяет панель Xfce.
 const PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
 const SESSION: &str = "/sessions/Failsafe";
-/// Сочетания клавиш: (клавиши, действие).
-const SHORTCUTS: &[(&str, &str)] = &[("<Super>space", "spotlight"), ("<Super>a", "launchpad")];
 /// Наблюдатели службы (см. `apps/shell/src/status.rs`).
 const WATCHERS: &str = r"^(pactl subscribe|udevadm monitor --kernel --subsystem-match=power_supply|xfconf-query -c xfce4-notifyd -m)";
 
@@ -369,7 +367,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         );
     }
 
-    // Меню яблока, Launchpad, Spotlight.
+    // Меню яблока, окна «Программы» и «Поиск».
     let menu_dir = paths.app_dir.join("menu");
     add(
         "menu",
@@ -386,8 +384,15 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "shell apply launchers",
         );
     }
-    let launchpad = paths.applications.join("macos-launchpad.desktop");
-    add("menu", "значок Launchpad", launchpad.exists(), "");
+    let apps_desktop = paths
+        .applications
+        .join(format!("{}.desktop", crate::parts::APPS_DESKTOP));
+    add(
+        "menu",
+        "значок «Программы» в доке",
+        apps_desktop.exists(),
+        "",
+    );
     for app in look.hidden_apps().into_iter().filter(|_| ml) {
         if Path::new("/usr/share/applications")
             .join(format!("{app}.desktop"))
@@ -395,7 +400,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         {
             add(
                 "menu",
-                &format!("скрыто из Launchpad: {app}"),
+                &format!("скрыто из «Программ» и «Поиска»: {app}"),
                 read(&paths.applications.join(format!("{app}.desktop"))).contains("NoDisplay=true"),
                 "",
             );
@@ -409,28 +414,28 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "",
         );
     }
-    for (keys, action) in SHORTCUTS {
-        let want = Look::shortcut_command(&paths, action, cfg.part(action) == Some(true));
+    for s in SHORTCUTS {
+        let want = Look::shortcut_command(&paths, s, cfg.part(s.part) == Some(true));
         add(
             "menu",
-            &format!("сочетание {keys} → {want}"),
+            &format!("сочетание {} → {want}", s.keys),
             xget(
                 "xfce4-keyboard-shortcuts",
-                &format!("/commands/custom/{keys}"),
+                &format!("/commands/custom/{}", s.keys),
             )
             .as_deref()
                 == Some(&*want),
             "",
         );
     }
-    let launchpad_cmd = Look::shortcut_command(&paths, "launchpad", cfg.launchpad);
+    let apps_cmd = Look::shortcut_command(&paths, &APPS_SHORTCUT, cfg.apps_panel);
     add(
         "menu",
         &format!(
-            "значок Launchpad → {}",
-            if cfg.launchpad { "shell" } else { "rofi" }
+            "значок «Программы» → {}",
+            if cfg.apps_panel { "shell" } else { "rofi" }
         ),
-        read(&launchpad).contains(&format!("Exec={launchpad_cmd}\n")),
+        read(&apps_desktop).contains(&format!("Exec={apps_cmd}\n")),
         "",
     );
 

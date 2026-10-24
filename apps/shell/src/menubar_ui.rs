@@ -891,7 +891,7 @@ impl MenubarUi {
     }
 
     /// Закрыть меню или окошко громкости (если открыто): например, перед
-    /// открытием Spotlight.
+    /// открытием «Поиска».
     pub fn close_popup(&mut self, d: &Display) -> Result<()> {
         if self.menu.take().is_some()
             | self.sound_panel.take().is_some()

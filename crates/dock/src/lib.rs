@@ -360,7 +360,7 @@ impl Dock {
         self.popup_open = open;
     }
 
-    /// Программа запущена (из дока, Spotlight или Launchpad) — её значок
+    /// Программа запущена (из дока, «Поиска» или «Программ») — её значок
     /// прыгает, пока не появится окно. Значка нет — ничего.
     pub fn launched(&mut self, app_id: &str, now: Instant) {
         if self.items.iter().any(|i| i.key == app_id) {

@@ -104,7 +104,7 @@ step "Копия нынешних настроек (вернуть как был
 "$BIN" backup pered-shell
 
 step "Включаю части shell"
-for part in dock menubar notify spotlight launchpad; do
+for part in dock menubar notify search_panel apps_panel; do
     "$BIN" set --no-apply "parts.$part" shell
 done
 "$BIN" set --no-apply look.icon_theme Colloid-shell

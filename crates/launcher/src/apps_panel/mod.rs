@@ -1,4 +1,5 @@
-//! Состояние Launchpad и реакция на клавиши и мышь.
+//! Окно «Программы»: все программы сеткой по страницам и поле поиска сверху.
+//! Состояние и реакция на клавиши и мышь; как оно выглядит — в `draw`.
 //!
 //! Как на Mac: все программы сеткой по страницам (по алфавиту), сверху поле
 //! поиска — набор текста сразу отбирает программы. Стрелки выбирают иконку,
@@ -9,6 +10,10 @@
 
 use shell_apps::App;
 use shell_core::input::{Key, KeyPress};
+
+mod draw;
+
+pub use draw::backdrop;
 
 use crate::Action;
 use crate::field::{Edit, TextField};
@@ -66,7 +71,7 @@ impl Layout {
     }
 }
 
-pub struct Launchpad {
+pub struct AppsPanel {
     apps: Vec<App>,
     /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
     prepared: Vec<shell_core::search::Prepared>,
@@ -80,10 +85,10 @@ pub struct Launchpad {
     pub(crate) layout: Layout,
 }
 
-impl Launchpad {
-    pub fn new(apps: Vec<App>, screen: (u32, u32), grid: Grid) -> Launchpad {
+impl AppsPanel {
+    pub fn new(apps: Vec<App>, screen: (u32, u32), grid: Grid) -> AppsPanel {
         let prepared = crate::prepare_all(&apps);
-        let mut l = Launchpad {
+        let mut l = AppsPanel {
             apps,
             prepared,
             field: TextField::default(),
@@ -113,7 +118,7 @@ impl Launchpad {
         (self.layout.w as u32, self.layout.h as u32)
     }
 
-    /// Пустой поиск, первая страница — так Launchpad открывается каждый раз.
+    /// Пустой поиск, первая страница — так окно открывается каждый раз.
     pub fn reset(&mut self) {
         self.field.clear();
         self.search();
@@ -313,7 +318,7 @@ impl Launchpad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spotlight::tests::app;
+    use crate::search_panel::tests::app;
 
     const GRID: Grid = Grid {
         columns: 3,
@@ -322,7 +327,7 @@ mod tests {
     };
 
     /// 8 программ на сетке 3×2 — две страницы.
-    fn launchpad() -> Launchpad {
+    fn panel() -> AppsPanel {
         let names = [
             "Блокнот",
             "Калькулятор",
@@ -333,25 +338,25 @@ mod tests {
             "Meld",
             "Тест",
         ];
-        Launchpad::new(names.iter().map(|n| app(n)).collect(), (1200, 800), GRID)
+        AppsPanel::new(names.iter().map(|n| app(n)).collect(), (1200, 800), GRID)
     }
 
-    fn press(l: &mut Launchpad, key: Key) -> Action {
+    fn press(l: &mut AppsPanel, key: Key) -> Action {
         l.key(KeyPress::plain(key))
     }
 
-    fn names(l: &Launchpad) -> Vec<&str> {
+    fn names(l: &AppsPanel) -> Vec<&str> {
         l.shown().map(|a| a.name.as_str()).collect()
     }
 
-    fn center(l: &Launchpad, slot: usize) -> (i32, i32) {
+    fn center(l: &AppsPanel, slot: usize) -> (i32, i32) {
         let (x, y, w, h) = l.cell_box(slot);
         ((x + w / 2.0) as i32, (y + h / 2.0) as i32)
     }
 
     #[test]
     fn pages_and_arrows() {
-        let mut l = launchpad();
+        let mut l = panel();
         assert_eq!(l.pages(), 2);
         assert_eq!(l.selected, None);
         assert_eq!(press(&mut l, Key::Return), Action::Nothing);
@@ -370,7 +375,7 @@ mod tests {
 
     #[test]
     fn search_filters_and_enter_launches_first() {
-        let mut l = launchpad();
+        let mut l = panel();
         for c in "fi".chars() {
             l.key(KeyPress::plain(Key::Char(c)));
         }
@@ -387,7 +392,7 @@ mod tests {
 
     #[test]
     fn mouse() {
-        let mut l = launchpad();
+        let mut l = panel();
         let (x, y) = center(&l, 1);
         match l.click(x, y, 1) {
             Action::Launch(a) => assert_eq!(a.name, "Калькулятор"),
@@ -409,7 +414,7 @@ mod tests {
 
     #[test]
     fn super_a_closes() {
-        let mut l = launchpad();
+        let mut l = panel();
         let super_a = KeyPress {
             logo: true,
             ..KeyPress::plain(Key::Char('a'))

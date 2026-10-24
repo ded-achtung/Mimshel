@@ -1,6 +1,6 @@
 //! Включить части оболочки или вернуть прежние программы (`shell apply`):
 //! строка меню или панель Xfce, свой док или Plank, свои уведомления или
-//! xfce4-notifyd, Spotlight и Launchpad свои или rofi, служба shell. Делает
+//! xfce4-notifyd, окна «Поиск» и «Программы» свои или rofi, служба shell. Делает
 //! то же, что `macos-look apply panel|dock|notify` и часть `apply menu`.
 //!
 //! Порядок важен: сначала прежние программы останавливаются, потом
@@ -12,7 +12,7 @@ use std::path::Path;
 
 use shell_core::config::{Config, DockHide};
 
-use crate::look::{Look, Paths};
+use crate::look::{APPS_SHORTCUT, Look, Paths, SHORTCUTS};
 use crate::sys::{
     home, keyboard_ok, kill, pgrep, read, remove, run, running, spawn, write_if_changed, xget_list,
     xkb_query, xreset, xset, xset_array,
@@ -40,8 +40,10 @@ const SESSION: &str = "/sessions/Failsafe";
 const PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
 const NOTIFYD_UNIT: &str = "xfce4-notifyd.service";
 const PLANK_DCONF: &str = "/net/launchpad/plank/docks/dock1/";
-const LAUNCHPAD_ICON: &str = "pop-cosmic-launcher";
-const SHORTCUTS: &[(&str, &str)] = &[("<Super>space", "spotlight"), ("<Super>a", "launchpad")];
+/// Значок окна «Программы» в доке и его ярлык (имя ярлыка — от прежнего
+/// Launchpad: под ним значок закреплён в доке у тех, кто ставил раньше).
+const APPS_ICON: &str = "pop-cosmic-launcher";
+pub const APPS_DESKTOP: &str = "macos-launchpad";
 
 /// Свойство модуля панели Xfce: (имя, тип, значение).
 type Prop<'a> = (&'a str, &'a str, &'a str);
@@ -368,7 +370,7 @@ impl Plan<'_> {
         write(
             &autostart,
             &desktop_entry(
-                "shell: Spotlight, Launchpad и док",
+                "shell: строка меню, док, «Поиск» и «Программы»",
                 &format!("{bin} daemon"),
                 "",
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
@@ -464,30 +466,34 @@ impl Plan<'_> {
         }
     }
 
-    /// Сочетания Super+Пробел и Super+A, значок Launchpad в доке и меню яблока.
+    /// Сочетания Super+Пробел и Super+A, значок «Программы» в доке и меню яблока.
     fn launchers(&mut self) {
         self.apple_menu();
         let c = self.config;
         let engine = |shell: bool| if shell { "shell" } else { "rofi" };
         println!(
-            "▶ Spotlight ({}) и Launchpad ({})",
-            engine(c.spotlight),
-            engine(c.launchpad)
+            "▶ Поиск ({}) и Программы ({})",
+            engine(c.search_panel),
+            engine(c.apps_panel)
         );
-        let launchpad = Look::shortcut_command(&self.paths, "launchpad", c.launchpad);
+        let apps = Look::shortcut_command(&self.paths, &APPS_SHORTCUT, c.apps_panel);
+        // Имя файла прежнее: под ним значок закреплён в доке (`[dock] apps`).
         write(
-            &self.paths.applications.join("macos-launchpad.desktop"),
+            &self
+                .paths
+                .applications
+                .join(format!("{APPS_DESKTOP}.desktop")),
             &desktop_entry(
-                "Launchpad",
-                &launchpad,
-                LAUNCHPAD_ICON,
+                "Программы",
+                &apps,
+                APPS_ICON,
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
             ),
         );
-        for (keys, action) in SHORTCUTS {
-            let shell = c.part(action) == Some(true);
-            let command = Look::shortcut_command(&self.paths, action, shell);
-            let prop = format!("/commands/custom/{keys}");
+        for s in SHORTCUTS {
+            let shell = c.part(s.part) == Some(true);
+            let command = Look::shortcut_command(&self.paths, s, shell);
+            let prop = format!("/commands/custom/{}", s.keys);
             xset("xfce4-keyboard-shortcuts", &prop, "string", &command);
             // «Часики» у курсора ждут окна от самой команды; окно shell
             // открывает служба, и они крутились бы зря.

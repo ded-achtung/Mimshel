@@ -38,10 +38,10 @@ pub struct Config {
     pub scale: Option<f32>,
     /// Команда терминала для программ с `Terminal=true`; программа идёт после неё.
     pub terminal: Vec<String>,
-    /// Сетка Launchpad: столбцы, строки и размер иконки.
-    pub launchpad_columns: usize,
-    pub launchpad_rows: usize,
-    pub launchpad_icon: u32,
+    /// Сетка окна «Программы»: столбцы, строки и размер иконки.
+    pub apps_columns: usize,
+    pub apps_rows: usize,
+    pub apps_icon: u32,
     /// Закреплённые в доке программы: идентификаторы ярлыков без `.desktop`.
     pub dock_apps: Vec<String>,
     /// Размер иконки в доке.
@@ -51,12 +51,12 @@ pub struct Config {
     pub dock_hide: DockHide,
     /// Какие части делает shell, а какие — прежние программы (`[parts]`,
     /// см. [`PARTS`]): док (иначе Plank), строка меню (иначе панель Xfce),
-    /// уведомления (иначе xfce4-notifyd), Spotlight и Launchpad (иначе rofi).
+    /// уведомления (иначе xfce4-notifyd), окна «Поиск» и «Программы» (иначе rofi).
     pub dock: bool,
     pub menubar: bool,
     pub notify: bool,
-    pub spotlight: bool,
-    pub launchpad: bool,
+    pub search_panel: bool,
+    pub apps_panel: bool,
     /// Высота строки меню, иконка меню яблока и формат часов (как у `date`) —
     /// из `[panel]`, как у нынешней панели Xfce.
     pub menubar_height: u32,
@@ -67,10 +67,10 @@ pub struct Config {
     pub lock_placeholder: String,
     pub lock_idle: u32,
     pub lock_screen_off: u32,
-    /// Программы, которые не показываются в Launchpad и Spotlight
+    /// Программы, которые не показываются в окнах «Программы» и «Поиск»
     /// (остаются установленными и запускаются как раньше).
     pub hide_apps: Vec<String>,
-    /// Названия программ в строке меню, Launchpad и доке:
+    /// Названия программ в строке меню, окне «Программы» и доке:
     /// (идентификатор ярлыка, новое название).
     pub rename_apps: Vec<(String, String)>,
 }
@@ -80,8 +80,8 @@ pub const PARTS: &[(&str, &str, &str)] = &[
     ("dock", "plank", "док"),
     ("menubar", "xfce", "строка меню (прежняя — панель Xfce)"),
     ("notify", "xfce", "уведомления (прежние — xfce4-notifyd)"),
-    ("spotlight", "rofi", "Spotlight"),
-    ("launchpad", "rofi", "Launchpad"),
+    ("search_panel", "rofi", "окно «Поиск»"),
+    ("apps_panel", "rofi", "окно «Программы»"),
 ];
 
 impl Default for Config {
@@ -94,9 +94,9 @@ impl Default for Config {
             wallpaper: "space".into(),
             scale: None,
             terminal: vec!["xfce4-terminal".into(), "-x".into()],
-            launchpad_columns: 7,
-            launchpad_rows: 4,
-            launchpad_icon: 72,
+            apps_columns: 7,
+            apps_rows: 4,
+            apps_icon: 72,
             dock_apps: [
                 "thunar",
                 "macos-launchpad",
@@ -112,8 +112,8 @@ impl Default for Config {
             dock_hide: DockHide::Smart,
             dock: false,
             menubar: false,
-            spotlight: false,
-            launchpad: false,
+            search_panel: false,
+            apps_panel: false,
             menubar_height: 28,
             menu_icon: "shell-logo".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
@@ -176,13 +176,13 @@ impl Config {
             }
         }
         if let Some(v) = num("launchpad", "columns").filter(|&v| v > 0) {
-            c.launchpad_columns = v as usize;
+            c.apps_columns = v as usize;
         }
         if let Some(v) = num("launchpad", "rows").filter(|&v| v > 0) {
-            c.launchpad_rows = v as usize;
+            c.apps_rows = v as usize;
         }
         if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
-            c.launchpad_icon = v;
+            c.apps_icon = v;
         }
         if let Some(apps) = get("dock", "apps") {
             c.dock_apps = apps
@@ -204,8 +204,9 @@ impl Config {
         c.dock = get("dock", "engine").is_some_and(|e| e == "shell");
         c.menubar = get("menubar", "engine").is_some_and(|e| e == "shell");
         c.notify = get("notify", "engine").is_some_and(|e| e == "shell");
-        c.spotlight = get("spotlight", "engine").is_some_and(|e| e == "shell");
-        c.launchpad = get("launchpad", "engine").is_some_and(|e| e == "shell");
+        // У macos-look окна «Поиск» и «Программы» — разделы spotlight и launchpad.
+        c.search_panel = get("spotlight", "engine").is_some_and(|e| e == "shell");
+        c.apps_panel = get("launchpad", "engine").is_some_and(|e| e == "shell");
         if let Some(v) = num("panel", "height").filter(|&v| v >= 16) {
             c.menubar_height = v;
         }
@@ -291,8 +292,8 @@ impl Config {
             "dock" => self.dock,
             "menubar" => self.menubar,
             "notify" => self.notify,
-            "spotlight" => self.spotlight,
-            "launchpad" => self.launchpad,
+            "search_panel" => self.search_panel,
+            "apps_panel" => self.apps_panel,
             _ => return None,
         })
     }
@@ -302,8 +303,8 @@ impl Config {
             "dock" => self.dock = shell,
             "menubar" => self.menubar = shell,
             "notify" => self.notify = shell,
-            "spotlight" => self.spotlight = shell,
-            "launchpad" => self.launchpad = shell,
+            "search_panel" => self.search_panel = shell,
+            "apps_panel" => self.apps_panel = shell,
             _ => {}
         }
     }
@@ -407,14 +408,14 @@ impl Config {
         if let Some(h) = text("dock", "hide").and_then(|h| DockHide::parse(&h)) {
             c.dock_hide = h;
         }
-        if let Some(v) = num("launchpad", "columns").filter(|&v| v > 0) {
-            c.launchpad_columns = v as usize;
+        if let Some(v) = num("apps_panel", "columns").filter(|&v| v > 0) {
+            c.apps_columns = v as usize;
         }
-        if let Some(v) = num("launchpad", "rows").filter(|&v| v > 0) {
-            c.launchpad_rows = v as usize;
+        if let Some(v) = num("apps_panel", "rows").filter(|&v| v > 0) {
+            c.apps_rows = v as usize;
         }
-        if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
-            c.launchpad_icon = v;
+        if let Some(v) = num("apps_panel", "icon_size").filter(|&v| v >= 16) {
+            c.apps_icon = v;
         }
         if let Some(v) = text("lock", "placeholder") {
             c.lock_placeholder = v;
@@ -477,12 +478,13 @@ impl Config {
 [parts]
 # Что делает shell, а что — прежние программы:
 # dock — \"shell\" или \"plank\"; menubar — \"shell\" или \"xfce\" (панель Xfce);
-# notify — \"shell\" или \"xfce\" (xfce4-notifyd); spotlight и launchpad — \"shell\" или \"rofi\".
+# notify — \"shell\" или \"xfce\" (xfce4-notifyd);
+# search_panel (окно «Поиск») и apps_panel (окно «Программы») — \"shell\" или \"rofi\".
 dock = {p_dock}
 menubar = {p_menubar}
 notify = {p_notify}
-spotlight = {p_spotlight}
-launchpad = {p_launchpad}
+search_panel = {p_search}
+apps_panel = {p_apps}
 
 [look]
 # Шрифт, тема значков, тема окон, курсор и обои (space, waves, aurora —
@@ -514,7 +516,8 @@ zoom = {zoom}
 # auto — всегда, maximized — когда окно развёрнуто.
 hide = {hide}
 
-[launchpad]
+[apps_panel]
+# Окно «Программы»: столбцов и строк на странице, размер значков.
 columns = {columns}
 rows = {rows}
 icon_size = {lp_icon}
@@ -529,10 +532,10 @@ screen_off_minutes = {screen_off}
 [apps]
 # Чем открывать программы, которым нужен терминал; программа идёт следом.
 terminal = {terminal}
-# Служебные программы, которых не видно в Launchpad и Spotlight
+# Служебные программы, которых не видно в AppsPanel и SearchPanel
 # (сами остаются установленными).
 hide = {hide_apps}
-# Названия программ в строке меню, Launchpad и доке: ярлык = «Новое имя».
+# Названия программ в строке меню, окне «Программы» и доке: ярлык = «Новое имя».
 rename = {rename}
 ",
             font = s(&self.font),
@@ -549,9 +552,9 @@ rename = {rename}
             apps = list(&self.dock_apps),
             icon = self.dock_icon,
             hide = s(self.dock_hide.name()),
-            columns = self.launchpad_columns,
-            rows = self.launchpad_rows,
-            lp_icon = self.launchpad_icon,
+            columns = self.apps_columns,
+            rows = self.apps_rows,
+            lp_icon = self.apps_icon,
             placeholder = s(&self.lock_placeholder),
             idle = self.lock_idle,
             screen_off = self.lock_screen_off,
@@ -561,8 +564,8 @@ rename = {rename}
             p_dock = part("dock"),
             p_menubar = part("menubar"),
             p_notify = part("notify"),
-            p_spotlight = part("spotlight"),
-            p_launchpad = part("launchpad"),
+            p_search = part("search_panel"),
+            p_apps = part("apps_panel"),
         )
     }
 }
@@ -626,6 +629,75 @@ pub fn set_dock_apps(text: &str, apps: &[String]) -> Option<String> {
     set_value(text, "dock", "apps", Value::Array(new))
 }
 
+/// Прежние имена в файле настроек (до 24.10.2026 окна «Поиск» и «Программы»
+/// назывались по-маковски): (раздел, старый ключ или `None` — весь раздел,
+/// новое имя).
+const RENAMED: &[(&str, Option<&str>, &str)] = &[
+    ("parts", Some("spotlight"), "search_panel"),
+    ("parts", Some("launchpad"), "apps_panel"),
+    ("launchpad", None, "apps_panel"),
+];
+
+/// Новое имя настройки для прежнего (`parts.spotlight` → `parts.search_panel`,
+/// `launchpad.rows` → `apps_panel.rows`); остальные — как есть. Прежними
+/// именами ещё пользуется macos-look (`macos-look set spotlight.engine …`).
+pub fn current_key(key: &str) -> String {
+    let Some((section, name)) = key.split_once('.') else {
+        return key.to_string();
+    };
+    for (s, k, to) in RENAMED {
+        match k {
+            Some(k) if *s == section && *k == name => return format!("{s}.{to}"),
+            None if *s == section => return format!("{to}.{name}"),
+            _ => {}
+        }
+    }
+    key.to_string()
+}
+
+/// Пояснение в `[parts]` прежних файлов и новое вместо него.
+const OLD_PARTS_COMMENT: &str = "# notify — \"shell\" или \"xfce\" (xfce4-notifyd); spotlight и launchpad — \"shell\" или \"rofi\".";
+const NEW_PARTS_COMMENT: &str = "# notify — \"shell\" или \"xfce\" (xfce4-notifyd);\n\
+     # search_panel (окно «Поиск») и apps_panel (окно «Программы») — \"shell\" или \"rofi\".";
+
+/// Переименовать прежние ключи файла настроек в новые, сохранив значения и
+/// пояснения (своё прежнее пояснение о частях — заменить). `None` —
+/// переименовывать нечего.
+pub fn migrate_names(text: &str) -> Option<String> {
+    let mut section = String::new();
+    let mut changed = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let mut new = None;
+        if trimmed == OLD_PARTS_COMMENT {
+            new = Some(line.replacen(OLD_PARTS_COMMENT, NEW_PARTS_COMMENT, 1));
+        } else if let Some(name) = trimmed.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+            section = name.trim().to_string();
+            if let Some((.., to)) = RENAMED
+                .iter()
+                .find(|(s, k, _)| k.is_none() && *s == section)
+            {
+                new = Some(line.replacen(name.trim(), to, 1));
+            }
+        } else if let Some((key, _)) = trimmed.split_once('=')
+            && let Some((.., to)) = RENAMED
+                .iter()
+                .find(|(s, k, _)| *s == section && *k == Some(key.trim()))
+        {
+            new = Some(line.replacen(key.trim(), to, 1));
+        }
+        match new {
+            Some(l) => {
+                changed = true;
+                out.push_str(&l);
+            }
+            None => out.push_str(line),
+        }
+    }
+    changed.then_some(out)
+}
+
 /// Есть ли в файле раздел `[parts]` (в файлах, созданных до него, нет).
 pub fn has_parts(text: &str) -> bool {
     text.parse::<DocumentMut>()
@@ -673,8 +745,11 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("parts.dock", "\"shell\" или \"plank\""),
     ("parts.menubar", "\"shell\" или \"xfce\""),
     ("parts.notify", "\"shell\" или \"xfce\""),
-    ("parts.spotlight", "\"shell\" или \"rofi\""),
-    ("parts.launchpad", "\"shell\" или \"rofi\""),
+    ("parts.search_panel", "окно «Поиск»: \"shell\" или \"rofi\""),
+    (
+        "parts.apps_panel",
+        "окно «Программы»: \"shell\" или \"rofi\"",
+    ),
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),
     (
@@ -700,9 +775,12 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("dock.icon_size", "размер значков, 16–256"),
     ("dock.zoom", "увеличение в процентах (100–300) или false"),
     ("dock.hide", "never, smart, auto или maximized"),
-    ("launchpad.columns", "столбцов, 1–32"),
-    ("launchpad.rows", "строк, 1–32"),
-    ("launchpad.icon_size", "размер значков, 16–256"),
+    ("apps_panel.columns", "окно «Программы»: столбцов, 1–32"),
+    ("apps_panel.rows", "окно «Программы»: строк, 1–32"),
+    (
+        "apps_panel.icon_size",
+        "окно «Программы»: размер значков, 16–256",
+    ),
     ("lock.placeholder", "подсказка в поле пароля"),
     (
         "lock.idle_minutes",
@@ -715,7 +793,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("apps.terminal", "команда терминала через пробел"),
     (
         "apps.hide",
-        "программы, скрытые из Launchpad и Spotlight, через запятую",
+        "программы, скрытые из окон «Программы» и «Поиск», через запятую",
     ),
     (
         "apps.rename",
@@ -801,9 +879,9 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
 fn number_range(key: &str) -> Option<(u32, u32)> {
     match key {
         "menubar.height" => Some((16, 128)),
-        "dock.icon_size" | "launchpad.icon_size" => Some((16, 256)),
+        "dock.icon_size" | "apps_panel.icon_size" => Some((16, 256)),
         "dock.zoom" => Some((100, 300)),
-        "launchpad.columns" | "launchpad.rows" => Some((1, 32)),
+        "apps_panel.columns" | "apps_panel.rows" => Some((1, 32)),
         "lock.idle_minutes" | "lock.screen_off_minutes" => Some((1, 600)),
         _ => None,
     }
@@ -931,8 +1009,8 @@ mod tests {
             "[dock]\nicon_size = 4294967295",
             "[dock]\nzoom = true",
             "[dock]\nzoom = 301",
-            "[launchpad]\nrows = 33",
-            "[launchpad]\ncolumns = 0",
+            "[apps_panel]\nrows = 33",
+            "[apps_panel]\ncolumns = 0",
             "[dock]\nicon_size = \"48\"",
             "[apps]\nterminal = []",
             "[apps]\nterminal = [1]",
@@ -945,7 +1023,7 @@ mod tests {
             assert!(toml_error(text).is_some(), "{text}");
         }
         assert!(setting_value("dock.icon_size", "4294967296").is_err());
-        assert!(setting_value("launchpad.rows", "33").is_err());
+        assert!(setting_value("apps_panel.rows", "33").is_err());
         assert_eq!(
             Config::from_toml("[dock]\nicon_size = 4294967295").dock_icon,
             48
@@ -967,6 +1045,34 @@ mod tests {
     }
 
     #[test]
+    fn old_names_migrate_keeping_values_and_comments() {
+        let old = "[parts]\n# что делает shell\n\
+                   # notify — \"shell\" или \"xfce\" (xfce4-notifyd); spotlight и launchpad — \"shell\" или \"rofi\".\n\
+                   dock = \"shell\"\nspotlight = \"shell\"\n\
+                   launchpad = \"rofi\"\n\n[launchpad]\n# сетка\ncolumns = 6\nrows = 5\n";
+        assert!(toml_error(old).is_some(), "старые имена — уже не настройки");
+        let new = migrate_names(old).unwrap();
+        assert!(toml_error(&new).is_none(), "{new}");
+        assert!(new.contains("# что делает shell") && new.contains("# сетка"));
+        assert!(
+            !new.contains("spotlight") && new.contains("окно «Поиск»"),
+            "{new}"
+        );
+        let c = Config::from_toml(&new);
+        assert!(c.search_panel && !c.apps_panel && c.dock);
+        assert_eq!((c.apps_columns, c.apps_rows), (6, 5));
+        // Новый файл не меняется; «launchpad» в значениях не трогаем.
+        assert_eq!(migrate_names(&new), None);
+        assert_eq!(
+            migrate_names("[dock]\napps = [\"macos-launchpad\"]\n"),
+            None
+        );
+        assert_eq!(current_key("parts.spotlight"), "parts.search_panel");
+        assert_eq!(current_key("launchpad.rows"), "apps_panel.rows");
+        assert_eq!(current_key("dock.apps"), "dock.apps");
+    }
+
+    #[test]
     fn reads_macos_look_config() {
         let c = Config::from_macos_look(
             "# комментарий\n[look]\nfont = Inter Display 11\n\n[dock]\nicon_size = 56\n\
@@ -980,10 +1086,7 @@ mod tests {
         assert_eq!(c.dock_hide, DockHide::Never);
         assert!(c.dock);
         assert_eq!(c.dock_apps, ["thunar", "firefox"]);
-        assert_eq!(
-            (c.launchpad_columns, c.launchpad_rows, c.launchpad_icon),
-            (6, 5, 72)
-        );
+        assert_eq!((c.apps_columns, c.apps_rows, c.apps_icon), (6, 5, 72));
     }
 
     #[test]
