@@ -64,6 +64,8 @@ pub enum DesktopMsg {
     Picked(Option<String>),
     /// Список файлов на столе (сразу и после каждой перемены в папке).
     Files(Vec<Item>),
+    /// Завершённый перенос файлов из другой программы — подтвердить XDND.
+    DropFinished { ticket: u64, success: bool },
 }
 
 /// Нажали на значок: где, и тащат ли его уже (сдвинули дальше [`DRAG_START`]).
@@ -253,6 +255,9 @@ impl DesktopUi {
                 }
                 self.open_picker(d)?;
             }
+            DesktopMsg::DropFinished { ticket, success } => {
+                d.finish_drop(ticket, success);
+            }
             DesktopMsg::Files(items) => {
                 self.grid.set_items(items);
                 if let Some(path) = self.pending_select.take() {
@@ -327,14 +332,13 @@ impl DesktopUi {
                 self.cells_dirty.extend(changed);
                 Ok(())
             }
-            Event::Dropped { x, y, .. } => {
+            Event::Dropped {
+                x, y, moving, ticket, ..
+            } => {
                 let changed = self.grid.set_drop_target(None);
                 self.cells_dirty.extend(changed);
-                // Как в Проводнике и Finder: на том же диске — переместить,
-                // с Ctrl или с другого диска (флешки) — скопировать. Что
-                // предложил источник, не важно: Thunar всегда просит копию.
-                let (ctrl, _) = d.modifiers();
-                self.dropped(d.take_drop(), f32::from(x), f32::from(y), ctrl);
+                // Выполняем именно подтверждённое источнику действие.
+                self.dropped(d.take_drop(ticket), f32::from(x), f32::from(y), moving, ticket);
                 Ok(())
             }
             Event::Key(k) => self.key(k),
@@ -530,8 +534,12 @@ impl DesktopUi {
 
     /// Бросили файлы из другой программы: на папку — в неё, иначе — на стол,
     /// значками там, где отпустили (несколько — рядом друг с другом).
-    fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, copy: bool) {
+    fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, moving: bool, ticket: u64) {
         if paths.is_empty() {
+            let _ = self.tx.send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
+                ticket,
+                success: false,
+            })));
             return;
         }
         let folder = self
@@ -553,8 +561,8 @@ impl DesktopUi {
             if src == into {
                 continue;
             }
-            let dest = if src.parent() == Some(into.as_path()) {
-                // Уже здесь (перетащили из окна «Рабочий стол») — только место.
+            let dest = if moving && src.parent() == Some(into.as_path()) {
+                // Перемещение на свой стол меняет только положение значка.
                 src.clone()
             } else {
                 shell_desktop::files::free_name_reserved(&into, &name, &reserved)
@@ -576,11 +584,8 @@ impl DesktopUi {
             desktop_files::save_places(self.grid.saved());
             self.full_dirty = true;
         }
-        let (moves, copies): (Vec<_>, Vec<_>) = pairs
-            .into_iter()
-            .partition(|(src, _)| !copy && desktop_files::same_disk(src, &into));
-        desktop_files::bring(moves, true);
-        desktop_files::bring(copies, false);
+        // В одном рабочем потоке: один результат на весь пакет, затем XDND ack.
+        desktop_files::bring(pairs, moving, ticket, self.tx.clone());
     }
 
     /// Клавиши, когда стол активен. Сочетания с Ctrl — по месту клавиши,

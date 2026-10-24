@@ -7,6 +7,7 @@
 //!    `text/uri-list`); пришёл — сообщаем источнику `XdndFinished`, а службе —
 //!    [`Event::Dropped`]: что и где бросили. Пути забирает [`Display::take_drop`].
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -21,17 +22,34 @@ use crate::{Display, Event, Result};
 /// Версия протокола, которую понимаем.
 const VERSION: u32 = 5;
 
-/// Перетаскивание, которое сейчас над нами.
-#[derive(Default)]
-pub(crate) struct DropState {
-    /// Окно-источник и окно, над которым несут.
+/// Параметры, подтверждённые последним XdndStatus.
+#[derive(Clone, Copy)]
+struct DropOffer {
     source: Window,
     target: Window,
-    /// Где указатель (в пикселях экрана) и какое действие предложено.
     at: (i16, i16),
     action: u32,
-    /// Брошенные пути — ждут, пока служба их заберёт.
-    paths: Vec<PathBuf>,
+}
+
+/// Файловая операция может продолжаться после получения списка URI.
+struct PendingDrop {
+    ticket: u64,
+    offer: DropOffer,
+}
+
+const MAX_PENDING_DROPS: usize = 16;
+
+/// Текущее перетаскивание, ожидаемый SelectionNotify и незавершённые операции.
+#[derive(Default)]
+pub(crate) struct DropState {
+    source: Window,
+    target: Window,
+    at: (i16, i16),
+    action: u32,
+    selecting: Option<DropOffer>,
+    pending: Vec<PendingDrop>,
+    paths: HashMap<u64, Vec<PathBuf>>,
+    next_ticket: u64,
 }
 
 pub(crate) type DropCell = Mutex<DropState>;
@@ -50,9 +68,30 @@ impl Display {
         Ok(())
     }
 
-    /// Пути последнего броска (после [`Event::Dropped`]).
-    pub fn take_drop(&self) -> Vec<PathBuf> {
-        std::mem::take(&mut self.drop.lock().unwrap_or_else(|p| p.into_inner()).paths)
+    /// Пути конкретного броска; другой параллельный перенос их не затронет.
+    pub fn take_drop(&self, ticket: u64) -> Vec<PathBuf> {
+        self.drop
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .paths
+            .remove(&ticket)
+            .unwrap_or_default()
+    }
+
+    /// Сообщить источнику XDND результат только после файловой операции.
+    pub fn finish_drop(&self, ticket: u64, success: bool) {
+        let mut st = self.drop.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(index) = st.pending.iter().position(|p| p.ticket == ticket) else {
+            return;
+        };
+        let offer = st.pending.remove(index).offer;
+        st.paths.remove(&ticket);
+        let action = if success { offer.action } else { x11rb::NONE };
+        self.send_client(
+            offer.source,
+            self.atoms.XdndFinished,
+            [offer.target, u32::from(success), action, 0, 0],
+        );
     }
 
     fn send_client(&self, to: Window, kind: u32, data: [u32; 5]) {
@@ -91,6 +130,18 @@ impl Display {
             return Some(Event::DropLeave { window });
         }
         if kind == a.XdndDrop {
+            // Пока сервер возвращает SelectionNotify, запомним исходный запрос.
+            // Новый XdndEnter не должен подменить источник этого броска.
+            if st.selecting.is_some() {
+                self.send_client(data[0], a.XdndFinished, [window, 0, 0, 0, 0]);
+                return Some(Event::Other);
+            }
+            st.selecting = Some(DropOffer {
+                source: data[0],
+                target: window,
+                at: st.at,
+                action: st.action,
+            });
             let time = data[2];
             let _ = self.conn.convert_selection(
                 window,
@@ -105,10 +156,18 @@ impl Display {
         None
     }
 
-    /// Пришёл список брошенных файлов (ответ на просьбу из `XdndDrop`).
+    /// Данные URI получены, но XdndFinished отправится только после
+    /// успешного завершения копирования/перемещения в рабочем потоке.
     pub(crate) fn dnd_selection(&self, requestor: Window, property: u32) -> Event {
         let a = &self.atoms;
         let mut st = self.drop.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(offer) = st.selecting.take() else {
+            return Event::Other;
+        };
+        if requestor != offer.target {
+            self.send_client(offer.source, a.XdndFinished, [offer.target, 0, 0, 0, 0]);
+            return Event::Other;
+        }
         let paths = (property != x11rb::NONE)
             .then(|| {
                 self.conn
@@ -121,17 +180,21 @@ impl Display {
             .and_then(|r| crate::clipboard::parse(&String::from_utf8_lossy(&r.value)))
             .map(|(_, p)| p)
             .unwrap_or_default();
-        let ok = u32::from(!paths.is_empty());
-        let action = if ok == 1 { st.action } else { x11rb::NONE };
-        self.send_client(st.source, a.XdndFinished, [st.target, ok, action, 0, 0]);
-        let moving = st.action == a.XdndActionMove;
-        st.paths = paths;
-        let (x, y) = (self.pt(st.at.0), self.pt(st.at.1));
+        if paths.is_empty() || st.pending.len() >= MAX_PENDING_DROPS {
+            self.send_client(offer.source, a.XdndFinished, [offer.target, 0, 0, 0, 0]);
+            return Event::Other;
+        }
+        st.next_ticket = st.next_ticket.wrapping_add(1).max(1);
+        let ticket = st.next_ticket;
+        st.pending.push(PendingDrop { ticket, offer });
+        st.paths.insert(ticket, paths);
+        let (x, y) = (self.pt(offer.at.0), self.pt(offer.at.1));
         Event::Dropped {
-            window: st.target,
+            window: offer.target,
             x,
             y,
-            moving,
+            moving: offer.action == a.XdndActionMove,
+            ticket,
         }
     }
 }

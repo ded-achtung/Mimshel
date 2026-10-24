@@ -205,13 +205,14 @@ pub enum Event {
     DropLeave {
         window: u32,
     },
-    /// Файлы бросили на окно: переместить (`moving`) или скопировать. Пути —
-    /// [`Display::take_drop`].
+    /// Файлы бросили на окно; действие определено протоколом XDND.
+    /// Пути читаются через [`Display::take_drop`], затем [`Display::finish_drop`].
     Dropped {
         window: u32,
         x: i16,
         y: i16,
         moving: bool,
+        ticket: u64,
     },
     /// Включилась раскладка с этим номером (с 0).
     KeyboardGroup(u8),
