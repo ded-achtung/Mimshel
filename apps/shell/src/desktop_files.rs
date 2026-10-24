@@ -137,15 +137,25 @@ pub fn new_text_file(dir: &Path) -> Option<PathBuf> {
 
 /// Переименовать файл в той же папке. Ошибка — словами для окна.
 pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
-    if new.contains('/') {
-        return Err("В имени не может быть знака «/».".into());
+    if new.is_empty() || matches!(new, "." | "..") || new.contains('/') {
+        return Err("Недопустимое имя файла.".into());
     }
     let dir = path.parent().ok_or("нет папки")?;
     let target = dir.join(new);
     if target.exists() {
         return Err(format!("«{new}» уже есть на рабочем столе."));
     }
-    std::fs::rename(path, &target).map_err(|e| format!("Не удалось переименовать: {e}"))?;
+    // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
+    // GNU mv с none-fail не заменяет назначения даже при гонке.
+    let status = Command::new("mv")
+        .args(["--update=none-fail", "-T", "--"])
+        .arg(path)
+        .arg(&target)
+        .status()
+        .map_err(|e| format!("Не удалось переименовать: {e}"))?;
+    if !status.success() {
+        return Err("Переименование не выполнено: имя занято или файл недоступен.".into());
+    }
     Ok(target)
 }
 
@@ -158,7 +168,7 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
         };
         let dest = free_name(&folder, &name);
         let ok = Command::new("mv")
-            .arg("--")
+            .args(["--update=none-fail", "-T", "--"])
             .arg(&path)
             .arg(&dest)
             .status()
@@ -184,6 +194,8 @@ pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool) {
     std::thread::spawn(move || {
         for (src, dest) in pairs {
             let mut cmd = Command::new(if moving { "mv" } else { "cp" });
+            // Не заменяем существующий файл при гонке после выбора имени.
+            cmd.args(["--update=none-fail", "-T"]);
             if !moving {
                 cmd.arg("-a");
             }
@@ -264,6 +276,7 @@ pub fn paste(dir: PathBuf) {
                 ("cp", "скопировать")
             };
             let mut cmd = Command::new(program);
+            cmd.args(["--update=none-fail", "-T"]);
             if !cut {
                 cmd.arg("-a");
             }

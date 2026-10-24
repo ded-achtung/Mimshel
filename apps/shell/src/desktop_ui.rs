@@ -13,6 +13,7 @@
 //! обои или другой список файлов — стол отправляется целиком; выделение —
 //! только клетки затронутых значков.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
@@ -541,6 +542,8 @@ impl DesktopUi {
             .map(|t| t.path.clone());
         let into = folder.clone().unwrap_or_else(|| self.dir.clone());
         let mut pairs = Vec::new();
+        // Имена всех файлов должны быть разными ещё до начала копирования.
+        let mut reserved = HashSet::new();
         let mut slot = self.grid.slot_at(x, y);
         for src in paths {
             let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else {
@@ -554,8 +557,9 @@ impl DesktopUi {
                 // Уже здесь (перетащили из окна «Рабочий стол») — только место.
                 src.clone()
             } else {
-                shell_desktop::files::free_name(&into, &name)
+                shell_desktop::files::free_name_reserved(&into, &name, &reserved)
             };
+            reserved.insert(dest.clone());
             if folder.is_none() {
                 slot = self.grid.free_slot_near(slot, None);
                 if let Some(n) = dest.file_name() {
