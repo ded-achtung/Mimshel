@@ -11,4 +11,5 @@ pub mod gtk_links;
 pub mod lock;
 pub mod parts;
 pub mod paths;
+pub mod png_icons;
 mod sys;

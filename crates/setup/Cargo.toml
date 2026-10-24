@@ -9,6 +9,7 @@ shell-core = { path = "../core" }
 shell-lock = { path = "../lock" }
 shell-wallpaper = { path = "../wallpaper" }
 shell-icons = { path = "../icons" }
+shell-apps = { path = "../apps" }
 shell-text = { path = "../text" }
 tiny-skia = "0.12.0"
 

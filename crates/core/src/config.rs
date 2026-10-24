@@ -32,6 +32,9 @@ pub struct Config {
     /// Масштаб для крупных экранов (HiDPI): сколько пикселей в точке.
     /// `None` — «auto»: по DPI системы (Xfce: Внешний вид → Шрифты → DPI).
     pub scale: Option<f32>,
+    /// Программам GTK — готовые PNG вместо SVG (тема `ТЕМА-png`, рисует
+    /// `shell apply icons`): окна открываются на 10–40 % быстрее.
+    pub png_icons: bool,
     /// Команда терминала для программ с `Terminal=true`; программа идёт после неё.
     pub terminal: Vec<String>,
     /// Сетка окна «Программы»: столбцы, строки и размер иконки.
@@ -99,6 +102,7 @@ impl Default for Config {
             cursor_theme: "Colloid-cursors".into(),
             wallpaper: "space".into(),
             scale: None,
+            png_icons: true,
             terminal: vec!["xfce4-terminal".into(), "-x".into()],
             apps_columns: 7,
             apps_rows: 4,
@@ -292,6 +296,9 @@ impl Config {
         {
             c.scale = v;
         }
+        if let Some(v) = get("look", "png_icons").and_then(|i| i.as_bool()) {
+            c.png_icons = v;
+        }
         if let Some(v) = list("apps", "terminal").filter(|v| !v.is_empty()) {
             c.terminal = v;
         }
@@ -418,6 +425,9 @@ wallpaper = {wallpaper}
 # Масштаб для крупных экранов: \"auto\" — по DPI системы, или число от 1 до 3
 # (1.5 — всё в полтора раза крупнее). Меняется командой shell set look.scale 1.5
 scale = {scale}
+# Программам GTK — готовые PNG значков (быстрее открываются окна; ~26 МБ).
+# false — как раньше, SVG. Применить: shell apply icons
+png_icons = {png_icons}
 
 [menubar]
 # Высота в точках, значок главного меню (shell-logo — наша планета; имя в теме или путь к файлу),
@@ -467,6 +477,7 @@ rename = {rename}
             scale = self
                 .scale
                 .map_or_else(|| s("auto"), |k| Value::from(f64::from(k)).to_string()),
+            png_icons = self.png_icons,
             height = self.menubar_height,
             menu_icon = s(&self.menu_icon),
             clock = s(&self.clock_format),
@@ -690,6 +701,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "look.scale",
         "масштаб для крупных экранов: auto (по DPI) или от 1 до 3, например 1.5",
     ),
+    (
+        "look.png_icons",
+        "готовые PNG значков для программ GTK: true или false",
+    ),
     ("menubar.height", "высота строки меню, 16–128"),
     (
         "menubar.menu_icon",
@@ -775,6 +790,11 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
             },
         },
         "dock.zoom" if input == "false" || input == "no" => Ok(Value::from(false)),
+        "look.png_icons" => match input {
+            "true" | "yes" => Ok(Value::from(true)),
+            "false" | "no" => Ok(Value::from(false)),
+            _ => Err("можно: true, false".into()),
+        },
         "dock.hide" => words(&["never", "smart", "auto", "maximized"]),
         "dock.apps" => Ok(Value::Array(
             input
@@ -851,6 +871,8 @@ pub fn toml_error(text: &str) -> Option<String> {
                 })
             } else if key == "look.scale" {
                 item.as_value().and_then(scale_value).is_some()
+            } else if key == "look.png_icons" {
+                item.as_bool().is_some()
             } else if key == "apps.rename" {
                 item.as_inline_table().is_some_and(|t| {
                     t.iter().all(|(app, name)| {

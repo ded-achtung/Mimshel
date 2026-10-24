@@ -882,6 +882,44 @@ impl Plan<'_> {
                     LOGO_SYMBOLIC_SVG,
                 );
             }
+            let png = crate::png_icons::theme_name(OVERLAY_THEME);
+            if !self.config.png_icons {
+                // Выключили — тема снова SVG, готовые картинки не нужны.
+                xset("xsettings", "/Net/IconThemeName", "string", theme);
+                let _ = std::fs::remove_dir_all(self.paths.icons.join(&png));
+                return;
+            }
+            // Программам GTK — готовые PNG: SVG они грузят в ~10 раз дольше
+            // (урок 24). Сама служба рисует SVG сама и берёт обычную тему.
+            let start = std::time::Instant::now();
+            let apps: Vec<String> = shell_apps::load_all(&shell_apps::Settings::from_env())
+                .into_iter()
+                .filter_map(|a| a.icon)
+                .collect();
+            let stats = crate::png_icons::build(
+                &self.paths.icons,
+                OVERLAY_THEME,
+                &[OVERLAY_THEME, OVERLAY_BASE],
+                &apps,
+            );
+            if crate::sys::which("gtk-update-icon-cache").is_some() {
+                run(&[
+                    "gtk-update-icon-cache",
+                    "-f",
+                    "-q",
+                    &self.paths.icons.join(&png).display().to_string(),
+                ]);
+            }
+            println!(
+                "  готовые PNG для программ: нарисовано {}, уже были {}, оставлено в SVG {} \
+                 ({:.1} с)",
+                stats.drawn,
+                stats.kept,
+                stats.skipped,
+                start.elapsed().as_secs_f32()
+            );
+            xset("xsettings", "/Net/IconThemeName", "string", &png);
+            return;
         }
         xset("xsettings", "/Net/IconThemeName", "string", theme);
     }
