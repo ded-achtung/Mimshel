@@ -1254,10 +1254,16 @@ mod tests {
         v.selected = vec![1];
         let pm = v.render(&mut fonts, &mut icons);
         assert_eq!((pm.width(), pm.height()), (900, 560));
-        // Под выделенной подписью — синяя подложка.
-        let (lx, ly, lw, _) = v.label_rect(1);
+        // Проверяем синюю подложку *рядом с текстом*, а не белый пиксель
+        // самой буквы: прежний тест случайно попадал в глиф и падал.
+        let (x, y, cw, _) = v.cell(1);
+        let width = cw - 8.0;
+        let first = label_lines(&mut fonts, &v.items[1].name, &LABEL, width);
+        let tw = fonts.measure(&first[0], &LABEL).min(width);
+        let tx = (x + (cw - tw) / 2.0).round();
+        // Подложка начинается за 4 точки до начала текста.
         let p = pm
-            .pixel((lx + lw / 2.0) as u32 - 10, ly as u32 + 3)
+            .pixel((tx - 2.0) as u32, (y + LABEL_TOP + LABEL.line_height() / 2.0) as u32)
             .expect("внутри");
         assert!(u16::from(p.blue()) > u16::from(p.red()) + 60, "{p:?}");
     }
