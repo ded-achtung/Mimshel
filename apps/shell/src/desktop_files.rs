@@ -148,7 +148,7 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
     // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
     // GNU mv с none-fail не заменяет назначения даже при гонке.
     let status = Command::new("mv")
-        .args(["--update=none-fail", "-T", "--"])
+        .args(["--no-clobber", "-T", "--"])
         .arg(path)
         .arg(&target)
         .status()
@@ -168,7 +168,7 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
         };
         let dest = free_name(&folder, &name);
         let ok = Command::new("mv")
-            .args(["--update=none-fail", "-T", "--"])
+            .args(["--no-clobber", "-T", "--"])
             .arg(&path)
             .arg(&dest)
             .status()
@@ -184,8 +184,15 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
 fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
     let mut errors = Vec::new();
     for (src, dest) in pairs {
+        // GNU coreutils на Ubuntu CI может быть старше 9.5: --update=none-fail
+        // недоступен. Проверка препятствует ложному успеху для уже занятых путей,
+        // а --no-clobber защищает назначение от конкурентной записи.
+        if std::fs::symlink_metadata(dest).is_ok() {
+            errors.push(format!("Файл назначения {} уже существует.", dest.display()));
+            continue;
+        }
         let mut cmd = Command::new(if moving { "mv" } else { "cp" });
-        cmd.args(["--update=none-fail", "-T"]);
+        cmd.args(["--no-clobber", "-T"]);
         if !moving {
             cmd.arg("-a");
         }
@@ -283,7 +290,7 @@ pub fn paste(dir: PathBuf) {
                 ("cp", "скопировать")
             };
             let mut cmd = Command::new(program);
-            cmd.args(["--update=none-fail", "-T"]);
+            cmd.args(["--no-clobber", "-T"]);
             if !cut {
                 cmd.arg("-a");
             }
