@@ -289,6 +289,18 @@ impl Display {
             .filter(|t| !t.is_empty())
     }
 
+    /// Зажаты ли сейчас Ctrl и Shift (для Ctrl/Shift+щелчка).
+    pub fn modifiers(&self) -> (bool, bool) {
+        self.conn
+            .query_pointer(self.root)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or((false, false), |r| {
+                let m = u16::from(r.mask);
+                (m & 0x4 != 0, m & 0x1 != 0)
+            })
+    }
+
     /// Где указатель мыши на экране (в точках).
     pub fn pointer_position(&self) -> Option<(i16, i16)> {
         let r = self.conn.query_pointer(self.root).ok()?.reply().ok()?;

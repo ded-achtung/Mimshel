@@ -169,6 +169,38 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
     });
 }
 
+/// Лежат ли файл и папка на одном диске (тогда перенос — просто переезд).
+pub fn same_disk(file: &Path, dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(file), std::fs::metadata(dir)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev(),
+        _ => false,
+    }
+}
+
+/// Перенести (`moving`) или скопировать файлы `src` → `dest` (перетащили из
+/// другой программы на стол или на папку).
+pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool) {
+    std::thread::spawn(move || {
+        for (src, dest) in pairs {
+            let mut cmd = Command::new(if moving { "mv" } else { "cp" });
+            if !moving {
+                cmd.arg("-a");
+            }
+            let ok = cmd
+                .arg("--")
+                .arg(&src)
+                .arg(&dest)
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                let name = src.file_name().unwrap_or_default().to_string_lossy();
+                error(&format!("Не удалось перенести «{name}»."));
+            }
+        }
+    });
+}
+
 /// Где запомнены места значков: строки «столбец строка<Tab>имя файла».
 fn places_file() -> PathBuf {
     let state = std::env::var_os("XDG_STATE_HOME")
@@ -220,8 +252,11 @@ pub fn paste(dir: PathBuf) {
             let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else {
                 continue;
             };
-            // Скопировать файл туда же, где он лежит, — нет смысла (Mac так же
-            // делает копию, но рядом с исходным): на столе — копия «имя 2».
+            // Вырезанный со стола обратно на стол — он уже здесь, ничего не
+            // делать; скопированный — копия рядом, «имя 2» (как на Mac).
+            if cut && src.parent() == Some(dir.as_path()) {
+                continue;
+            }
             let dest = free_name(&dir, &name);
             let (program, verb) = if cut {
                 ("mv", "переместить")

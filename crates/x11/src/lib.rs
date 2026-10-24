@@ -5,12 +5,13 @@
 
 mod clipboard;
 mod desktop;
+mod dnd;
 mod dock;
 mod keyboard;
 mod shm;
 mod windows;
 
-pub use clipboard::clipboard_files;
+pub use clipboard::{clipboard_files, copy_files};
 pub use desktop::DesktopWindow;
 pub use dock::DockWindow;
 
@@ -112,6 +113,18 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE_DIALOG,
         _NET_WM_WINDOW_TYPE_DOCK,
         _NET_WM_WINDOW_TYPE_DESKTOP,
+        XdndAware,
+        XdndEnter,
+        XdndPosition,
+        XdndStatus,
+        XdndLeave,
+        XdndDrop,
+        XdndFinished,
+        XdndSelection,
+        XdndActionCopy,
+        XdndActionMove,
+        TEXT_URI_LIST: b"text/uri-list",
+        SHELL_XDND,
         _NET_WM_STATE_SKIP_PAGER,
         _NET_WM_STRUT,
         _NET_WM_STRUT_PARTIAL,
@@ -183,6 +196,23 @@ pub enum Event {
     Mapped {
         window: u32,
     },
+    /// Над окном несут файлы из другой программы (в точке `x`, `y`).
+    DropHover {
+        window: u32,
+        x: i16,
+        y: i16,
+    },
+    DropLeave {
+        window: u32,
+    },
+    /// Файлы бросили на окно: переместить (`moving`) или скопировать. Пути —
+    /// [`Display::take_drop`].
+    Dropped {
+        window: u32,
+        x: i16,
+        y: i16,
+        moving: bool,
+    },
     /// Включилась раскладка с этим номером (с 0).
     KeyboardGroup(u8),
     /// Поменялся набор раскладок (например, setxkbmap).
@@ -201,6 +231,8 @@ pub struct Display {
     keymap: Mutex<Keymap>,
     /// Общая память для больших картинок (см. [`shm`]).
     shm: shm::Shm,
+    /// Перетаскивание из других программ (XDND).
+    drop: dnd::DropCell,
     /// Масштаб (`shell_render::scale` при подключении): размеры окон и
     /// координаты мыши снаружи — в точках, серверу — в пикселях.
     scale: f32,
@@ -240,6 +272,7 @@ impl Display {
             colormap,
             keymap,
             shm,
+            drop: dnd::DropCell::default(),
             scale: shell_render::scale(),
         })
     }
@@ -487,6 +520,15 @@ impl Display {
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
             XEvent::MapNotify(e) => Event::Mapped { window: e.window },
+            XEvent::ClientMessage(e) => self
+                .dnd_message(e.window, e.type_, e.data.as_data32())
+                .unwrap_or(Event::Other),
+            XEvent::SelectionNotify(e)
+                if e.property == self.atoms.SHELL_XDND
+                    || e.selection == self.atoms.XdndSelection =>
+            {
+                self.dnd_selection(e.requestor, e.property)
+            }
             XEvent::XkbStateNotify(e) => Event::KeyboardGroup(u8::from(e.group)),
             XEvent::XkbNamesNotify(_) | XEvent::XkbNewKeyboardNotify(_) => Event::KeyboardLayouts,
             XEvent::MappingNotify(_) => {
@@ -695,6 +737,14 @@ impl Popup {
         Ok(())
     }
 
+    /// Выводит картинку в часть окна: левый верхний угол — в пикселе `x`, `y`
+    /// (остальное в окне не меняется).
+    pub fn present_at(&self, d: &Display, pixmap: &impl Image, x: i32, y: i32) -> Result<()> {
+        put_at(d, self.window, self.gc, pixmap.image(), x, y)?;
+        d.conn.flush()?;
+        Ok(())
+    }
+
     /// Выводит картинку (или холст) в окно (левый верхний угол к углу).
     pub fn present(&self, d: &Display, pixmap: &impl Image) -> Result<()> {
         put_pixmap(d, self.window, self.gc, pixmap.image())
@@ -708,6 +758,43 @@ impl Popup {
 /// Выводит картинку в 32-битное окно.
 pub(crate) fn put_pixmap(d: &Display, window: Window, gc: u32, pixmap: &Pixmap) -> Result<()> {
     put_columns(d, window, gc, pixmap, 0, pixmap.width())
+}
+
+/// Выводит картинку в `drawable` (окно или картинку на сервере) левым
+/// верхним углом в пиксель `x`, `y`. Полосами — у запроса к X есть предел.
+pub(crate) fn put_at(
+    d: &Display,
+    drawable: u32,
+    gc: u32,
+    image: &Pixmap,
+    x: i32,
+    y: i32,
+) -> Result<()> {
+    let w = image.width() as usize;
+    if w == 0 || image.height() == 0 {
+        return Ok(());
+    }
+    let mut data = image.data().to_vec();
+    // tiny-skia хранит RGBA, X-сервер ждёт BGRA.
+    for px in data.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    let max_rows = (d.conn.maximum_request_bytes().saturating_sub(64) / (w * 4)).max(1);
+    for (n, rows) in data.chunks(max_rows * w * 4).enumerate() {
+        d.conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            drawable,
+            gc,
+            w as u16,
+            (rows.len() / (w * 4)) as u16,
+            x as i16,
+            (y + (n * max_rows) as i32) as i16,
+            0,
+            32,
+            rows,
+        )?;
+    }
+    Ok(())
 }
 
 /// Через общую память выводим только большие картинки: на маленьких
@@ -829,6 +916,7 @@ impl Keymap {
             key::End | key::KP_End => Key::End,
             key::Page_Up | key::KP_Page_Up => Key::PageUp,
             key::Page_Down | key::KP_Page_Down => Key::PageDown,
+            key::F2 => Key::F2,
             key::XF86_AudioRaiseVolume => Key::VolumeUp,
             key::XF86_AudioLowerVolume => Key::VolumeDown,
             key::XF86_AudioMute | key::XF86_AudioMicMute => Key::VolumeMute,

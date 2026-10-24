@@ -56,6 +56,17 @@ pub struct IconGrid {
     /// Значок, который сейчас переименовывают: его подпись не рисуется
     /// (поверх — поле ввода).
     renaming: Option<PathBuf>,
+    /// Папка, над которой несут значки, — подсвечена: туда они упадут.
+    drop_target: Option<usize>,
+}
+
+/// Куда стрелкой.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 impl IconGrid {
@@ -67,6 +78,7 @@ impl IconGrid {
             area,
             selected: Vec::new(),
             renaming: None,
+            drop_target: None,
         }
     }
 
@@ -105,6 +117,59 @@ impl IconGrid {
             .collect();
         self.renaming = path;
         changed
+    }
+
+    /// Подсветить папку под переносимыми значками (`None` — снять).
+    /// Возвращает, какие значки перерисовать.
+    pub fn set_drop_target(&mut self, i: Option<usize>) -> Vec<usize> {
+        if i == self.drop_target {
+            return Vec::new();
+        }
+        let changed = [self.drop_target, i].into_iter().flatten().collect();
+        self.drop_target = i;
+        changed
+    }
+
+    /// Выделить всё (Ctrl+A).
+    pub fn select_all(&mut self) -> Vec<usize> {
+        self.set_selection((0..self.items.len()).collect())
+    }
+
+    /// Соседний значок от `from` в эту сторону (ближайший по прямой, с
+    /// перевесом в сторону стрелки). Нет `from` — первый по порядку.
+    pub fn neighbor(&self, from: Option<usize>, dir: Direction) -> Option<usize> {
+        let Some(from) = from else {
+            return (!self.items.is_empty()).then_some(0);
+        };
+        let (fc, fr) = self.slot(from);
+        let (fc, fr) = (i64::from(fc), i64::from(fr));
+        (0..self.items.len())
+            .filter(|&i| i != from)
+            .filter_map(|i| {
+                let (c, r) = self.slot(i);
+                let (dc, dr) = (i64::from(c) - fc, i64::from(r) - fr);
+                // Столбцы считаются от правого края: левее — больше.
+                let (along, across) = match dir {
+                    Direction::Up => (-dr, dc),
+                    Direction::Down => (dr, dc),
+                    Direction::Left => (dc, dr),
+                    Direction::Right => (-dc, dr),
+                };
+                (along > 0).then_some((along * along + 4 * across * across, i))
+            })
+            .min()
+            .map(|(_, i)| i)
+    }
+
+    /// Первый значок после `after` (по кругу), имя которого начинается с
+    /// `prefix` — набор букв на столе прыгает к значку, как в Finder.
+    pub fn find_prefix(&self, prefix: &str, after: Option<usize>) -> Option<usize> {
+        let prefix = prefix.to_lowercase();
+        let n = self.items.len();
+        let start = after.map_or(0, |a| a + 1);
+        (0..n)
+            .map(|k| (start + k) % n)
+            .find(|&i| self.items[i].name.to_lowercase().starts_with(&prefix))
     }
 
     pub fn is_selected(&self, i: usize) -> bool {
@@ -392,7 +457,7 @@ impl IconGrid {
         };
         let (cx, cy, cw, _) = self.cell(i);
         let (x, y) = (cx - origin.0, cy - origin.1);
-        let selected = self.is_selected(i);
+        let selected = self.is_selected(i) || self.drop_target == Some(i);
         let id = Transform::identity();
         let ix = x + (cw - ICON as f32) / 2.0;
         if selected
@@ -558,6 +623,30 @@ mod tests {
         g.set_items(vec![item("а"), item("б"), item("в"), item("г"), item("д")]);
         assert_eq!(g.selected_indices(), [0, 1]);
         assert_eq!(g.select(None), [0, 1]);
+    }
+
+    #[test]
+    fn arrows_select_all_and_prefix() {
+        let mut g = IconGrid::new((0.0, 0.0, 4.0 * CELL_W, 3.0 * CELL_H));
+        g.set_items(vec![
+            item("а"),
+            item("б"),
+            item("в"),
+            item("Гора"),
+            item("Город"),
+        ]);
+        // Колонка справа: а, б, в; левее: Гора, Город.
+        assert_eq!(g.neighbor(None, Direction::Down), Some(0));
+        assert_eq!(g.neighbor(Some(0), Direction::Down), Some(1));
+        assert_eq!(g.neighbor(Some(0), Direction::Up), None);
+        assert_eq!(g.neighbor(Some(0), Direction::Left), Some(3));
+        assert_eq!(g.neighbor(Some(4), Direction::Right), Some(1));
+        assert_eq!(g.select_all().len(), 5);
+        assert_eq!(g.find_prefix("го", None), Some(3));
+        assert_eq!(g.find_prefix("го", Some(3)), Some(4), "дальше по кругу");
+        assert_eq!(g.find_prefix("я", None), None);
+        assert_eq!(g.set_drop_target(Some(2)), [2]);
+        assert_eq!(g.set_drop_target(None), [2]);
     }
 
     #[test]
