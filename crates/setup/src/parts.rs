@@ -748,28 +748,8 @@ impl Plan<'_> {
             &self.paths.icons.join("default/index.theme"),
             &format!("[Icon Theme]\nInherits={}\n", c.cursor_theme),
         );
-        // Программы на GTK4 (libadwaita) берут оформление из ~/.config/gtk-4.0.
-        let gtk4 = home().join(".config/gtk-4.0");
-        for name in ["gtk.css", "gtk-dark.css", "assets"] {
-            let target = theme_dir.join("gtk-4.0").join(name);
-            if !target.exists() {
-                continue;
-            }
-            let link = gtk4.join(name);
-            if std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()) {
-                continue;
-            }
-            // Свой обычный файл человека не трогаем — только наши ссылки.
-            if link.exists() && !link.is_symlink() {
-                println!("⚠ {} — обычный файл, не трогаю", link.display());
-                continue;
-            }
-            let _ = std::fs::create_dir_all(&gtk4);
-            remove(&link);
-            if let Err(e) = std::os::unix::fs::symlink(&target, &link) {
-                println!("✘ Не связать {}: {e}", link.display());
-            }
-        }
+        // Ссылки GTK4 принадлежат Shell только при наличии записи о них.
+        crate::gtk_links::apply(&theme_dir);
     }
 
     /// Обои на все мониторы (и фон блокировки — из них же).

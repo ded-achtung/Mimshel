@@ -5,7 +5,7 @@
 //!
 //! В копии: настройки Xfce (xfconf), настройки и значки Plank, свой файл
 //! настроек shell и отметки, были ли автозапуск Plank и тема GTK4. Откат
-//! возвращает их, убирает ярлыки и автозапуски со своей пометкой и
+//! возвращает их, убирает только свои ссылки GTK4, ярлыки и автозапуски со своей пометкой и
 //! перезапускает части Xfce.
 
 use std::path::{Path, PathBuf};
@@ -126,11 +126,13 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
             remove_file(&paths.autostart.join("plank.desktop"))?;
         }
     }
-    if !had("gtk-4.0") {
-        step("убрать тему GTK4 (её не было)");
-        if !dry {
-            remove_tree(&home().join(".config/gtk-4.0"))?;
-        }
+    // Не удаляем ~/.config/gtk-4.0: пользователь мог создать в ней файлы
+    // после резервной копии. Убираем только подтверждённые ссылки Shell.
+    for link in crate::gtk_links::owned_links() {
+        step(&format!("убрать свою ссылку GTK4 {}", link.display()));
+    }
+    if !dry {
+        crate::gtk_links::cleanup()?;
     }
     for f in managed(&[&paths.applications, &paths.autostart]) {
         step(&format!("удалить созданный ярлык {}", f.display()));
