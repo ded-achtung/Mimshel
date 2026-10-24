@@ -6,6 +6,7 @@
 pub mod actions;
 pub mod backup;
 pub mod doctor;
+pub mod gtk_fixes;
 pub mod gtk_links;
 pub mod lock;
 pub mod parts;

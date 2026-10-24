@@ -134,6 +134,12 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
     if !dry {
         crate::gtk_links::cleanup()?;
     }
+    if crate::gtk_fixes::present() {
+        step("убрать поправки shell из ~/.config/gtk-3.0/gtk.css");
+        if !dry {
+            crate::gtk_fixes::cleanup()?;
+        }
+    }
     for f in managed(&[&paths.applications, &paths.autostart]) {
         step(&format!("удалить созданный ярлык {}", f.display()));
         if !dry {
