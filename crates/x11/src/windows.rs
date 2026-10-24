@@ -4,6 +4,7 @@
 use shell_core::windows::WindowInfo;
 use tiny_skia::{FilterQuality, IntSize, Pixmap, PixmapPaint, Transform};
 use x11rb::connection::Connection;
+use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::ImageFormat;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
@@ -17,6 +18,31 @@ const ICONIC_STATE: u32 = 3;
 impl Display {
     pub fn root(&self) -> Window {
         self.root
+    }
+
+    /// Геометрия активных мониторов непосредственно из RandR, без
+    /// запуска внешнего xrandr при событиях изменения размера.
+    pub fn monitors(&self) -> Vec<(i32, i32, u32, u32)> {
+        self.conn
+            .randr_get_monitors(self.root, true)
+            .ok()
+            .and_then(|request| request.reply().ok())
+            .map(|reply| {
+                reply
+                    .monitors
+                    .into_iter()
+                    .filter(|m| m.width > 0 && m.height > 0)
+                    .map(|m| {
+                        (
+                            i32::from(m.x),
+                            i32::from(m.y),
+                            u32::from(m.width),
+                            u32::from(m.height),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Доступная рабочая область по EWMH в физических пикселях. У xfwm4 она

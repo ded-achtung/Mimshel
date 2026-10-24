@@ -117,6 +117,11 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
             MapState::UNMAPPED
         );
     }
+    // Виртуальный X-сервер сообщает мониторы через RandR. Если расширение
+    // доступно, все возвращённые прямоугольники должны иметь размер.
+    for (_, _, w, h) in d.monitors() {
+        assert!(w > 0 && h > 0);
+    }
     let dock = d.create_dock("integration-dock")?;
     dock.set_geometry(&d, 0, 0, 800, 28)?;
     dock.set_strut_top(&d, 28, 0, 799)?;

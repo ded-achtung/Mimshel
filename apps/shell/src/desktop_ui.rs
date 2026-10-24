@@ -218,7 +218,8 @@ impl DesktopUi {
     fn place_icons(&mut self, d: &Display) {
         let k = d.scale();
         let (sw, sh) = d.screen_size();
-        let (mx, my, mw, mh) = shell_setup::parts::monitor_rects()
+        let monitors = d.monitors();
+        let (mx, my, mw, mh) = monitors
             .first()
             .map(|&(x, y, w, h)| (x as f32 / k, y as f32 / k, w as f32 / k, h as f32 / k))
             .unwrap_or((0.0, 0.0, f32::from(sw), f32::from(sh)));
