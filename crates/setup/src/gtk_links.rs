@@ -51,7 +51,10 @@ fn save_entries(manifest: &Path, entries: &BTreeMap<&str, PathBuf>) -> io::Resul
 
 fn apply_in(theme_dir: &Path, gtk4: &Path, manifest: &Path) -> io::Result<()> {
     if gtk4.is_symlink() {
-        eprintln!("GTK4: {} — чужая ссылка на каталог, не трогаю", gtk4.display());
+        eprintln!(
+            "GTK4: {} — чужая ссылка на каталог, не трогаю",
+            gtk4.display()
+        );
         return Ok(());
     }
     let mut owned = read_entries(manifest);
@@ -68,7 +71,10 @@ fn apply_in(theme_dir: &Path, gtk4: &Path, manifest: &Path) -> io::Result<()> {
         }
         match std::fs::symlink_metadata(&link) {
             Ok(_) if actual.as_ref() != owned.get(name) => {
-                eprintln!("GTK4: {} уже существует и не принадлежит Shell", link.display());
+                eprintln!(
+                    "GTK4: {} уже существует и не принадлежит Shell",
+                    link.display()
+                );
                 continue;
             }
             Ok(_) => std::fs::remove_file(&link)?,
@@ -87,8 +93,7 @@ fn owned_links_in(gtk4: &Path, manifest: &Path) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|(name, target)| {
             let link = gtk4.join(name);
-            (std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()))
-                .then_some(link)
+            (std::fs::read_link(&link).ok().as_deref() == Some(target.as_path())).then_some(link)
         })
         .collect()
 }
@@ -132,7 +137,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shell-gtk-links-{}-{id}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shell-gtk-links-{}-{id}", std::process::id()));
         let gtk4 = root.join("config/gtk-4.0");
         let manifest = root.join("state/shell/gtk4-links");
         let theme1 = root.join("theme1");
@@ -151,15 +157,27 @@ mod tests {
         std::os::unix::fs::symlink(&foreign, gtk4.join("assets")).unwrap();
 
         apply_in(&theme1, &gtk4, &manifest).unwrap();
-        assert_eq!(std::fs::read_link(gtk4.join("gtk.css")).unwrap(), theme1.join("gtk-4.0/gtk.css"));
-        assert_eq!(std::fs::read_to_string(gtk4.join("gtk-dark.css")).unwrap(), "user");
+        assert_eq!(
+            std::fs::read_link(gtk4.join("gtk.css")).unwrap(),
+            theme1.join("gtk-4.0/gtk.css")
+        );
+        assert_eq!(
+            std::fs::read_to_string(gtk4.join("gtk-dark.css")).unwrap(),
+            "user"
+        );
         assert_eq!(std::fs::read_link(gtk4.join("assets")).unwrap(), foreign);
 
         apply_in(&theme2, &gtk4, &manifest).unwrap();
-        assert_eq!(std::fs::read_link(gtk4.join("gtk.css")).unwrap(), theme2.join("gtk-4.0/gtk.css"));
+        assert_eq!(
+            std::fs::read_link(gtk4.join("gtk.css")).unwrap(),
+            theme2.join("gtk-4.0/gtk.css")
+        );
         cleanup_in(&gtk4, &manifest).unwrap();
         assert!(!gtk4.join("gtk.css").exists());
-        assert_eq!(std::fs::read_to_string(gtk4.join("gtk-dark.css")).unwrap(), "user");
+        assert_eq!(
+            std::fs::read_to_string(gtk4.join("gtk-dark.css")).unwrap(),
+            "user"
+        );
         assert_eq!(std::fs::read_link(gtk4.join("assets")).unwrap(), foreign);
         assert!(gtk4.is_dir());
         std::fs::remove_dir_all(root).unwrap();
@@ -171,7 +189,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shell-gtk-restore-{}-{id}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shell-gtk-restore-{}-{id}", std::process::id()));
         let gtk4 = root.join("gtk4");
         let marker = root.join("links");
         let theme = root.join("theme");
@@ -181,7 +200,10 @@ mod tests {
         std::fs::remove_file(gtk4.join("gtk.css")).unwrap();
         std::fs::write(gtk4.join("gtk.css"), "user").unwrap();
         cleanup_in(&gtk4, &marker).unwrap();
-        assert_eq!(std::fs::read_to_string(gtk4.join("gtk.css")).unwrap(), "user");
+        assert_eq!(
+            std::fs::read_to_string(gtk4.join("gtk.css")).unwrap(),
+            "user"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

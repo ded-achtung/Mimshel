@@ -197,7 +197,9 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
             .is_ok_and(|s| s.success());
         if !ok {
             let name = src.file_name().unwrap_or_default().to_string_lossy();
-            errors.push(format!("Не удалось перенести «{name}»: файл назначения занят или недоступен."));
+            errors.push(format!(
+                "Не удалось перенести «{name}»: файл назначения занят или недоступен."
+            ));
         }
     }
     errors

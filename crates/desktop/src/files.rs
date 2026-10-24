@@ -282,7 +282,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("shell-safe-names-{}-{id}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("shell-safe-names-{}-{id}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("документ.txt"), "старый").unwrap();
         let mut reserved = HashSet::new();
@@ -296,5 +297,4 @@ mod tests {
         assert_eq!(free_name(&dir, "битая ссылка"), dir.join("битая ссылка 2"));
         std::fs::remove_dir_all(dir).unwrap();
     }
-
 }

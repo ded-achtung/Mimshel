@@ -333,12 +333,22 @@ impl DesktopUi {
                 Ok(())
             }
             Event::Dropped {
-                x, y, moving, ticket, ..
+                x,
+                y,
+                moving,
+                ticket,
+                ..
             } => {
                 let changed = self.grid.set_drop_target(None);
                 self.cells_dirty.extend(changed);
                 // Выполняем именно подтверждённое источнику действие.
-                self.dropped(d.take_drop(ticket), f32::from(x), f32::from(y), moving, ticket);
+                self.dropped(
+                    d.take_drop(ticket),
+                    f32::from(x),
+                    f32::from(y),
+                    moving,
+                    ticket,
+                );
                 Ok(())
             }
             Event::Key(k) => self.key(k),
@@ -536,10 +546,12 @@ impl DesktopUi {
     /// значками там, где отпустили (несколько — рядом друг с другом).
     fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, moving: bool, ticket: u64) {
         if paths.is_empty() {
-            let _ = self.tx.send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
-                ticket,
-                success: false,
-            })));
+            let _ = self
+                .tx
+                .send(Msg::Desktop(Box::new(DesktopMsg::DropFinished {
+                    ticket,
+                    success: false,
+                })));
             return;
         }
         let folder = self
