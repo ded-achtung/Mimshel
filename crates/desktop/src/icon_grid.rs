@@ -269,12 +269,13 @@ impl IconGrid {
     /// Ближайшая к `want` клетка, где нет других значков (`except` — этот
     /// значок не считается: его и двигаем).
     pub fn free_slot_near(&self, want: Slot, except: Option<usize>) -> Slot {
-        let busy = |s: Slot| {
-            self.places
-                .iter()
-                .enumerate()
-                .any(|(i, p)| *p == s && Some(i) != except)
-        };
+        let occupied: HashSet<Slot> = self
+            .places
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != except)
+            .map(|(_, &p)| p)
+            .collect();
         let (rows, cols) = (self.rows(), self.columns());
         let dist = |s: Slot| {
             let dc = i64::from(s.0) - i64::from(want.0);
@@ -283,7 +284,7 @@ impl IconGrid {
         };
         (0..cols)
             .flat_map(|c| (0..rows).map(move |r| (c, r)))
-            .filter(|&s| !busy(s))
+            .filter(|s| !occupied.contains(s))
             .min_by_key(|&s| dist(s))
             .unwrap_or(want)
     }
@@ -457,9 +458,40 @@ impl IconGrid {
                 (i, t)
             })
             .collect();
+        // Запоминаем исходные места один раз. Раньше каждый move_item()
+        // заново делал freeze + layout, то есть N полных пересчётов сетки.
+        self.freeze();
+        let selected: HashSet<usize> = items
+            .iter()
+            .copied()
+            .filter(|&i| i < self.items.len())
+            .chain(std::iter::once(lead))
+            .collect();
+        let mut occupied: HashSet<Slot> = self
+            .places
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !selected.contains(i))
+            .map(|(_, &slot)| slot)
+            .collect();
         for (i, target) in targets {
-            self.move_item(i, target);
+            if i >= self.items.len() {
+                continue;
+            }
+            let distance = |slot: Slot| {
+                let dx = i64::from(slot.0) - i64::from(target.0);
+                let dy = i64::from(slot.1) - i64::from(target.1);
+                dx * dx + dy * dy
+            };
+            let nearest = (0..cols as u32)
+                .flat_map(|c| (0..rows as u32).map(move |r| (c, r)))
+                .filter(|slot| !occupied.contains(slot))
+                .min_by_key(|&slot| distance(slot))
+                .unwrap_or_else(|| self.slot(i));
+            occupied.insert(nearest);
+            self.saved.insert(file_name(&self.items[i]), nearest);
         }
+        self.layout();
     }
 
     /// Нарисовать значок `i` на холсте, левый верхний угол которого — в точке
@@ -644,6 +676,21 @@ mod tests {
         g.set_items(vec![item("а"), item("б"), item("в"), item("г"), item("д")]);
         assert_eq!(g.selected_indices(), [0, 1]);
         assert_eq!(g.select(None), [0, 1]);
+    }
+
+    #[test]
+    fn group_move_avoids_stationary_icons_and_keeps_unique_slots() {
+        let mut g = IconGrid::new((0.0, 0.0, 6.0 * CELL_W, 5.0 * CELL_H));
+        g.set_items((0..20).map(|i| item(&format!("file{i}"))).collect());
+        let pinned = g.slot(5);
+        // Перемещаем выбранные значки на уже занятую неподвижным значком
+        // клетку. Даже при столкновениях места не должны дублироваться.
+        g.move_items(0, pinned, &[0, 1, 2, 3]);
+        assert_eq!(g.slot(5), pinned);
+        let mut unique = HashSet::new();
+        for i in 0..g.items().len() {
+            assert!(unique.insert(g.slot(i)), "повторяющаяся клетка для {i}");
+        }
     }
 
     #[test]
