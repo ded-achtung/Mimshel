@@ -28,8 +28,10 @@ const LOCK_DELAY: Duration = Duration::from_millis(1500);
 /// щелчки по плиткам не рисуют все обои подряд одновременно). Когда новых
 /// заказов нет [`LOCK_DELAY`], рисует и фон экрана блокировки — один раз
 /// для последних обоев.
-pub(crate) fn painter(tx: Sender<Msg>) -> Sender<(String, (u32, u32))> {
-    let (orders, rx) = std::sync::mpsc::channel::<(String, (u32, u32))>();
+pub(crate) type WallpaperOrder = (String, (u32, u32), Vec<(i32, i32, u32, u32)>);
+
+pub(crate) fn painter(tx: Sender<Msg>) -> Sender<WallpaperOrder> {
+    let (orders, rx) = std::sync::mpsc::channel::<WallpaperOrder>();
     std::thread::spawn(move || {
         let mut lock_for: Option<String> = None;
         loop {
@@ -51,9 +53,9 @@ pub(crate) fn painter(tx: Sender<Msg>) -> Sender<(String, (u32, u32))> {
                 },
             };
             // Заказы, пришедшие, пока ждали, — остаётся только последний.
-            let (value, (sw, sh)) = rx.try_iter().last().unwrap_or(order);
+            let (value, (sw, sh), monitors) = rx.try_iter().last().unwrap_or(order);
             let start = Instant::now();
-            if let Some(image) = compose(&value, sw, sh) {
+            if let Some(image) = compose(&value, sw, sh, &monitors) {
                 let msg = DesktopMsg::Wallpaper(value.clone(), image, start.elapsed());
                 if tx.send(Msg::Desktop(Box::new(msg))).is_err() {
                     return;
@@ -130,14 +132,17 @@ pub(crate) fn pick_file(tx: Sender<Msg>) {
 /// Обои во весь экран `sw`×`sh` пикселей: на каждом мониторе — свои под его
 /// размер (свои обои рисуются под размер один раз и хранятся). `None` —
 /// нарисовать не вышло (останется ровный цвет).
-fn compose(value: &str, sw: u32, sh: u32) -> Option<Pixmap> {
-    let mut monitors = shell_setup::parts::monitor_rects();
-    if monitors.is_empty() {
-        monitors.push((0, 0, sw, sh));
-    }
+fn compose(value: &str, sw: u32, sh: u32, monitors: &[(i32, i32, u32, u32)]) -> Option<Pixmap> {
+    // Геометрия поступает из RandR; отдельный процесс xrandr не нужен.
+    let fallback = [(0, 0, sw, sh)];
+    let monitors = if monitors.is_empty() {
+        &fallback[..]
+    } else {
+        monitors
+    };
     let mut out = Pixmap::new(sw.max(1), sh.max(1))?;
     out.fill(tiny_skia::Color::from_rgba8(0x1e, 0x1b, 0x3a, 0xff));
-    for (x, y, w, h) in monitors {
+    for &(x, y, w, h) in monitors {
         let Some(file) = shell_setup::parts::wallpaper_file(value, i64::from(w), i64::from(h))
         else {
             eprintln!("Обои «{value}» не нарисованы и не найдены");

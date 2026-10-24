@@ -150,7 +150,7 @@ pub struct DesktopUi {
     chosen_at: Option<Instant>,
     skipped: u32,
     /// Рисовальщик обоев (один поток): (значение, размер экрана в пикселях).
-    painter: Sender<(String, (u32, u32))>,
+    painter: Sender<crate::desktop_wallpaper::WallpaperOrder>,
     tx: Sender<Msg>,
 }
 
@@ -257,7 +257,7 @@ impl DesktopUi {
         let (sw, sh) = d.screen_pixels();
         let _ = self
             .painter
-            .send((self.wallpaper.clone(), (u32::from(sw), u32::from(sh))));
+            .send((self.wallpaper.clone(), (u32::from(sw), u32::from(sh)), d.monitors()));
     }
 
     /// Пришло из потока.
