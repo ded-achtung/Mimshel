@@ -501,7 +501,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     );
     if succeeds(&["systemd-detect-virt", "-q"]) {
         for key in ["inactivity-on-ac", "inactivity-on-battery"] {
-            // 14 у «бездействия» значит «никогда».
+            // «Никогда» — 0 (xfce4-power-manager 4.20); 14 — уже через 14 минут.
             add(
                 "power",
                 &format!("ВМ: нет автосна ({key})"),
@@ -510,8 +510,8 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
                     &format!("/xfce4-power-manager/{key}"),
                 )
                 .as_deref()
-                    == Some("14"),
-                "",
+                    == Some(crate::parts::SLEEP_NEVER),
+                "shell apply power",
             );
         }
     }

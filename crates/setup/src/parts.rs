@@ -576,6 +576,11 @@ fn borrow(src: &Path, prefix: &str, overlay: &Path) -> Vec<(String, String)> {
     out
 }
 
+/// «Не засыпать при бездействии» у xfce4-power-manager 4.20 (минуты; 0 —
+/// никогда). Не 14: так было «никогда» в старых версиях, а в 4.20 это сон
+/// через 14 минут — ВМ засыпала и не просыпалась, будто зависла.
+pub const SLEEP_NEVER: &str = "0";
+
 /// В ВМ — без автоматического сна: из него ВМ не просыпается.
 fn power() {
     if !crate::actions::in_vm() {
@@ -583,12 +588,11 @@ fn power() {
     }
     println!("▶ ВМ: без автоматического сна");
     for key in ["inactivity-on-ac", "inactivity-on-battery"] {
-        // 14 у «бездействия» значит «никогда».
         xset(
             "xfce4-power-manager",
             &format!("/xfce4-power-manager/{key}"),
             "uint",
-            "14",
+            SLEEP_NEVER,
         );
     }
 }
