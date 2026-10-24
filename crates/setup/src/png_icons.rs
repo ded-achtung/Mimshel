@@ -277,7 +277,7 @@ mod tests {
             )
         };
         std::fs::write(theme.join("places/scalable/folder.svg"), svg("#3af", "")).unwrap();
-        std::os::unix::fs::symlink(&theme, theme.join("places/scalable/cycle")).unwrap();
+        std::os::unix::fs::symlink(theme.join("places/scalable"), theme.join("places/scalable/cycle")).unwrap();
         std::fs::write(
             theme.join("actions/symbolic/go-next-symbolic.svg"),
             svg("#bebebe", ""),
