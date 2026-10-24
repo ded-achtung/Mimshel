@@ -577,18 +577,9 @@ impl DesktopUi {
             for item in self.grid.selected_items() {
                 desktop_files::move_into(item.path.clone(), folder.clone());
             }
-            // Убрать их со стола сразу, не дожидаясь, пока слежение за
-            // папкой заметит перенос.
-            let rest: Vec<Item> = self
-                .grid
-                .items()
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !moving.contains(i))
-                .map(|(_, it)| it.clone())
-                .collect();
-            self.grid.set_items(rest);
-            self.full_dirty = true;
+            // Не прячем значки, пока move не завершился. При ошибке (нет
+            // прав, диск отключён, конфликт) исходные файлы остаются видимы;
+            // inotify уберёт только реально перемещённые после завершения.
             return Ok(());
         }
         // Клетка — по середине значка, который несли.

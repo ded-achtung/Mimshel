@@ -142,11 +142,13 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
     }
     let dir = path.parent().ok_or("нет папки")?;
     let target = dir.join(new);
-    if std::fs::symlink_metadata(&target).is_ok() {
-        return Err(format!("«{new}» уже есть в этой папке."));
-    }
     if target == path {
         return Ok(target);
+    }
+    match std::fs::symlink_metadata(&target) {
+        Ok(_) => return Err(format!("«{new}» уже есть в этой папке.")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Не проверить имя назначения: {e}")),
     }
     // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
     // GNU mv с none-fail не заменяет назначения даже при гонке.
@@ -173,17 +175,8 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
             return;
         };
         let dest = free_name(&folder, &name);
-        let ok = Command::new("mv")
-            .args(["--no-clobber", "-T", "--"])
-            .arg(&path)
-            .arg(&dest)
-            .status()
-            .is_ok_and(|s| s.success());
-        if !ok
-            || std::fs::symlink_metadata(&path).is_ok()
-            || std::fs::symlink_metadata(&dest).is_err()
-        {
-            error(&format!("Не удалось переложить «{name}» в папку."));
+        for message in transfer(&[(path, dest)], true) {
+            error(&message);
         }
     });
 }
@@ -196,11 +189,21 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
         // GNU coreutils на Ubuntu CI может быть старше 9.5: --update=none-fail
         // недоступен. Проверка препятствует ложному успеху для уже занятых путей,
         // а --no-clobber защищает назначение от конкурентной записи.
-        if std::fs::symlink_metadata(dest).is_ok() {
-            errors.push(format!(
-                "Файл назначения {} уже существует.",
-                dest.display()
-            ));
+        // symlink_metadata учитывает битые ссылки. Нельзя считать ошибки
+        // доступа «свободным именем», а отсутствие источника — успехом.
+        match std::fs::symlink_metadata(dest) {
+            Ok(_) => {
+                errors.push(format!("Файл назначения {} уже существует.", dest.display()));
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                errors.push(format!("Не проверить {}: {e}", dest.display()));
+                continue;
+            }
+        }
+        if let Err(e) = std::fs::symlink_metadata(src) {
+            errors.push(format!("Не прочитать {}: {e}", src.display()));
             continue;
         }
         let mut cmd = Command::new(if moving { "mv" } else { "cp" });
@@ -309,24 +312,10 @@ pub fn paste(dir: PathBuf) {
                 continue;
             }
             let dest = free_name(&dir, &name);
-            let (program, verb) = if cut {
-                ("mv", "переместить")
-            } else {
-                ("cp", "скопировать")
-            };
-            let mut cmd = Command::new(program);
-            cmd.args(["--no-clobber", "-T"]);
-            if !cut {
-                cmd.arg("-a");
-            }
-            let ok = cmd
-                .arg("--")
-                .arg(&src)
-                .arg(&dest)
-                .status()
-                .is_ok_and(|s| s.success());
-            if !ok {
-                error(&format!("Не удалось {verb} «{name}»."));
+            // Единый путь проверки конфликтов и результатов для вставки,
+            // XDND и переноса в папку. Не полагаемся на код возврата cp -n.
+            for message in transfer(&[(src, dest)], cut) {
+                error(&message);
             }
         }
     });
@@ -415,6 +404,23 @@ mod transfer_tests {
         assert!(transfer(&[(source.clone(), new.clone())], false).is_empty());
         assert_eq!(std::fs::read_to_string(&new).unwrap(), "new");
         assert!(source.exists());
+
+        // Обычный перенос действительно освобождает источник.
+        let moved = root.join("moved.txt");
+        assert!(transfer(&[(source.clone(), moved.clone())], true).is_empty());
+        assert!(!source.exists());
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), "new");
+
+        // Битая символическая ссылка — тоже занятое имя.
+        let dangling = root.join("dangling");
+        std::os::unix::fs::symlink(root.join("missing"), &dangling).unwrap();
+        assert!(!transfer(&[(moved.clone(), dangling)], false).is_empty());
+        assert!(moved.exists());
+
+        // Переименовать файл в себя можно; чужое имя не перезаписывается.
+        assert_eq!(rename(&moved, "moved.txt").unwrap(), moved);
+        assert!(rename(&moved, "destination.txt").is_err());
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "original");
 
         std::fs::remove_dir_all(root).unwrap();
     }
