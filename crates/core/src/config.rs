@@ -1,15 +1,11 @@
 //! Настройки оболочки: свой файл `~/.config/shell/config.toml`
-//! ([`Config::from_toml`]). Первый раз он создаётся из конфига macos-look
-//! (`~/.config/macos-look/config.ini`, [`Config::from_macos_look`]), а какие
-//! части включены (док, строка меню, уведомления), пока решает macos-look —
-//! эти три переключателя служба берёт из его файла.
-//! Здесь только разбор и составление текста, файлы читает программа.
-
-use std::collections::HashMap;
+//! ([`Config::from_toml`]); нет файла — он создаётся из значений по
+//! умолчанию. Здесь только разбор и составление текста, файлы читает
+//! программа.
 
 use toml_edit::{Array, DocumentMut, Value};
 
-/// Когда прятать док (как `hide_mode` в Plank и macos-look).
+/// Когда прятать док.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockHide {
     /// Никогда: док всегда виден, развёрнутые окна заканчиваются над ним.
@@ -144,101 +140,6 @@ impl Default for Config {
             .map(|(a, n)| (a.to_string(), n.to_string()))
             .to_vec(),
         }
-    }
-}
-
-impl Config {
-    /// Настройки из текста `config.ini` macos-look поверх значений по умолчанию.
-    /// Непонятные значения пропускаются (остаётся значение по умолчанию).
-    pub fn from_macos_look(text: &str) -> Config {
-        let ini = parse_ini(text);
-        let get = |section: &str, key: &str| ini.get(&(section.to_string(), key.to_string()));
-        let num = |section: &str, key: &str| {
-            let name = match (section, key) {
-                ("panel", "height") => "menubar.height".to_string(),
-                ("dock", "zoom_percent") => "dock.zoom".to_string(),
-                _ => format!("{section}.{key}"),
-            };
-            get(section, key)
-                .and_then(|v| v.parse::<u32>().ok())
-                .filter(|&v| number_range(&name).is_none_or(|(min, max)| (min..=max).contains(&v)))
-        };
-        let mut c = Config::default();
-
-        if let Some(font) = get("look", "font") {
-            // «Inter 10» → «Inter»: размер шрифта задаём сами.
-            let family = match font.rsplit_once(' ') {
-                Some((name, size)) if size.parse::<f32>().is_ok() => name,
-                _ => font.as_str(),
-            };
-            if !family.is_empty() {
-                c.font = family.to_string();
-            }
-        }
-        if let Some(v) = num("launchpad", "columns").filter(|&v| v > 0) {
-            c.apps_columns = v as usize;
-        }
-        if let Some(v) = num("launchpad", "rows").filter(|&v| v > 0) {
-            c.apps_rows = v as usize;
-        }
-        if let Some(v) = num("launchpad", "icon_size").filter(|&v| v >= 16) {
-            c.apps_icon = v;
-        }
-        if let Some(apps) = get("dock", "apps") {
-            c.dock_apps = apps
-                .split(',')
-                .map(|a| dock_entry(a.trim()).to_string())
-                .filter(|a| !a.is_empty())
-                .collect();
-        }
-        if let Some(v) = num("dock", "icon_size").filter(|&v| v >= 16) {
-            c.dock_icon = v;
-        }
-        let zoom_on = get("dock", "zoom").map(|v| matches!(v.as_str(), "yes" | "true" | "1"));
-        if let Some(p) = num("dock", "zoom_percent").filter(|&p| p >= 100) {
-            c.dock_zoom = Some(p);
-        }
-        if zoom_on == Some(false) {
-            c.dock_zoom = None;
-        }
-        c.dock = get("dock", "engine").is_some_and(|e| e == "shell");
-        c.menubar = get("menubar", "engine").is_some_and(|e| e == "shell");
-        c.notify = get("notify", "engine").is_some_and(|e| e == "shell");
-        // У macos-look окна «Поиск» и «Программы» — разделы spotlight и launchpad.
-        c.search_panel = get("spotlight", "engine").is_some_and(|e| e == "shell");
-        c.apps_panel = get("launchpad", "engine").is_some_and(|e| e == "shell");
-        if let Some(v) = num("panel", "height").filter(|&v| v >= 16) {
-            c.menubar_height = v;
-        }
-        if let Some(v) = get("panel", "menu_icon").filter(|v| !v.is_empty()) {
-            c.menu_icon = v.clone();
-        }
-        if let Some(v) = get("panel", "clock_format").filter(|v| !v.is_empty()) {
-            c.clock_format = v.clone();
-        }
-        c.dock_hide = match num("dock", "hide_mode") {
-            Some(0) => DockHide::Never,
-            Some(2) => DockHide::Auto,
-            Some(3) => DockHide::Maximized,
-            Some(1) => DockHide::Smart,
-            _ => c.dock_hide,
-        };
-        if let Some(v) = get("lock", "placeholder").filter(|v| !v.is_empty()) {
-            c.lock_placeholder = v.clone();
-        }
-        if let Some(v) = num("lock", "idle_minutes").filter(|&v| v > 0) {
-            c.lock_idle = v;
-        }
-        if let Some(v) = num("lock", "screen_off_minutes").filter(|&v| v > 0) {
-            c.lock_screen_off = v;
-        }
-        if let Some(hide) = get("launchpad", "hide") {
-            c.hide_apps = comma_list(hide);
-        }
-        if let Some(rename) = get("menubar", "rename") {
-            c.rename_apps = parse_renames(rename);
-        }
-        c
     }
 }
 
@@ -610,8 +511,8 @@ pub fn set_value(text: &str, section: &str, key: &str, value: Value) -> Option<S
     Some(doc.to_string())
 }
 
-/// Запись значка в `[dock] apps`: имя ярлыка без одного «.desktop» (как
-/// пишет macos-look). Только одного: у Telegram ярлык
+/// Запись значка в `[dock] apps`: имя ярлыка без одного «.desktop». Только
+/// одного: у Telegram ярлык
 /// `org.telegram.desktop.desktop`, и запись — `org.telegram.desktop`.
 pub fn dock_entry(id: &str) -> &str {
     id.strip_suffix(".desktop").unwrap_or(id)
@@ -639,8 +540,8 @@ const RENAMED: &[(&str, Option<&str>, &str)] = &[
 ];
 
 /// Новое имя настройки для прежнего (`parts.spotlight` → `parts.search_panel`,
-/// `launchpad.rows` → `apps_panel.rows`); остальные — как есть. Прежними
-/// именами ещё пользуется macos-look (`macos-look set spotlight.engine …`).
+/// `launchpad.rows` → `apps_panel.rows`); остальные — как есть: прежние
+/// имена могли остаться в чьих-то записках и скриптах.
 pub fn current_key(key: &str) -> String {
     let Some((section, name)) = key.split_once('.') else {
         return key.to_string();
@@ -696,12 +597,6 @@ pub fn migrate_names(text: &str) -> Option<String> {
         }
     }
     changed.then_some(out)
-}
-
-/// Есть ли в файле раздел `[parts]` (в файлах, созданных до него, нет).
-pub fn has_parts(text: &str) -> bool {
-    text.parse::<DocumentMut>()
-        .is_ok_and(|d| d.contains_table("parts"))
 }
 
 /// Есть ли в файле раздел `[lock]` (в файлах, созданных до него, нет).
@@ -946,26 +841,6 @@ pub fn toml_error(text: &str) -> Option<String> {
     None
 }
 
-/// `[раздел]` и `ключ = значение`; строки с `#` и `;` — комментарии.
-pub fn parse_ini(text: &str) -> HashMap<(String, String), String> {
-    let mut out = HashMap::new();
-    let mut section = String::new();
-    for line in text.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        if let Some(s) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            section = s.trim().to_string();
-        } else if let Some((k, v)) = line.split_once('=') {
-            out.insert(
-                (section.clone(), k.trim().to_string()),
-                v.trim().to_string(),
-            );
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,10 +903,6 @@ mod tests {
             Config::from_toml("[dock]\nicon_size = 4294967295").dock_icon,
             48
         );
-        assert_eq!(
-            Config::from_macos_look("[dock]\nicon_size = 4294967295").dock_icon,
-            48
-        );
     }
 
     #[test]
@@ -1073,39 +944,14 @@ mod tests {
     }
 
     #[test]
-    fn reads_macos_look_config() {
-        let c = Config::from_macos_look(
-            "# комментарий\n[look]\nfont = Inter Display 11\n\n[dock]\nicon_size = 56\n\
-             zoom = yes\nzoom_percent = 160\nhide_mode = 0\napps = thunar, firefox.desktop,\n\
-             engine = shell\n\n\
-             [launchpad]\ncolumns = 6\nrows = 5\n",
-        );
-        assert_eq!(c.font, "Inter Display");
-        assert_eq!(c.dock_icon, 56);
-        assert_eq!(c.dock_zoom, Some(160));
-        assert_eq!(c.dock_hide, DockHide::Never);
-        assert!(c.dock);
-        assert_eq!(c.dock_apps, ["thunar", "firefox"]);
-        assert_eq!((c.apps_columns, c.apps_rows, c.apps_icon), (6, 5, 72));
-    }
-
-    #[test]
-    fn zoom_off_and_bad_values() {
-        let c = Config::from_macos_look(
-            "[dock]\nzoom = no\nzoom_percent = 150\nicon_size = abc\nhide_mode = 9\n",
-        );
-        assert_eq!(c.dock_zoom, None);
-        assert_eq!(c.dock_icon, 48);
-        assert_eq!(c.dock_hide, DockHide::Smart);
-        assert_eq!(Config::from_macos_look("").dock_apps.len(), 6);
-    }
-
-    #[test]
     fn toml_round_trip() {
-        let mut c = Config::from_macos_look(
-            "[dock]\napps = thunar, firefox\nzoom = no\nhide_mode = 2\n\
-             [panel]\nclock_format = %H:%M \"x\"\n",
-        );
+        let mut c = Config {
+            dock_apps: vec!["thunar".into(), "firefox".into()],
+            dock_zoom: None,
+            dock_hide: DockHide::Auto,
+            clock_format: "%H:%M \"x\"".into(),
+            ..Config::default()
+        };
         c.notify = true;
         let text = c.to_toml();
         assert_eq!(Config::from_toml(&text), c, "{text}");
@@ -1119,8 +965,6 @@ mod tests {
     #[test]
     fn settings_from_command() {
         let text = Config::default().to_toml();
-        assert!(has_parts(&text));
-        assert!(!has_parts("[dock]\n"));
         let set = |text: &str, key: &str, input: &str| {
             let (section, k) = key.split_once('.').unwrap();
             set_value(text, section, k, setting_value(key, input).unwrap()).unwrap()
@@ -1184,24 +1028,6 @@ mod tests {
             c.rename_apps
                 .contains(&("thunar".to_string(), "Проводник".to_string()))
         );
-    }
-
-    #[test]
-    fn lock_hide_rename_from_macos_look() {
-        let c = Config::from_macos_look(
-            "[lock]\nplaceholder = Пароль?\nidle_minutes = 5\nscreen_off_minutes = 7\n\
-             [launchpad]\nhide = rofi, xterm\n[menubar]\nrename = thunar: Проводник, bad\n",
-        );
-        assert_eq!(c.lock_placeholder, "Пароль?");
-        assert_eq!((c.lock_idle, c.lock_screen_off), (5, 7));
-        assert_eq!(c.hide_apps, ["rofi", "xterm"]);
-        assert_eq!(
-            c.rename_apps,
-            [("thunar".to_string(), "Проводник".to_string())]
-        );
-        // Значения вне пределов и пустые — остаются по умолчанию.
-        let c = Config::from_macos_look("[lock]\nidle_minutes = 0\n");
-        assert_eq!(c.lock_idle, 10);
     }
 
     #[test]

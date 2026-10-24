@@ -1,23 +1,30 @@
 //! Резервные копии настроек и откат (`shell backup`, `shell backups`,
-//! `shell restore`) — как в macos-look и в той же папке, чтобы первая копия
-//! «как было до всего» (её сделал macos-look) осталась доступна.
+//! `shell restore`). Копии — в `~/.local/share/shell/backups`; прежняя папка
+//! macos-look переезжает туда целиком, с самой первой копией «как было до
+//! всего».
 //!
 //! В копии: настройки Xfce (xfconf), настройки и значки Plank, свой файл
 //! настроек shell и отметки, были ли автозапуск Plank и тема GTK4. Откат
-//! возвращает их, убирает ярлыки и автозапуски с меткой macos-look и
+//! возвращает их, убирает ярлыки и автозапуски со своей пометкой и
 //! перезапускает части Xfce.
 
 use std::path::{Path, PathBuf};
 
-use crate::look::Paths;
-use crate::sys::{home, kill, output_any, read, run, running, spawn, xget, xreset};
+use crate::paths::{Paths, SHORTCUTS};
+use crate::sys::{home, is_managed, kill, output_any, read, run, running, spawn, xget, xreset};
 
-/// Метка ярлыков, которые создали macos-look и shell.
-const MANAGED_MARK: &str = "X-Macos-Look=true";
-const SHORTCUTS: &[&str] = &["<Super>space", "<Super>a"];
-
+/// Папка копий. Прежняя (от macos-look) при первом обращении переезжает сюда.
 pub fn backup_dir() -> PathBuf {
-    home().join(".local/share/macos-look/backups")
+    let dir = Paths::new().data.join("backups");
+    let old = home().join(".local/share/macos-look/backups");
+    if !dir.exists() && old.is_dir() {
+        let _ = std::fs::create_dir_all(Paths::new().data);
+        if let Err(e) = std::fs::rename(&old, &dir) {
+            eprintln!("Не перенести копии из {}: {e}", old.display());
+            return old;
+        }
+    }
+    dir
 }
 
 fn xfconf_dir() -> PathBuf {
@@ -157,11 +164,13 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
         }
         spawn(&["xfce4-screensaver"]);
     }
+    // Свои сочетания: shell, прежний macos-look или rofi, поставленный нами.
     let ours = [
-        paths.tool.display().to_string(),
         paths.shell_bin.display().to_string(),
+        home().join(".local/bin/macos-look").display().to_string(),
+        "rofi -show drun".to_string(),
     ];
-    for key in SHORTCUTS {
+    for key in SHORTCUTS.iter().map(|s| s.keys) {
         let prop = format!("/commands/custom/{key}");
         if xget("xfce4-keyboard-shortcuts", &prop)
             .is_some_and(|c| ours.iter().any(|o| c.starts_with(o.as_str())))
@@ -185,14 +194,14 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Ярлыки с меткой macos-look в этих папках.
+/// Свои ярлыки (с пометкой shell или прежней macos-look) в этих папках.
 fn managed(dirs: &[&Path]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = dirs
         .iter()
         .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "desktop"))
-        .filter(|p| read(p).contains(MANAGED_MARK))
+        .filter(|p| is_managed(&read(p)))
         .collect();
     out.sort();
     out

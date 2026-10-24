@@ -1,7 +1,7 @@
 //! Включить части оболочки или вернуть прежние программы (`shell apply`):
 //! строка меню или панель Xfce, свой док или Plank, свои уведомления или
-//! xfce4-notifyd, окна «Поиск» и «Программы» свои или rofi, служба shell. Делает
-//! то же, что `macos-look apply panel|dock|notify` и часть `apply menu`.
+//! xfce4-notifyd, окна «Поиск» и «Программы» свои или rofi, оформление, обои,
+//! экран блокировки, служба shell.
 //!
 //! Порядок важен: сначала прежние программы останавливаются, потом
 //! перезапускается служба (она занимает имена на шине — трей, меню,
@@ -12,7 +12,8 @@ use std::path::Path;
 
 use shell_core::config::{Config, DockHide};
 
-use crate::look::{APPS_SHORTCUT, Look, Paths, SHORTCUTS};
+use crate::paths::{APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
+use crate::sys::{MANAGED_MARK, OLD_PANEL_OFF, PANEL_OFF, is_managed};
 use crate::sys::{
     home, keyboard_ok, kill, pgrep, read, remove, run, running, spawn, write_if_changed, xget_list,
     xkb_query, xreset, xset, xset_array,
@@ -32,13 +33,12 @@ pub const APPLY_PARTS: &[&str] = &[
     "service",
 ];
 
-/// Метка ярлыков, которые создали мы (как у macos-look — он их тоже узнаёт).
-const MANAGED_MARK: &str = "X-Macos-Look=true";
 const SESSION: &str = "/sessions/Failsafe";
-/// Строка списка запуска сеанса вместо панели Xfce (пустая команда с
-/// пометкой — по ней панель возвращается).
-const PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
 const NOTIFYD_UNIT: &str = "xfce4-notifyd.service";
+/// Автозапуск xss-lock (блокировка по бездействию и перед сном).
+pub const LOCK_AUTOSTART: &str = "shell-lock.desktop";
+/// Он же под прежним именем (от macos-look) — заменяется новым.
+const OLD_LOCK_AUTOSTART: &str = "macos-look-lock.desktop";
 const PLANK_DCONF: &str = "/net/launchpad/plank/docks/dock1/";
 /// Значок окна «Программы» в доке и его ярлык (имя ярлыка — от прежнего
 /// Launchpad: под ним значок закреплён в доке у тех, кто ставил раньше).
@@ -52,17 +52,15 @@ type Prop<'a> = (&'a str, &'a str, &'a str);
 /// перезапущена.
 struct Plan<'a> {
     config: &'a Config,
-    look: &'a Look,
     paths: Paths,
     later: Vec<Vec<String>>,
 }
 
 /// Применить части (пустой список — все). Ошибка — только если нужна служба,
 /// а программы shell нет: тогда ничего не трогаем, чтобы не остаться ни с чем.
-pub fn apply(config: &Config, look: &Look, parts: &[&str]) -> Result<(), String> {
+pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     let mut plan = Plan {
         config,
-        look,
         paths: Paths::new(),
         later: Vec::new(),
     };
@@ -140,9 +138,13 @@ impl Plan<'_> {
         xreset("xfce4-panel", "/plugins");
         let c = self.config;
         let height = c.menubar_height.to_string();
-        let dark = if self.look.dark() { "true" } else { "false" };
-        let font = self.look.get("look", "font").to_string();
-        let menu_file = self.paths.app_dir.join("apple.menu");
+        let dark = if c.gtk_theme.to_lowercase().contains("light") {
+            "false"
+        } else {
+            "true"
+        };
+        let font = format!("{} 10", c.font);
+        let menu_file = self.paths.main_menu();
         let menu_file = menu_file.to_string_lossy();
         // (модуль, [(свойство, тип, значение)]); номер модуля — место в списке.
         let plugins: Vec<(&str, Vec<Prop>)> = vec![
@@ -253,7 +255,7 @@ impl Plan<'_> {
         }
         println!("▶ Док — Plank");
         if crate::sys::which("plank").is_none() {
-            println!("✘ Plank не установлен — запустите: macos-look install");
+            println!("✘ Plank не установлен — поставьте: sudo pacman -S plank");
             return;
         }
         let launchers = home().join(".config/plank/dock1/launchers");
@@ -288,13 +290,13 @@ impl Plan<'_> {
             }
             items.push(format!("'{name}'"));
         }
-        let theme = self.look.names().theme;
+        // Тема Plank с тем же именем, что тема окон, если есть; иначе прозрачная.
         let theme = if home()
             .join(".local/share/plank/themes")
-            .join(&theme)
+            .join(&self.config.gtk_theme)
             .is_dir()
         {
-            theme
+            self.config.gtk_theme.clone()
         } else {
             "Transparent".to_string()
         };
@@ -347,7 +349,7 @@ impl Plan<'_> {
             return;
         }
         println!("▶ Уведомления — xfce4-notifyd");
-        if read(&autostart).contains(MANAGED_MARK) {
+        if is_managed(&read(&autostart)) {
             remove(&autostart);
         }
         run(&["systemctl", "--user", "unmask", NOTIFYD_UNIT]);
@@ -426,7 +428,7 @@ impl Plan<'_> {
         );
         let xss = format!("xss-lock --transfer-sleep-lock -- {bin} lock --nofork");
         write(
-            &self.paths.autostart.join("macos-look-lock.desktop"),
+            &self.paths.autostart.join(LOCK_AUTOSTART),
             &desktop_entry(
                 "Блокировка экрана",
                 &xss,
@@ -434,6 +436,10 @@ impl Plan<'_> {
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
             ),
         );
+        let old = self.paths.autostart.join(OLD_LOCK_AUTOSTART);
+        if is_managed(&read(&old)) {
+            remove(&old);
+        }
         // Штатная заставка Xfce не нужна: она рисовала старое окно пароля.
         write(
             &self.paths.autostart.join("xfce4-screensaver.desktop"),
@@ -476,7 +482,7 @@ impl Plan<'_> {
             engine(c.search_panel),
             engine(c.apps_panel)
         );
-        let apps = Look::shortcut_command(&self.paths, &APPS_SHORTCUT, c.apps_panel);
+        let apps = shortcut_command(&self.paths, &APPS_SHORTCUT, c.apps_panel);
         // Имя файла прежнее: под ним значок закреплён в доке (`[dock] apps`).
         write(
             &self
@@ -492,7 +498,7 @@ impl Plan<'_> {
         );
         for s in SHORTCUTS {
             let shell = c.part(s.part) == Some(true);
-            let command = Look::shortcut_command(&self.paths, s, shell);
+            let command = shortcut_command(&self.paths, s, shell);
             let prop = format!("/commands/custom/{}", s.keys);
             xset("xfce4-keyboard-shortcuts", &prop, "string", &command);
             // «Часики» у курсора ждут окна от самой команды; окно shell
@@ -781,15 +787,15 @@ impl Plan<'_> {
     /// Меню яблока: ярлыки `shell action …` и файл меню freedesktop с их
     /// порядком и разделителями (его читают и своя строка меню, и панель Xfce).
     fn apple_menu(&self) {
-        let dir = self.paths.app_dir.join("menu");
+        let dir = self.paths.main_menu_items();
         let bin = self.paths.shell_bin.display();
         let mut wanted = Vec::new();
         let mut layout = Vec::new();
-        for (id, label, separator) in crate::look::APPLE_MENU {
+        for (id, label, separator) in crate::paths::APPLE_MENU {
             if *separator {
                 layout.push("    <Separator/>".to_string());
             }
-            let file = format!("macos-{id}.desktop");
+            let file = format!("shell-{id}.desktop");
             write(
                 &dir.join(&file),
                 &desktop_entry(label, &format!("{bin} action {id}"), "", ""),
@@ -807,7 +813,7 @@ impl Plan<'_> {
             }
         }
         write(
-            &self.paths.app_dir.join("apple.menu"),
+            &self.paths.main_menu(),
             &format!(
                 "<!DOCTYPE Menu PUBLIC \"-//freedesktop//DTD Menu 1.0//EN\"\n \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n\
                  <Menu>\n  <Name>Apple</Name>\n  <AppDir>{}</AppDir>\n  \
@@ -857,10 +863,10 @@ fn session_slot(command: &[&str]) -> Option<usize> {
 /// пустую команду или сбрасываем к системной (там xfce4-panel).
 fn panel_at_login(on: bool) {
     if on {
-        if let Some(i) = session_slot(PANEL_OFF) {
+        if let Some(i) = session_slot(PANEL_OFF).or_else(|| session_slot(OLD_PANEL_OFF)) {
             xreset("xfce4-session", &format!("{SESSION}/Client{i}_Command"));
         }
-    } else if let Some(i) = session_slot(&["xfce4-panel"]) {
+    } else if let Some(i) = session_slot(&["xfce4-panel"]).or_else(|| session_slot(OLD_PANEL_OFF)) {
         xset_array(
             "xfce4-session",
             &format!("{SESSION}/Client{i}_Command"),
@@ -942,7 +948,7 @@ fn tray_apps(paths: &Paths) {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        if !text.contains(MANAGED_MARK) {
+        if !is_managed(&text) {
             text = format!("{}\n{MANAGED_MARK}", text.trim_end_matches('\n'));
         }
         text.push('\n');

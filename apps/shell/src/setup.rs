@@ -1,36 +1,17 @@
 //! Команды настройки системы: `shell doctor [--fix]`, `shell set`,
-//! `shell apply`, `shell config`. Сама работа — в `crates/setup`; то, что
-//! ещё не перенесено (тема, обои, блокировка, меню яблока), делает macos-look.
-
-use std::process::Command;
+//! `shell apply`, `shell config`. Сама работа — в `crates/setup`.
 
 use shell_core::config::{self, PARTS, SETTINGS, set_value, setting_value};
 use shell_setup::doctor::{Check, checks, fix_parts};
-use shell_setup::look::{Look, Paths, set_macos_look_engine};
 use shell_setup::parts::{APPLY_PARTS, apply};
 
 use crate::ui::{config_path, config_store, load_config};
 
-/// Части, которые чинит shell; остальные — macos-look.
-const OWN: &[&str] = &[
-    "menubar",
-    "dock",
-    "notify",
-    "launchers",
-    "lock",
-    "power",
-    "icons",
-    "look",
-    "wallpaper",
-    "service",
-];
-
 /// `shell doctor`. Код выхода: 0 — всё в порядке, 1 — есть проблемы.
 pub fn doctor(fix: bool) -> i32 {
-    let look = Look::load();
     let config = load_config();
     let path = config_path();
-    let found = checks(&look, &config, path.as_deref());
+    let found = checks(&config, path.as_deref());
     for c in &found {
         print_check(c);
     }
@@ -52,37 +33,26 @@ pub fn doctor(fix: bool) -> i32 {
         println!("⚠ Чтобы починить: shell doctor --fix");
         return 1;
     }
-    let theirs: Vec<&str> = parts.iter().copied().filter(|p| !OWN.contains(p)).collect();
-    let mine: Vec<&str> = parts.iter().copied().filter(|p| OWN.contains(p)).collect();
-    if !theirs.is_empty() {
-        let mut steps: Vec<Vec<&str>> = Vec::new();
-        if theirs.contains(&"install") {
-            // Сначала пакеты и темы, потом заново всё оформление.
-            steps.push(vec!["install"]);
-            steps.push(vec!["apply"]);
-        } else {
-            let mut args = vec!["apply"];
-            args.extend(&theirs);
-            steps.push(args);
-        }
-        let macos_look = Paths::new().tool;
-        for args in steps {
-            println!("▶ macos-look {}", args.join(" "));
-            match Command::new(&macos_look).args(&args).status() {
-                Ok(s) if s.success() => {}
-                Ok(s) => println!("✘ macos-look {} завершился с ошибкой ({s})", args.join(" ")),
-                Err(e) => println!("✘ Не удалось запустить {}: {e}", macos_look.display()),
-            }
-        }
+    // Пакеты ставит установщик (нужен пароль sudo) — его не запускаем сами.
+    if parts.contains(&"install") {
+        println!("⚠ Не хватает пакетов или оформления — запустите ./install.sh в папке проекта");
     }
+    let mine: Vec<&str> = parts
+        .iter()
+        .filter_map(|p| match *p {
+            "install" => None,
+            "menu" => Some("launchers"),
+            p => APPLY_PARTS.iter().copied().find(|a| *a == p),
+        })
+        .collect();
     if !mine.is_empty()
-        && let Err(e) = apply(&config, &look, &mine)
+        && let Err(e) = apply(&config, &mine)
     {
         println!("✘ {e}");
     }
     // Службе и панели нужно время, чтобы подняться.
     std::thread::sleep(std::time::Duration::from_secs(3));
-    let left: Vec<Check> = checks(&look, &config, path.as_deref())
+    let left: Vec<Check> = checks(&config, path.as_deref())
         .into_iter()
         .filter(|c| !c.ok)
         .collect();
@@ -138,11 +108,6 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
         return 1;
     }
     println!("✔ {key} = {}", input.trim());
-    if section == "parts"
-        && let Err(e) = set_macos_look_engine(name, input.trim())
-    {
-        println!("⚠ Не записать в конфиг macos-look: {e}");
-    }
     if !apply {
         return 0;
     }
@@ -187,7 +152,7 @@ pub fn apply_cmd(parts: &[String]) -> i32 {
 }
 
 fn run_apply(config: &shell_core::config::Config, parts: &[&str]) -> i32 {
-    match apply(config, &Look::load(), parts) {
+    match apply(config, parts) {
         Ok(()) => {
             println!("✔ Применено");
             0

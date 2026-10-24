@@ -22,10 +22,10 @@ cosmic-text, X11 through x11rb and D-Bus through zbus. Wayland is not supported.
   PAM) under a watchdog that restarts it after any failure.
 - Settings backups and restoring the original Xfce setup (`backup`, `restore`).
 
-For now the project expects a configured Xfce session and the `macos-look`
-environment. Installing packages, themes, icons and the cursor, the wallpaper,
-and hiding or renaming applications are still done by it. This is not a
-standalone desktop installer.
+It needs EndeavourOS or Arch with Xfce in an X11 session. Everything else —
+packages, icons, the window theme, the cursor and the wallpaper — is installed by
+`install.sh`; after that the program configures itself (`shell apply`,
+`shell set`, `shell doctor`).
 
 ## Installing
 
@@ -91,8 +91,8 @@ be closed to everyone else (0700); the fallback directory is created that way.
 Run the program with `--help` for the full list of commands.
 
 Settings live in `$XDG_CONFIG_HOME/shell/config.toml` or
-`~/.config/shell/config.toml`. On first start they are carried over from
-`macos-look`. `SHELL_CONFIG` points to a separate file for testing.
+`~/.config/shell/config.toml`. If the file is missing, it is created with
+default values. `SHELL_CONFIG` points to a separate file for testing.
 `shell config` lists the available keys; `shell set KEY VALUE` saves a setting
 and applies it, restarting the service if needed. `shell doctor` checks the
 environment, and `shell doctor --fix` changes it to fix the problems it finds.

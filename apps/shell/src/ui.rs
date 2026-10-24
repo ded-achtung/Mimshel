@@ -93,16 +93,11 @@ pub(crate) enum Msg {
 }
 
 /// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
-/// Файла ещё нет — он создаётся из нынешних настроек macos-look.
+/// Файла ещё нет — он создаётся из значений по умолчанию.
 pub fn load_config() -> Config {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let look = home
-        .as_ref()
-        .and_then(|h| std::fs::read_to_string(h.join(".config/macos-look/config.ini")).ok())
-        .map(|text| Config::from_macos_look(&text));
     match config_path() {
-        Some(path) => config_store(path).load(look.as_ref()),
-        None => look.unwrap_or_default(),
+        Some(path) => config_store(path).load(),
+        None => Config::default(),
     }
 }
 

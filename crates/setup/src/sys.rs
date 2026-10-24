@@ -222,6 +222,23 @@ pub fn which(program: &str) -> Option<PathBuf> {
 }
 
 /// Текст файла, если он есть.
+/// Пометка в ярлыках и автозапусках, которые создал shell: такие он может
+/// переписать и убрать при откате.
+pub const MANAGED_MARK: &str = "X-Shell=true";
+/// Прежняя пометка (её ставил macos-look и shell до переезда) — тоже наша.
+const OLD_MANAGED_MARK: &str = "X-Macos-Look=true";
+
+/// Создан ли файл с таким текстом нами (новой или прежней пометкой).
+pub fn is_managed(text: &str) -> bool {
+    text.lines()
+        .any(|l| l.trim() == MANAGED_MARK || l.trim() == OLD_MANAGED_MARK)
+}
+
+/// Строка списка запуска сеанса вместо панели Xfce: пустая команда с
+/// пометкой, по которой панель возвращается. Прежняя — от macos-look.
+pub const PANEL_OFF: &[&str] = &["true", "shell-no-panel"];
+pub const OLD_PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
+
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }

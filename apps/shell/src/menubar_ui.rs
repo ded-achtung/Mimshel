@@ -598,7 +598,7 @@ impl MenubarUi {
     }
 
     fn open_apple(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
-        // Пункты перечитываем: macos-look мог их поменять.
+        // Пункты перечитываем: `shell apply launchers` мог их поменять.
         self.apple = apple_menu(&apple_menu_file());
         let entries = self
             .apple
@@ -1069,13 +1069,13 @@ fn entry(label: &str, command: Cmd, checked: bool, separator_before: bool) -> Me
     }
 }
 
-/// Файл меню яблока, который пишет macos-look.
+/// Файл главного меню (его пишет `shell apply launchers`).
 fn apple_menu_file() -> PathBuf {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .unwrap_or_default();
-    data.join("macos-look/apple.menu")
+    data.join("shell/apple.menu")
 }
 
 /// Запустить команду пункта меню отдельно от службы.

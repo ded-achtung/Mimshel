@@ -15,20 +15,20 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn load(&self, legacy: Option<&Config>) -> Config {
-        match self.load_locked(legacy) {
+    pub fn load(&self) -> Config {
+        match self.load_locked() {
             Ok(config) => config,
             Err(e) => {
                 eprintln!(
                     "Не удалось загрузить {}: {e}; беру последние исправные настройки",
                     self.path.display()
                 );
-                self.fallback(legacy)
+                self.fallback()
             }
         }
     }
 
-    fn load_locked(&self, legacy: Option<&Config>) -> io::Result<Config> {
+    fn load_locked(&self) -> io::Result<Config> {
         let _lock = lock(&self.path)?;
         let mut text = match fs::read_to_string(&self.path) {
             Ok(text) => {
@@ -45,31 +45,16 @@ impl Store {
                 text
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let text = self.fallback(legacy).to_toml();
+                let text = self.fallback().to_toml();
                 atomic_write(&self.path, &text)?;
                 text
             }
             Err(e) => return Err(e),
         };
-        if !config::has_parts(&text)
-            && let Some(legacy) = legacy
-        {
-            for (name, old, _) in config::PARTS {
-                let value = if legacy.part(name) == Some(true) {
-                    "shell"
-                } else {
-                    old
-                };
-                text = config::set_value(&text, "parts", name, (*value).into())
-                    .ok_or_else(|| io::Error::other("не удалось перенести настройки частей"))?;
-            }
-            atomic_write(&self.path, &text)?;
-        }
-        // Файлы, созданные до раздела [lock]: переносим блокировку, скрытие и
-        // переименование программ из прежнего конфига (или значений по умолчанию).
+        // Файлы, созданные до раздела [lock]: дописываем блокировку, скрытие и
+        // переименование программ (значения по умолчанию).
         if !config::has_lock(&text) {
-            let base = legacy.cloned().unwrap_or_default();
-            text = config::add_lock_settings(&text, &base)
+            text = config::add_lock_settings(&text, &Config::default())
                 .ok_or_else(|| io::Error::other("не удалось перенести настройки блокировки"))?;
             atomic_write(&self.path, &text)?;
         }
@@ -77,7 +62,8 @@ impl Store {
         Ok(Config::from_toml(&text))
     }
 
-    fn fallback(&self, legacy: Option<&Config>) -> Config {
+    /// Последние исправные настройки, а нет их — значения по умолчанию.
+    fn fallback(&self) -> Config {
         if let Some(text) = self
             .good
             .as_ref()
@@ -85,25 +71,9 @@ impl Store {
             .map(|t| config::migrate_names(&t).unwrap_or(t))
             .filter(|text| validate(text).is_ok())
         {
-            let mut config = Config::from_toml(&text);
-            if !config::has_parts(&text)
-                && let Some(legacy) = legacy
-            {
-                for (name, ..) in config::PARTS {
-                    config.set_part(name, legacy.part(name) == Some(true));
-                }
-            }
-            if !config::has_lock(&text) {
-                let base = legacy.cloned().unwrap_or_default();
-                config.lock_placeholder = base.lock_placeholder;
-                config.lock_idle = base.lock_idle;
-                config.lock_screen_off = base.lock_screen_off;
-                config.hide_apps = base.hide_apps;
-                config.rename_apps = base.rename_apps;
-            }
-            config
+            Config::from_toml(&text)
         } else {
-            legacy.cloned().unwrap_or_default()
+            Config::default()
         }
     }
 
@@ -113,7 +83,7 @@ impl Store {
         let _lock = lock(&self.path)?;
         let read = match fs::read_to_string(&self.path) {
             Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => self.fallback(None).to_toml(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => self.fallback().to_toml(),
             Err(e) => return Err(e),
         };
         let text = config::migrate_names(&read).unwrap_or_else(|| read.clone());
@@ -249,13 +219,13 @@ mod tests {
         fs::write(store.good.as_ref().unwrap(), good).unwrap();
         // Каталог вместо файла вызывает ошибку чтения и у root, в отличие от chmod 000.
         fs::create_dir(&store.path).unwrap();
-        assert_eq!(store.load(None).font, "Сохранённый");
+        assert_eq!(store.load().font, "Сохранённый");
         assert!(store.path.is_dir());
         assert!(store.edit(|_| Ok(Config::default().to_toml())).is_err());
         fs::remove_dir(&store.path).unwrap();
         for bad in ["[dock]\nzoom = 9999", "[broken", "[parts]\ndock = \"shel\""] {
             fs::write(&store.path, bad).unwrap();
-            assert!(store.load(None).dock);
+            assert!(store.load().dock);
             assert_eq!(fs::read_to_string(&store.path).unwrap(), bad);
             assert_eq!(
                 fs::read_to_string(store.good.as_ref().unwrap()).unwrap(),
@@ -265,34 +235,30 @@ mod tests {
     }
 
     #[test]
-    fn missing_config_uses_backup_and_bad_backup_uses_legacy() {
+    fn missing_config_uses_backup_and_bad_backup_uses_defaults() {
         let f = Fixture::new();
         let store = f.store();
         fs::write(store.good.as_ref().unwrap(), "[look]\nfont = \"Резерв\"").unwrap();
-        assert_eq!(store.load(None).font, "Резерв");
+        assert_eq!(store.load().font, "Резерв");
         assert_eq!(
             Config::from_toml(&fs::read_to_string(&store.path).unwrap()).font,
             "Резерв"
         );
         fs::write(&store.path, "bad [").unwrap();
         fs::write(store.good.as_ref().unwrap(), "bad [").unwrap();
-        let legacy = Config {
-            font: "Старый".into(),
-            ..Config::default()
-        };
-        assert_eq!(store.load(Some(&legacy)).font, "Старый");
+        assert_eq!(store.load().font, Config::default().font);
     }
 
     #[test]
     fn migration_and_edits_preserve_comments_and_backup() {
         let f = Fixture::new();
         let store = f.store();
-        fs::write(&store.path, "# пояснение\n[dock]\napps = [\"one\"]\n").unwrap();
-        let legacy = Config {
-            dock: true,
-            ..Config::default()
-        };
-        assert!(store.load(Some(&legacy)).dock);
+        fs::write(
+            &store.path,
+            "# пояснение\n[parts]\ndock = \"shell\"\n[dock]\napps = [\"one\"]\n",
+        )
+        .unwrap();
+        assert!(store.load().dock);
         store
             .edit(|text| Ok(config::set_dock_apps(text, &["two".into()]).unwrap()))
             .unwrap();
@@ -331,7 +297,7 @@ mod tests {
     fn concurrent_processes_do_not_lose_updates() {
         let f = Fixture::new();
         let store = f.store();
-        store.load(None);
+        store.load();
         let mut children: Vec<_> = (0..4)
             .map(|_| {
                 Command::new(std::env::current_exe().unwrap())
@@ -345,7 +311,7 @@ mod tests {
         for child in &mut children {
             assert!(child.wait().unwrap().success());
         }
-        assert_eq!(store.load(None).dock_icon, 88);
+        assert_eq!(store.load().dock_icon, 88);
         assert_eq!(
             fs::read_to_string(&store.path).unwrap(),
             fs::read_to_string(store.good.unwrap()).unwrap()

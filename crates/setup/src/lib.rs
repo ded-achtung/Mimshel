@@ -1,13 +1,12 @@
-//! Установка и проверка системы — то, что делал скрипт macos-look
-//! (~/macos-look), переносится сюда по частям: проверка (`shell doctor`),
-//! включение частей (`shell apply`), сторож блокировки (`shell lock`),
-//! пункты меню яблока (`shell action`). Тему, обои, фон блокировки, скрытие и
-//! переименование программ пока делает macos-look.
+//! Установка и проверка системы (раньше — скрипт macos-look, с 24.10.2026
+//! полностью здесь): проверка (`shell doctor`), включение частей и оформление
+//! (`shell apply`), сторож блокировки (`shell lock`), пункты главного меню
+//! (`shell action`), копии настроек и откат (`shell backup`, `shell restore`).
 
 pub mod actions;
 pub mod backup;
 pub mod doctor;
 pub mod lock;
-pub mod look;
 pub mod parts;
+pub mod paths;
 mod sys;

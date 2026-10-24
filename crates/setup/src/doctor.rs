@@ -1,33 +1,21 @@
 //! Проверка, что всё на месте (`shell doctor`): пакеты, тема, панель или своя
 //! строка меню, уведомления, раскладки, меню яблока, блокировка, док, сама
-//! служба shell. То же, что проверял `macos-look doctor`, и вдобавок своё.
-//!
-//! Чинить пока помогает macos-look: у каждой проверки есть часть, и
-//! [`fix_parts`] говорит, что ему применить.
+//! служба shell. У каждой проверки есть часть, и [`fix_parts`] говорит, что
+//! применить, чтобы починить.
 
 use std::path::Path;
 
 use shell_core::config::Config;
 
-use crate::look::{APPLE_MENU, APPS_SHORTCUT, Look, Paths, SHORTCUTS};
+use crate::paths::{APPLE_MENU, APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
+use crate::sys::{OLD_PANEL_OFF, PANEL_OFF};
 use crate::sys::{
     bus_owner, home, in_desktop_session, keyboard_ok, output, output_any, parent, pgrep, read,
     running, succeeds, xget, xget_list,
 };
 
-/// Пакеты из репозитория и из AUR (их ставит `macos-look install`).
+/// Пакеты, которые ставит наш установщик (`install.sh`).
 const PACKAGES: &[&str] = &[
-    "plank",
-    "inter-font",
-    "rofi",
-    "zenity",
-    "xss-lock",
-    "xorg-xset",
-    "appmenu-gtk-module",
-];
-/// Пакеты, которые ставит наш установщик (`install.sh`) — на машине без
-/// macos-look проверяются они.
-const OWN_PACKAGES: &[&str] = &[
     "inter-font",
     "zenity",
     "xss-lock",
@@ -40,13 +28,8 @@ const OWN_PACKAGES: &[&str] = &[
     "network-manager-applet",
     "xfce4-taskmanager",
 ];
-/// Глобальное меню — собирает `macos-look build-appmenu`.
-const APPMENU_PACKAGES: &[&str] = &[
-    "vala-panel-appmenu-xfce",
-    "appmenu-glib-translator",
-    "vala-panel-appmenu-registrar",
-    "vala-panel-appmenu-locale",
-];
+/// Глобальное меню в панели Xfce (если строка меню — панель Xfce).
+const APPMENU_PACKAGES: &[&str] = &["vala-panel-appmenu-xfce", "vala-panel-appmenu-registrar"];
 /// Модули верхней панели Xfce по порядку (когда строка меню — панель Xfce).
 const PANEL_PLUGINS: &[&str] = &[
     "applicationsmenu",
@@ -60,8 +43,6 @@ const PANEL_PLUGINS: &[&str] = &[
     "separator",
     "clock",
 ];
-/// Строка списка запуска сеанса, которой macos-look заменяет панель Xfce.
-const PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
 const SESSION: &str = "/sessions/Failsafe";
 /// Наблюдатели службы (см. `apps/shell/src/status.rs`).
 const WATCHERS: &str = r"^(pactl subscribe|udevadm monitor --kernel --subsystem-match=power_supply|xfconf-query -c xfce4-notifyd -m)";
@@ -77,7 +58,7 @@ pub struct Check {
 }
 
 /// Все проверки. `cfg` — настройки shell, `config` — их файл.
-pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
+pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     let mut out = Vec::new();
     let mut add = |part: &'static str, what: &str, ok: bool, hint: &str| {
         out.push(Check {
@@ -88,7 +69,6 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         });
     };
     let paths = Paths::new();
-    let n = look.names();
 
     add(
         "env",
@@ -97,16 +77,20 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "войдите в систему в окне ВМ",
     );
 
-    // Стоит ли macos-look: без него (новая установка через install.sh) его
-    // пакеты, WhiteSur, rofi и скрытие программ не нужны.
-    let ml = paths.tool.exists();
-    let (packages, appmenu, hint): (&[&str], &[&str], &str) = if ml {
-        (PACKAGES, APPMENU_PACKAGES, "macos-look install")
-    } else {
-        (OWN_PACKAGES, &[], "./install.sh в папке проекта")
-    };
-    // Пакеты: одним вызовом pacman — установленные он печатает.
-    let all: Vec<&str> = packages.iter().chain(appmenu).copied().collect();
+    // Пакеты: свои и прежних программ, которым отданы части.
+    let hint = "./install.sh в папке проекта";
+    let mut extra: Vec<&str> = Vec::new();
+    if !cfg.dock {
+        extra.push("plank");
+    }
+    if !cfg.search_panel || !cfg.apps_panel {
+        extra.push("rofi");
+    }
+    if !cfg.menubar {
+        extra.extend(APPMENU_PACKAGES);
+    }
+    // Одним вызовом pacman — установленные он печатает.
+    let all: Vec<&str> = PACKAGES.iter().chain(&extra).copied().collect();
     let mut q = vec!["pacman", "-Q"];
     q.extend(&all);
     let installed = output_any(&q);
@@ -115,16 +99,8 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             .lines()
             .any(|l| l.split_whitespace().next() == Some(p))
     };
-    for p in packages {
+    for p in &all {
         add("install", &format!("пакет {p}"), have(p), hint);
-    }
-    for p in appmenu {
-        add(
-            "install",
-            &format!("пакет {p}"),
-            have(p),
-            "macos-look build-appmenu",
-        );
     }
     let theme_dir = paths.themes.join(&cfg.gtk_theme);
     add(
@@ -139,20 +115,6 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         theme_dir.join("xfwm4").is_dir(),
         "поставьте тему в ~/.themes",
     );
-    if ml {
-        add(
-            "install",
-            &format!("иконки {}", n.icons_base),
-            paths.icons.join(&n.icons_base).is_dir(),
-            "macos-look install",
-        );
-        add(
-            "look",
-            &format!("надстройка иконок {}", n.icons),
-            paths.icons.join(&n.icons).join("index.theme").exists(),
-            "",
-        );
-    }
     add(
         "install",
         &format!("курсор {}", cfg.cursor_theme),
@@ -179,7 +141,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "install",
         "шрифт Inter",
         output_any(&["fc-list", ":family"]).contains("Inter"),
-        "macos-look install",
+        hint,
     );
 
     // Оформление.
@@ -217,8 +179,8 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     add(
         "look",
         "шрифт",
-        xs("/Gtk/FontName").as_deref() == Some(look.get("look", "font")),
-        "",
+        xs("/Gtk/FontName").as_deref() == Some(&*format!("{} 10", cfg.font)),
+        "shell apply look",
     );
     add(
         "look",
@@ -285,7 +247,8 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         add(
             "panel",
             "строка меню — shell: панель Xfce не запускается при входе",
-            panel_session_slot(PANEL_OFF) && !panel_session_slot(&["xfce4-panel"]),
+            (panel_session_slot(PANEL_OFF) || panel_session_slot(OLD_PANEL_OFF))
+                && !panel_session_slot(&["xfce4-panel"]),
             "shell apply menubar",
         );
         add(
@@ -316,7 +279,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         add(
             "panel",
             "панель Xfce запускается при входе",
-            !panel_session_slot(PANEL_OFF),
+            !(panel_session_slot(PANEL_OFF) || panel_session_slot(OLD_PANEL_OFF)),
             "shell apply menubar",
         );
     }
@@ -368,18 +331,18 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     }
 
     // Меню яблока, окна «Программы» и «Поиск».
-    let menu_dir = paths.app_dir.join("menu");
+    let menu_dir = paths.main_menu_items();
     add(
         "menu",
-        "файл меню яблока",
-        paths.app_dir.join("apple.menu").exists(),
-        "",
+        "файл главного меню",
+        paths.main_menu().exists(),
+        "shell apply launchers",
     );
     for (id, label, _) in APPLE_MENU {
         add(
             "menu",
             &format!("пункт «{label}» → shell action {id}"),
-            read(&menu_dir.join(format!("macos-{id}.desktop")))
+            read(&menu_dir.join(format!("shell-{id}.desktop")))
                 .contains(&format!("Exec={} action {id}\n", paths.shell_bin.display())),
             "shell apply launchers",
         );
@@ -393,29 +356,8 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         apps_desktop.exists(),
         "",
     );
-    for app in look.hidden_apps().into_iter().filter(|_| ml) {
-        if Path::new("/usr/share/applications")
-            .join(format!("{app}.desktop"))
-            .exists()
-        {
-            add(
-                "menu",
-                &format!("скрыто из «Программ» и «Поиска»: {app}"),
-                read(&paths.applications.join(format!("{app}.desktop"))).contains("NoDisplay=true"),
-                "",
-            );
-        }
-    }
-    for t in ["spotlight", "launchpad"].into_iter().filter(|_| ml) {
-        add(
-            "menu",
-            &format!("оформление {t}"),
-            paths.app_dir.join(format!("rofi/{t}.rasi")).exists(),
-            "",
-        );
-    }
     for s in SHORTCUTS {
-        let want = Look::shortcut_command(&paths, s, cfg.part(s.part) == Some(true));
+        let want = shortcut_command(&paths, s, cfg.part(s.part) == Some(true));
         add(
             "menu",
             &format!("сочетание {} → {want}", s.keys),
@@ -428,7 +370,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "",
         );
     }
-    let apps_cmd = Look::shortcut_command(&paths, &APPS_SHORTCUT, cfg.apps_panel);
+    let apps_cmd = shortcut_command(&paths, &APPS_SHORTCUT, cfg.apps_panel);
     add(
         "menu",
         &format!(
@@ -474,7 +416,7 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     add(
         "lock",
         "автозапуск xss-lock → shell lock",
-        read(&paths.autostart.join("macos-look-lock.desktop"))
+        read(&paths.autostart.join(crate::parts::LOCK_AUTOSTART))
             .contains(&format!("-- {} lock --nofork", paths.shell_bin.display())),
         "shell apply lock",
     );
@@ -603,11 +545,21 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         );
         let theme = output(&["dconf", "read", "/net/launchpad/plank/docks/dock1/theme"])
             .unwrap_or_default();
+        // Та же тема, что ставит `shell apply dock`.
+        let want = if home()
+            .join(".local/share/plank/themes")
+            .join(&cfg.gtk_theme)
+            .is_dir()
+        {
+            cfg.gtk_theme.as_str()
+        } else {
+            "Transparent"
+        };
         add(
             "dock",
             "тема дока",
-            theme.trim().trim_matches('\'') == n.theme,
-            "",
+            theme.trim().trim_matches('\'') == want,
+            "shell apply dock",
         );
         let items: Vec<_> = std::fs::read_dir(home().join(".config/plank/dock1/launchers"))
             .into_iter()
@@ -634,8 +586,8 @@ pub fn checks(look: &Look, cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     out
 }
 
-/// Что применить, чтобы починить найденное: части оформления (macos-look;
-/// `install` — сначала поставить пакеты) и части shell ([`crate::parts`]).
+/// Что применить, чтобы починить найденное: части [`crate::parts`]
+/// (`install` — не хватает пакетов: их ставит установщик).
 /// `None` — чинить нечего или нельзя (нет сеанса).
 pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
     let mut parts: Vec<&'static str> = Vec::new();
