@@ -1263,7 +1263,10 @@ mod tests {
         let tx = (x + (cw - tw) / 2.0).round();
         // Подложка начинается за 4 точки до начала текста.
         let p = pm
-            .pixel((tx - 2.0) as u32, (y + LABEL_TOP + LABEL.line_height() / 2.0) as u32)
+            .pixel(
+                (tx - 2.0) as u32,
+                (y + LABEL_TOP + LABEL.line_height() / 2.0) as u32,
+            )
             .expect("внутри");
         assert!(u16::from(p.blue()) > u16::from(p.red()) + 60, "{p:?}");
     }
