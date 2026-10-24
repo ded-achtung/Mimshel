@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
+use inotify::{Inotify, WatchMask};
 
 use shell_apps::App;
 use shell_core::config::{Config, DockHide, set_dock_apps};
@@ -848,12 +849,53 @@ fn trash_full() -> bool {
         .is_some_and(|mut entries| entries.next().is_some())
 }
 
-/// Раз в 2 с проверяет корзину и сообщает, когда она стала полной или пустой.
+/// Состояние корзины меняется по событиям inotify без опроса каждые
+/// две секунды. Если каталог временно отсутствует, редко проверяем его
+/// появление и восстанавливаем наблюдение.
 fn watch_trash(tx: Sender<Msg>) {
     std::thread::spawn(move || {
         let mut full = trash_full();
+        let mut watcher: Option<Inotify> = None;
+        let mut buffer = [0u8; 4096];
         loop {
-            std::thread::sleep(Duration::from_secs(2));
+            if watcher.is_none() {
+                watcher = trash_dir().and_then(|dir| {
+                    let mut io = Inotify::init().ok()?;
+                    io.watches()
+                        .add(
+                            &dir,
+                            WatchMask::CREATE
+                                | WatchMask::DELETE
+                                | WatchMask::MOVED_FROM
+                                | WatchMask::MOVED_TO
+                                | WatchMask::DELETE_SELF
+                                | WatchMask::MOVE_SELF,
+                        )
+                        .ok()?;
+                    Some(io)
+                });
+            }
+            if let Some(io) = watcher.as_mut() {
+                match io.read_events_blocking(&mut buffer) {
+                    Ok(events) => {
+                        let directory_gone = events.into_iter().any(|ev| {
+                            ev.mask.intersects(
+                                inotify::EventMask::DELETE_SELF
+                                    | inotify::EventMask::MOVE_SELF
+                                    | inotify::EventMask::IGNORED,
+                            )
+                        });
+                        if directory_gone {
+                            watcher = None;
+                        }
+                    }
+                    Err(_) => watcher = None,
+                }
+            } else {
+                // На новых системах ~/.local/share/Trash/files может ещё
+                // отсутствовать. Избегаем двух пробуждений CPU в секунду.
+                std::thread::sleep(Duration::from_secs(15));
+            }
             let now = trash_full();
             if now != full {
                 full = now;

@@ -889,12 +889,13 @@ impl FolderView {
                 ICON_SELECTED,
             );
         }
-        if let Some(img) = item
-            .icons
-            .iter()
-            .find_map(|name| icons.get(name, ICON).cloned())
-        {
-            draw_pixmap(pm, &img, ix, y + ICON_TOP, ICON as f32);
+        // Изображения уже кэшируются в Icons. Рисуем по ссылке, не
+        // клонируя Pixmap для каждого значка в каждой видимой строке.
+        for name in &item.icons {
+            if let Some(img) = icons.get(name, ICON) {
+                draw_pixmap(pm, img, ix, y + ICON_TOP, ICON as f32);
+                break;
+            }
         }
         if self.renaming.as_ref() == Some(&item.path) {
             return;
