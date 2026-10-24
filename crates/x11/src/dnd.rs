@@ -89,6 +89,8 @@ struct DragOut {
     /// Ждём XdndStatus на прошлое XdndPosition — следующее пока придержим.
     waiting: bool,
     queued: Option<[u32; 5]>,
+    /// Что сейчас разрешено в `XdndActionList`: `Some(true)` — только копия.
+    only_copy: Option<bool>,
 }
 
 pub(crate) type DropCell = Mutex<DropState>;
@@ -148,13 +150,6 @@ impl Display {
         let _ = self
             .conn
             .set_selection_owner(source, a.XdndSelection, x11rb::CURRENT_TIME);
-        let _ = self.conn.change_property32(
-            PropMode::REPLACE,
-            source,
-            a.XdndActionList,
-            AtomEnum::ATOM,
-            &[a.XdndActionMove, a.XdndActionCopy],
-        );
         let _ = self.conn.flush();
         let mut st = self.drop.lock().unwrap_or_else(|p| p.into_inner());
         st.out = DragOut {
@@ -200,6 +195,23 @@ impl Display {
                 DragTarget::Nothing
             };
             return out.last;
+        }
+        // Проводник выбирает сам из разрешённых (на том же диске —
+        // перемещение), поэтому с Ctrl разрешаем только копию.
+        if out.only_copy != Some(copy) {
+            out.only_copy = Some(copy);
+            let list: &[u32] = if copy {
+                &[a.XdndActionCopy]
+            } else {
+                &[a.XdndActionMove, a.XdndActionCopy]
+            };
+            let _ = self.conn.change_property32(
+                PropMode::REPLACE,
+                out.source,
+                a.XdndActionList,
+                AtomEnum::ATOM,
+                list,
+            );
         }
         let action = if copy {
             a.XdndActionCopy
