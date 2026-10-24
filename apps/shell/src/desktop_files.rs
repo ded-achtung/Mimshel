@@ -156,7 +156,8 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
         .arg(&target)
         .status()
         .map_err(|e| format!("Не удалось переименовать: {e}"))?;
-    if !status.success() || std::fs::symlink_metadata(path).is_ok()
+    if !status.success()
+        || std::fs::symlink_metadata(path).is_ok()
         || std::fs::symlink_metadata(&target).is_err()
     {
         return Err("Переименование не выполнено: имя занято или файл недоступен.".into());
@@ -178,7 +179,8 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
             .arg(&dest)
             .status()
             .is_ok_and(|s| s.success());
-        if !ok || std::fs::symlink_metadata(&path).is_ok()
+        if !ok
+            || std::fs::symlink_metadata(&path).is_ok()
             || std::fs::symlink_metadata(&dest).is_err()
         {
             error(&format!("Не удалось переложить «{name}» в папку."));
