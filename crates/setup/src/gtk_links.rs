@@ -70,7 +70,7 @@ fn apply_in(theme_dir: &Path, gtk4: &Path, manifest: &Path) -> io::Result<()> {
             continue;
         }
         match std::fs::symlink_metadata(&link) {
-            Ok(_) if actual.as_ref() != owned.get(name) => {
+            Ok(_) if actual.is_none() || actual.as_ref() != owned.get(name) => {
                 eprintln!(
                     "GTK4: {} уже существует и не принадлежит Shell",
                     link.display()
