@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use shell_x11::Display;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ImageFormat, ImageOrder, MapState};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ImageFormat, ImageOrder, MapState, PropMode};
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -133,5 +134,28 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
             .collect::<Vec<_>>(),
         [0, 0, 28, 0, 0, 0, 0, 0, 0, 799, 0, 0]
     );
+    // Оконный менеджер может сообщать разные рабочие области для нескольких
+    // виртуальных столов. Читаем область активного рабочего стола.
+    let work = observer.intern_atom(false, b"_NET_WORKAREA")?.reply()?.atom;
+    let current = observer
+        .intern_atom(false, b"_NET_CURRENT_DESKTOP")?
+        .reply()?
+        .atom;
+    observer.change_property32(
+        PropMode::REPLACE,
+        d.root(),
+        work,
+        AtomEnum::CARDINAL,
+        &[0, 28, 800, 572, 0, 28, 800, 472],
+    )?;
+    observer.change_property32(
+        PropMode::REPLACE,
+        d.root(),
+        current,
+        AtomEnum::CARDINAL,
+        &[1],
+    )?;
+    observer.flush()?;
+    assert_eq!(d.workarea(), Some((0, 28, 800, 472)));
     Ok(())
 }
