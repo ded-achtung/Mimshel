@@ -238,6 +238,8 @@ pub fn is_managed(text: &str) -> bool {
 /// пометкой, по которой панель возвращается. Прежняя — от macos-look.
 pub const PANEL_OFF: &[&str] = &["true", "shell-no-panel"];
 pub const OLD_PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
+/// То же для рабочего стола Xfce (xfdesktop), когда стол рисует shell.
+pub const DESKTOP_OFF: &[&str] = &["true", "shell-no-desktop"];
 
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()

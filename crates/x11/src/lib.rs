@@ -3,11 +3,13 @@
 //! раскладки (us/ru) и регистра. Для дока — окна программ ([`windows`]) и
 //! окно-док ([`dock`]).
 
+mod desktop;
 mod dock;
 mod keyboard;
 mod shm;
 mod windows;
 
+pub use desktop::DesktopWindow;
 pub use dock::DockWindow;
 
 use std::sync::Mutex;
@@ -107,6 +109,8 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE_NORMAL,
         _NET_WM_WINDOW_TYPE_DIALOG,
         _NET_WM_WINDOW_TYPE_DOCK,
+        _NET_WM_WINDOW_TYPE_DESKTOP,
+        _NET_WM_STATE_SKIP_PAGER,
         _NET_WM_STRUT,
         _NET_WM_STRUT_PARTIAL,
         _NET_FRAME_EXTENTS,

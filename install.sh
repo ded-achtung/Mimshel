@@ -8,8 +8,8 @@
 # (проект, значки и тема Colloid, библиотеки Rust) — распаковать и ./install.sh.
 #
 # Что делает: ставит пакеты, значки, тему окон и курсор Colloid, собирает shell
-# и включает её части (строка меню, док, уведомления, поиск, экран блокировки,
-# обои).
+# и включает её части (строка меню, док, рабочий стол, уведомления, поиск,
+# экран блокировки, обои).
 # Перед изменениями сохраняет копию настроек: вернуть как было — shell restore.
 # Повторный запуск безопасен: уже сделанное пропускается.
 
@@ -104,7 +104,7 @@ step "Копия нынешних настроек (вернуть как был
 "$BIN" backup pered-shell
 
 step "Включаю части shell"
-for part in dock menubar notify search_panel apps_panel; do
+for part in dock menubar notify desktop search_panel apps_panel; do
     "$BIN" set --no-apply "parts.$part" shell
 done
 "$BIN" set --no-apply look.icon_theme Colloid-shell

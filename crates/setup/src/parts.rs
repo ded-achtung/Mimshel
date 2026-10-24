@@ -13,7 +13,7 @@ use std::path::Path;
 use shell_core::config::{Config, DockHide};
 
 use crate::paths::{APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
-use crate::sys::{MANAGED_MARK, OLD_PANEL_OFF, PANEL_OFF, is_managed};
+use crate::sys::{DESKTOP_OFF, MANAGED_MARK, OLD_PANEL_OFF, PANEL_OFF, is_managed};
 use crate::sys::{
     home, keyboard_ok, kill, pgrep, read, remove, run, running, spawn, write_if_changed, xget_list,
     xkb_query, xreset, xset, xset_array,
@@ -24,6 +24,7 @@ pub const APPLY_PARTS: &[&str] = &[
     "menubar",
     "dock",
     "notify",
+    "desktop",
     "launchers",
     "lock",
     "power",
@@ -80,6 +81,9 @@ pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     }
     if want("notify") {
         plan.notify();
+    }
+    if want("desktop") {
+        plan.desktop();
     }
     // Значки — до перезапуска службы: тему она читает при запуске.
     if want("icons") {
@@ -357,6 +361,35 @@ impl Plan<'_> {
         self.later(&["systemctl", "--user", "start", NOTIFYD_UNIT]);
     }
 
+    /// Рабочий стол: свой (обои и меню рисует служба) или xfdesktop. Как с
+    /// панелью: строку xfdesktop в списке сеанса меняем на пустую команду —
+    /// иначе он запустится при входе и закроет наш стол.
+    fn desktop(&mut self) {
+        if self.config.desktop {
+            println!("▶ Рабочий стол (свой, shell)");
+            if let Some(i) = session_slot(&["xfdesktop"]) {
+                xset_array(
+                    "xfce4-session",
+                    &format!("{SESSION}/Client{i}_Command"),
+                    "string",
+                    DESKTOP_OFF,
+                );
+            }
+            // --quit, а не kill: убитый xfdesktop сеанс Xfce запустил бы снова.
+            if running("xfdesktop") {
+                run(&["xfdesktop", "--quit"]);
+            }
+            return;
+        }
+        println!("▶ Рабочий стол — xfdesktop");
+        if let Some(i) = session_slot(DESKTOP_OFF) {
+            xreset("xfce4-session", &format!("{SESSION}/Client{i}_Command"));
+        }
+        if !running("xfdesktop") {
+            self.later(&["xfdesktop"]);
+        }
+    }
+
     /// Автозапуск службы и перезапуск (она читает настройки при запуске);
     /// если shell ничего не делает — остановить.
     fn service(&mut self) {
@@ -601,6 +634,28 @@ fn power() {
             SLEEP_NEVER,
         );
     }
+}
+
+/// Мониторы в пикселях: (x, y, ширина, высота) из `xrandr --listmonitors`
+/// (строки вида `0: +*eDP-1 2560/344x1440/194+0+0  eDP-1`). Пусто — xrandr
+/// не ответил.
+pub fn monitor_rects() -> Vec<(i32, i32, u32, u32)> {
+    parse_monitors(&crate::sys::output_any(&["xrandr", "--listmonitors"]))
+}
+
+fn parse_monitors(text: &str) -> Vec<(i32, i32, u32, u32)> {
+    text.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let geo = l.split_whitespace().nth(2)?;
+            let (w, rest) = geo.split_once('x')?;
+            let w: u32 = w.split('/').next()?.parse().ok()?;
+            let (h, pos) = rest.split_once('+')?;
+            let h: u32 = h.split('/').next()?.parse().ok()?;
+            let (x, y) = pos.split_once('+')?;
+            Some((x.parse().ok()?, y.parse().ok()?, w, h))
+        })
+        .collect()
 }
 
 /// Файл обоев: свои (`space`, `waves`, `aurora`) рисуются под экран `w`×`h`
@@ -967,5 +1022,25 @@ fn tray_apps(paths: &Paths) {
         kill("nm-applet");
         std::thread::sleep(std::time::Duration::from_millis(500));
         spawn(&["nm-applet", "--indicator"]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitors_from_xrandr() {
+        let text = "Monitors: 2\n 0: +*eDP-1 2560/344x1440/194+0+0  eDP-1\n \
+                    1: +HDMI-1 1920/530x1080/300+2560+0  HDMI-1\n";
+        assert_eq!(
+            parse_monitors(text),
+            [(0, 0, 2560, 1440), (2560, 0, 1920, 1080)]
+        );
+        assert_eq!(
+            parse_monitors("Monitors: 1\n 0: +Virtual-1 1104/292x846/224+0+0  Virtual-1\n"),
+            [(0, 0, 1104, 846)]
+        );
+        assert!(parse_monitors("").is_empty());
     }
 }

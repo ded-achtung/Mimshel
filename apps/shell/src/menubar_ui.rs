@@ -766,9 +766,7 @@ impl MenubarUi {
             return;
         };
         // Рабочий стол без меню.
-        if d.window_info(w)
-            .is_some_and(|i| i.class.eq_ignore_ascii_case("xfdesktop"))
-        {
+        if d.window_info(w).is_some_and(|i| is_desktop(&i)) {
             return;
         }
         let text = |name: &str| d.window_text(w, name);
@@ -942,7 +940,7 @@ impl MenubarUi {
         let Some(info) = d.active_window().and_then(|w| d.window_info(w)) else {
             return desktop();
         };
-        if info.class.eq_ignore_ascii_case("xfdesktop") {
+        if is_desktop(&info) {
             return desktop();
         }
         let hint = info
@@ -1076,6 +1074,12 @@ fn apple_menu_file() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .unwrap_or_default();
     data.join("shell/apple.menu")
+}
+
+/// Окно рабочего стола: свой (класс `desktop.Shell`) или xfdesktop.
+fn is_desktop(info: &shell_core::windows::WindowInfo) -> bool {
+    info.class.eq_ignore_ascii_case("xfdesktop")
+        || (info.class == "Shell" && info.instance == "desktop")
 }
 
 /// Запустить команду пункта меню отдельно от службы.

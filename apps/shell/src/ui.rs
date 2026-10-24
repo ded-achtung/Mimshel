@@ -22,6 +22,7 @@ use shell_render::Canvas;
 use shell_text::Fonts;
 use shell_x11::{Display, Event, Key, KeyPress, Popup};
 
+use crate::desktop_ui::DesktopUi;
 use crate::dock_ui::DockUi;
 use crate::menubar_ui::MenubarUi;
 use crate::notify_ui::NotifyUi;
@@ -92,6 +93,8 @@ pub(crate) enum Msg {
     ToggleCenter,
     /// Полный набор шрифтов загружен (вместо быстрого, с одним семейством).
     Fonts(Box<Fonts>),
+    /// Обои для рабочего стола нарисованы (во весь экран, в пикселях).
+    Wallpaper(Box<Pixmap>),
 }
 
 /// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
@@ -237,6 +240,14 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         });
     }
 
+    // Рабочий стол — первым: обои рисуются в фоне, пока грузится остальное.
+    let desktop = if daemon && config.desktop {
+        Some(DesktopUi::new(&display, &config, tx.clone())?)
+    } else {
+        None
+    };
+    step("рабочий стол");
+
     let settings = app_settings(&config);
     let all_apps = shell_apps::load_all(&settings);
     let apps = visible(&all_apps);
@@ -300,6 +311,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         shown: None,
         terminal: config.terminal,
         dock,
+        desktop,
         menubar,
         notify,
     };
@@ -368,6 +380,7 @@ struct Ui<'a> {
     shown: Option<Panel>,
     terminal: Vec<String>,
     dock: Option<DockUi>,
+    desktop: Option<DesktopUi>,
     menubar: Option<MenubarUi>,
     notify: Option<NotifyUi>,
 }
@@ -376,6 +389,9 @@ impl Ui<'_> {
     fn toggle(&mut self, panel: Panel) -> Result<()> {
         if let Some(dock) = &mut self.dock {
             dock.close_popups(self.display)?;
+        }
+        if let Some(desktop) = &mut self.desktop {
+            desktop.close_popups(self.display)?;
         }
         if let Some(menubar) = &mut self.menubar {
             menubar.close_popup(self.display)?;
@@ -516,6 +532,9 @@ impl Ui<'_> {
         if let Some(dock) = &mut self.dock {
             dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
+        if let Some(desktop) = &mut self.desktop {
+            desktop.flush(self.display, &mut self.fonts)?;
+        }
         Ok(())
     }
 
@@ -548,6 +567,10 @@ impl Ui<'_> {
                 self.fonts = *fonts;
                 Ok(())
             }
+            Msg::Wallpaper(image) => match &self.desktop {
+                Some(desktop) => desktop.set_wallpaper(self.display, &image),
+                None => Ok(()),
+            },
             Msg::X(ev) => {
                 if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
                     eprintln!("X: {ev:?}");
@@ -644,6 +667,12 @@ impl Ui<'_> {
             && dock.wants(self.display, &ev)
         {
             dock.event(self.display, &mut self.fonts, ev)?;
+            handled = true;
+        }
+        if let Some(desktop) = &mut self.desktop
+            && desktop.wants(self.display, &ev)
+        {
+            desktop.event(self.display, &mut self.fonts, ev)?;
             handled = true;
         }
         if handled {

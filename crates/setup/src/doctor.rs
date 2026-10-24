@@ -8,7 +8,7 @@ use std::path::Path;
 use shell_core::config::Config;
 
 use crate::paths::{APPLE_MENU, APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
-use crate::sys::{OLD_PANEL_OFF, PANEL_OFF};
+use crate::sys::{DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF};
 use crate::sys::{
     bus_owner, home, in_desktop_session, keyboard_ok, output, output_any, parent, pgrep, read,
     running, succeeds, xget, xget_list,
@@ -313,6 +313,27 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "xfce4-notifyd не замаскирован",
             !masked,
             "shell apply notify",
+        );
+    }
+    if cfg.desktop {
+        add(
+            "desktop",
+            "рабочий стол рисует shell: xfdesktop не запущен",
+            !running("xfdesktop"),
+            "shell apply desktop",
+        );
+        add(
+            "desktop",
+            "xfdesktop не запускается при входе",
+            panel_session_slot(DESKTOP_OFF) && !panel_session_slot(&["xfdesktop"]),
+            "shell apply desktop",
+        );
+    } else {
+        add(
+            "desktop",
+            "рабочий стол — xfdesktop запущен",
+            running("xfdesktop"),
+            "shell apply desktop",
         );
     }
     add(

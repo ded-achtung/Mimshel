@@ -2,6 +2,7 @@
 //! и проверочные команды.
 
 mod config_store;
+mod desktop_ui;
 mod dock_ui;
 mod guard;
 mod ipc;
