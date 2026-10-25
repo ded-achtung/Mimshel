@@ -263,9 +263,11 @@ impl Config {
             get(section, key).and_then(|v| v.as_array()).map(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str())
+                    // Запись дока — как написана: «org.telegram.desktop» — это уже
+                    // имя без «.desktop», второй раз его не отрезать.
                     .map(|v| {
                         if section == "dock" {
-                            dock_entry(v.trim()).to_string()
+                            v.trim().to_string()
                         } else {
                             v.to_string()
                         }
@@ -846,7 +848,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
         "dock.apps" => Ok(Value::Array(
             input
                 .split(',')
-                .map(|a| dock_entry(a.trim()))
+                .map(str::trim)
                 .filter(|a| !a.is_empty())
                 .collect(),
         )),
@@ -1080,12 +1082,26 @@ mod tests {
         };
         let text = set(&text, "parts.dock", "shell");
         let text = set(&text, "dock.zoom", "false");
-        let text = set(&text, "dock.apps", "thunar, firefox.desktop");
+        let text = set(
+            &text,
+            "dock.apps",
+            "thunar, firefox.desktop, org.telegram.desktop",
+        );
         let text = set(&text, "apps.terminal", "kitty -e");
         let c = Config::from_toml(&text);
         assert!(c.dock && !c.menubar);
         assert_eq!(c.dock_zoom, None);
-        assert_eq!(c.dock_apps, ["thunar", "firefox"]);
+        // Как написаны: «org.telegram.desktop» — имя ярлыка
+        // org.telegram.desktop.desktop, а не «org.telegram» с расширением.
+        assert_eq!(
+            c.dock_apps,
+            ["thunar", "firefox.desktop", "org.telegram.desktop"]
+        );
+        assert!(dock_entry_matches(&c.dock_apps[1], "firefox.desktop"));
+        assert!(dock_entry_matches(
+            &c.dock_apps[2],
+            "org.telegram.desktop.desktop"
+        ));
         assert_eq!(c.terminal, ["kitty", "-e"]);
         assert!(
             text.contains("# Увеличение под мышью"),
