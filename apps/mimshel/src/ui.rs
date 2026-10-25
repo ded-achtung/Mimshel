@@ -86,6 +86,10 @@ pub(crate) enum Msg {
     Dnd(bool),
     /// Значки трея или меню значка.
     Tray(mimshel_dbus::TrayUpdate),
+    /// Сеть для окошка сети (Wi-Fi, провод, сети рядом).
+    Net(mimshel_menubar::NetState),
+    /// Подключение к сети Wi-Fi закончилось: имя и ошибка, если была.
+    NetDone(String, Option<String>),
     /// Bluetooth: адаптер и устройства (`None` — адаптера или службы нет).
     Bluetooth(Option<mimshel_dbus::bluetooth::BtState>),
     /// Глобальное меню активного окна.
@@ -122,6 +126,7 @@ impl Msg {
             Msg::Sound(_) | Msg::Control(..) | Msg::Battery(_) | Msg::Dnd(_) => "состояние".into(),
             Msg::Tray(_) => "трей".into(),
             Msg::Bluetooth(_) => "bluetooth".into(),
+            Msg::Net(_) | Msg::NetDone(..) => "сеть".into(),
             Msg::AppMenu(_) => "меню программы".into(),
             Msg::Notify(_) | Msg::ToggleCenter => "уведомления".into(),
             Msg::Fonts(_) => "шрифты".into(),
@@ -771,6 +776,18 @@ impl Ui<'_> {
                 }
                 None => Ok(()),
             },
+            Msg::Net(state) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_net_state(state);
+                }
+                Ok(())
+            }
+            Msg::NetDone(ssid, error) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.net_done(&ssid, error);
+                }
+                Ok(())
+            }
             Msg::Bluetooth(state) => {
                 if let Some(menubar) = &mut self.menubar {
                     menubar.set_bluetooth_state(state);

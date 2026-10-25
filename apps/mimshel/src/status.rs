@@ -17,6 +17,7 @@ use std::time::Duration;
 use mimshel_menubar::status::{
     Battery, Sound, SysBattery, parse_app_sounds, parse_default_state, parse_sinks, sys_battery,
 };
+use mimshel_menubar::{NetState, parse_known, parse_wifi_list, parse_wired};
 
 use crate::ui::Msg;
 
@@ -454,6 +455,151 @@ pub fn watch_dnd(tx: Sender<Msg>) {
         |l| l.contains("do-not-disturb"),
         read_dnd,
         Msg::Dnd,
+        tx,
+    );
+}
+
+/// Сеть для окошка сети: Wi-Fi, проводное подключение, сети рядом.
+/// `rescan` — попросить NetworkManager поискать сети заново (секунды).
+pub fn read_net_state(rescan: bool) -> NetState {
+    let devices =
+        output("nmcli", &["-t", "-f", "TYPE,STATE,CONNECTION", "device"]).unwrap_or_default();
+    let radio = output("nmcli", &["-t", "-f", "WIFI-HW,WIFI", "radio"]).unwrap_or_default();
+    let mut r = radio.trim().split(':');
+    let wifi = match (r.next(), r.next()) {
+        (Some("enabled"), Some(state)) => Some(state == "enabled"),
+        _ => None,
+    };
+    let networks = if wifi == Some(true) {
+        let known = output("nmcli", &["-t", "-f", "NAME,TYPE", "connection", "show"])
+            .map(|t| parse_known(&t))
+            .unwrap_or_default();
+        let list = bounded_command("nmcli", "15s")
+            .args([
+                "-t",
+                "-f",
+                "IN-USE,SIGNAL,SECURITY,SSID",
+                "device",
+                "wifi",
+                "list",
+                "--rescan",
+                if rescan { "yes" } else { "no" },
+            ])
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        parse_wifi_list(&list, &known)
+    } else {
+        Vec::new()
+    };
+    NetState {
+        wifi,
+        wired: parse_wired(&devices),
+        networks,
+        ..NetState::default()
+    }
+}
+
+fn read_net_quiet() -> NetState {
+    read_net_state(false)
+}
+
+/// Что сделать с сетью.
+pub enum NetCmd {
+    /// Поискать сети заново (окошко открыли).
+    Scan,
+    Wifi(bool),
+    /// Подключиться к сети: имя, есть ли сохранённое подключение.
+    Connect(String, bool),
+}
+
+/// Поток, который говорит с NetworkManager (`nmcli`). Подключение ждёт ответа
+/// сети и, для новой сети с паролем, человека (окно пароля nm-applet) — идёт
+/// в своём потоке, итог — `Msg::NetDone`.
+pub fn network_worker(tx: Sender<Msg>) -> Sender<NetCmd> {
+    let (cmd_tx, rx) = mpsc::channel::<NetCmd>();
+    std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            let state = match cmd {
+                NetCmd::Scan => {
+                    // Сразу — что известно, с пометкой «ищем»; потом — свежий список.
+                    let mut now = read_net_state(false);
+                    now.scanning = true;
+                    if tx.send(Msg::Net(now)).is_err() {
+                        return;
+                    }
+                    read_net_state(true)
+                }
+                NetCmd::Wifi(on) => {
+                    run("nmcli", &["radio", "wifi", if on { "on" } else { "off" }]);
+                    // Включённому Wi-Fi нужна пара секунд, чтобы увидеть сети.
+                    if on {
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                    read_net_state(on)
+                }
+                NetCmd::Connect(ssid, known) => {
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        let err = connect_wifi(&ssid, known).err();
+                        let _ = tx.send(Msg::NetDone(ssid, err));
+                        let _ = tx.send(Msg::Net(read_net_state(false)));
+                    });
+                    continue;
+                }
+            };
+            if tx.send(Msg::Net(state)).is_err() {
+                return;
+            }
+        }
+    });
+    cmd_tx
+}
+
+/// Подключиться: к известной сети — её подключением, к новой — по имени (пароль
+/// NetworkManager спросит у nm-applet). Ошибка — словами для окошка.
+fn connect_wifi(ssid: &str, known: bool) -> Result<(), String> {
+    let mut cmd = bounded_command("nmcli", "120s");
+    if known {
+        cmd.args(["connection", "up", "id", ssid]);
+    } else {
+        cmd.args(["device", "wifi", "connect", ssid]);
+    }
+    let out = cmd
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("Не удалось подключиться: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(&out.stderr);
+    Err(
+        if text.contains("Secrets were required") || text.contains("secrets") {
+            "Пароль не введён или неверный".to_string()
+        } else if text.contains("No network with SSID") {
+            "Сеть больше не видна".to_string()
+        } else {
+            let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            format!(
+                "Не удалось подключиться: {}",
+                line.trim_start_matches("Error: ").trim()
+            )
+        },
+    )
+}
+
+/// Сеть меняется (подключились, отключились, пропал Wi-Fi) — `nmcli monitor`.
+pub fn watch_network(tx: Sender<Msg>) {
+    watch(
+        "nmcli",
+        &["monitor"],
+        |_| true,
+        read_net_quiet,
+        Msg::Net,
         tx,
     );
 }

@@ -53,6 +53,8 @@ pub enum ControlAction {
     NetworkSettings,
     /// Открыть список устройств Bluetooth (щелчок по названию плитки).
     OpenBluetooth,
+    /// Открыть окошко сети (щелчок по названию плитки «Сеть»).
+    OpenNetwork,
 }
 
 pub struct ControlPanel {
@@ -176,12 +178,14 @@ impl ControlPanel {
         let tile = self.tile_at(x, y);
         let s = &mut self.state;
         match tile {
+            // Как у Bluetooth: кружок — включить или выключить Wi-Fi, название
+            // (и плитка без Wi-Fi) — окошко сети.
             Some(Tile::Network) => match s.network.wifi {
-                Some(on) => {
+                Some(on) if x < Self::circle_right() => {
                     s.network.wifi = Some(!on);
                     ControlAction::SetWifi(!on)
                 }
-                None => ControlAction::NetworkSettings,
+                _ => ControlAction::OpenNetwork,
             },
             // Кружок со значком — включить или выключить, название — список
             // устройств (как в macOS: стрелка у плитки).
@@ -386,11 +390,9 @@ mod tests {
     #[test]
     fn tiles_and_actions() {
         let mut p = ControlPanel::new(state());
-        // Проводная сеть — щелчок открывает параметры, Bluetooth без адаптера — ничего.
-        assert_eq!(
-            p.press(40.0, PAD + 6.0 + 20.0),
-            ControlAction::NetworkSettings
-        );
+        // Проводная сеть (Wi-Fi нет) — щелчок открывает окошко сети, Bluetooth
+        // без адаптера — ничего.
+        assert_eq!(p.press(40.0, PAD + 6.0 + 20.0), ControlAction::OpenNetwork);
         assert_eq!(
             p.press(40.0, PAD + 6.0 + ROW + 20.0),
             ControlAction::Nothing
@@ -414,6 +416,11 @@ mod tests {
         assert_eq!(
             p.press(40.0, PAD + 6.0 + 20.0),
             ControlAction::SetWifi(false)
+        );
+        assert_eq!(
+            p.press(LEFT_W - 20.0, PAD + 6.0 + 20.0),
+            ControlAction::OpenNetwork,
+            "по названию плитки — окошко сети"
         );
         assert_eq!(
             p.press(40.0, PAD + 6.0 + ROW + 20.0),

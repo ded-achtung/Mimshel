@@ -8,6 +8,7 @@ mod apple;
 mod bluetooth;
 mod calendar;
 mod control;
+mod network;
 mod sound;
 pub mod status;
 
@@ -15,6 +16,9 @@ pub use apple::{AppleItem, apple_menu, parse_menu};
 pub use bluetooth::{BluetoothAction, BluetoothPanel};
 pub use calendar::{CalendarAction, CalendarPanel, Date, Names};
 pub use control::{ControlAction, ControlPanel, ControlState, Network, Tile};
+pub use network::{
+    NetState, NetworkAction, NetworkPanel, WifiNet, parse_known, parse_wifi_list, parse_wired,
+};
 pub use sound::{Row, SoundAction, SoundPanel};
 
 use mimshel_icons::Icons;

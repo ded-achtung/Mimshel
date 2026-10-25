@@ -21,14 +21,15 @@ use mimshel_icons::Icons;
 use mimshel_menubar::status::{Battery, Sound};
 use mimshel_menubar::{
     AppleItem, Bar, BluetoothAction, BluetoothPanel, CalendarAction, CalendarPanel, ControlAction,
-    ControlPanel, ControlState, Part, SoundAction, SoundPanel, apple_menu,
+    ControlPanel, ControlState, NetState, NetworkAction, NetworkPanel, Part, SoundAction,
+    SoundPanel, apple_menu,
 };
 use mimshel_text::Fonts;
 use mimshel_widgets::{Menu, MenuEntry, MenuResult};
 use mimshel_x11::Key;
 use mimshel_x11::{Display, DockWindow, Event, Popup, Property};
 
-use crate::status::{self, Audio, ControlRequest};
+use crate::status::{self, Audio, ControlRequest, NetCmd};
 use crate::ui::{Msg, Result};
 
 /// Что делает пункт меню строки.
@@ -98,6 +99,10 @@ pub struct MenubarUi {
     bluetooth_panel: Option<BluetoothPanel>,
     bt: Option<Bluetooth>,
     bt_state: Option<BtState>,
+    /// Окошко сети, связь с NetworkManager и последнее известное состояние.
+    network_panel: Option<NetworkPanel>,
+    net: Sender<NetCmd>,
+    net_state: Option<NetState>,
     /// Названия месяцев и дней на языке системы (читаются один раз).
     calendar_names: Option<mimshel_menubar::Names>,
     popup: Popup,
@@ -140,6 +145,9 @@ impl MenubarUi {
             bluetooth_panel: None,
             bt: None,
             bt_state: None,
+            network_panel: None,
+            net: status::network_worker(tx.clone()),
+            net_state: None,
             calendar_names: None,
             popup: d.create_popup("menubar-menu")?,
             popup_x: 0,
@@ -157,6 +165,7 @@ impl MenubarUi {
         status::watch_sound(tx.clone());
         status::watch_battery(tx.clone());
         status::watch_dnd(tx.clone());
+        status::watch_network(tx.clone());
         let tray_tx = tx.clone();
         let bt_tx = tx.clone();
         let menu_tx = tx;
@@ -206,6 +215,39 @@ impl MenubarUi {
         if !other && self.bar.open != want {
             self.bar.open = want;
             self.dirty = true;
+        }
+    }
+
+    /// Новое состояние сети — в открытое окошко сети. Кто сейчас подключается
+    /// и последнюю ошибку знает окошко, а не NetworkManager.
+    pub fn set_net_state(&mut self, state: NetState) {
+        if let Some(panel) = &mut self.network_panel {
+            let (busy, error) = (panel.state.busy.take(), panel.state.error.take());
+            // Пустой список посреди поиска не показываем — ждём свежий.
+            let networks = if state.networks.is_empty() && state.scanning {
+                std::mem::take(&mut panel.state.networks)
+            } else {
+                state.networks.clone()
+            };
+            panel.state = NetState {
+                busy,
+                error,
+                networks,
+                ..state.clone()
+            };
+            self.popup_dirty = true;
+        }
+        self.net_state = Some(state);
+    }
+
+    /// Подключение к сети `ssid` закончилось.
+    pub fn net_done(&mut self, ssid: &str, error: Option<String>) {
+        if let Some(panel) = &mut self.network_panel {
+            if panel.state.busy.as_deref() == Some(ssid) {
+                panel.state.busy = None;
+            }
+            panel.state.error = error;
+            self.popup_dirty = true;
         }
     }
 
@@ -319,6 +361,7 @@ impl MenubarUi {
             || self.control_panel.is_some()
             || self.calendar.is_some()
             || self.bluetooth_panel.is_some()
+            || self.network_panel.is_some()
     }
 
     /// Окно строки меню (сама полоса или её всплывающее окно).
@@ -370,6 +413,10 @@ impl MenubarUi {
                     let action = panel.motion(x, y);
                     self.bluetooth_action(d, action)?;
                 }
+                if let Some(panel) = &mut self.network_panel {
+                    let action = panel.motion(x, y);
+                    self.network_action(d, action)?;
+                }
             }
             Event::Button { window, x, y, .. } if window == popup => {
                 let (x, y) = (f32::from(x), f32::from(y));
@@ -388,6 +435,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.bluetooth_panel {
                     let action = panel.press(x, y);
                     self.bluetooth_action(d, action)?;
+                } else if let Some(panel) = &mut self.network_panel {
+                    let action = panel.press(x, y);
+                    self.network_action(d, action)?;
                 }
             }
             Event::Release { window, .. } if window == popup => {
@@ -437,6 +487,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.bluetooth_panel {
                     let action = panel.key(k.key);
                     self.bluetooth_action(d, action)?;
+                } else if let Some(panel) = &mut self.network_panel {
+                    let action = panel.key(k.key);
+                    self.network_action(d, action)?;
                 }
             }
             Event::Expose { window } if window == popup => self.popup_dirty = true,
@@ -509,6 +562,12 @@ impl MenubarUi {
                             && self.tray_items.get(i).is_some_and(is_bluetooth_tray) =>
                     {
                         self.open_bluetooth(d, Part::Tray(i), px)?
+                    }
+                    // Значок сети (nm-applet) — своё окошко сети.
+                    Some((Part::Tray(i), px))
+                        if self.tray_items.get(i).is_some_and(is_network_tray) =>
+                    {
+                        self.open_network(d, Part::Tray(i), px)?
                     }
                     Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
                     Some((Part::Menu(i), px)) => {
@@ -792,6 +851,11 @@ impl MenubarUi {
                 self.change_volume(d, v)?;
                 self.popup_dirty = true;
             }
+            ControlAction::OpenNetwork => {
+                let x = f32::from(self.popup_x);
+                self.close_popup(d)?;
+                self.open_network(d, Part::Control, x)?;
+            }
             ControlAction::OpenBluetooth => {
                 // Окошко устройств — на месте Пункта управления.
                 let x = f32::from(self.popup_x);
@@ -799,6 +863,39 @@ impl MenubarUi {
                 self.open_bluetooth(d, Part::Control, x)?;
             }
             ControlAction::NetworkSettings => {
+                self.close_popup(d)?;
+                run(&["nm-connection-editor".to_string()]);
+            }
+        }
+        Ok(())
+    }
+
+    /// Окошко сети под частью строки `part` (левый край — `x`). Сразу — что
+    /// известно, NetworkManager тем временем ищет сети заново.
+    fn open_network(&mut self, d: &Display, part: Part, x: f32) -> Result<()> {
+        let mut state = self.net_state.clone().unwrap_or_default();
+        state.scanning = true;
+        let _ = self.net.send(NetCmd::Scan);
+        let panel = NetworkPanel::new(state);
+        let size = panel.size();
+        self.network_panel = Some(panel);
+        self.show_popup(d, part, x, size)
+    }
+
+    fn network_action(&mut self, d: &Display, action: NetworkAction) -> Result<()> {
+        match action {
+            NetworkAction::Nothing => {}
+            NetworkAction::Redraw => self.popup_dirty = true,
+            NetworkAction::Close => self.close_popup(d)?,
+            NetworkAction::Wifi(on) => {
+                let _ = self.net.send(NetCmd::Wifi(on));
+                self.popup_dirty = true;
+            }
+            NetworkAction::Connect(ssid, known) => {
+                let _ = self.net.send(NetCmd::Connect(ssid, known));
+                self.popup_dirty = true;
+            }
+            NetworkAction::Settings => {
                 self.close_popup(d)?;
                 run(&["nm-connection-editor".to_string()]);
             }
@@ -1052,6 +1149,7 @@ impl MenubarUi {
             | self.control_panel.take().is_some()
             | self.calendar.take().is_some()
             | self.bluetooth_panel.take().is_some()
+            | self.network_panel.take().is_some()
         {
             self.popup.hide(d)?;
             self.bar.open = None;
@@ -1153,6 +1251,16 @@ impl MenubarUi {
                 )?;
                 self.popup.present(d, &panel.render(fonts, icons))?;
             } else if let Some(panel) = &self.calendar {
+                self.popup.present(d, &panel.render(fonts))?;
+            } else if let Some(panel) = &self.network_panel {
+                let (w, h) = panel.size();
+                self.popup.set_geometry(
+                    d,
+                    self.popup_x,
+                    self.bar.height as i16,
+                    w as u16,
+                    h as u16,
+                )?;
                 self.popup.present(d, &panel.render(fonts))?;
             } else if let Some(panel) = &self.bluetooth_panel {
                 // Список растёт по мере поиска — окно под размер.
@@ -1391,4 +1499,9 @@ fn watch_clock(format: String, tx: Sender<Msg>) {
 /// Значок Bluetooth от blueman в трее (`Id = blueman`, путь `/org/blueman/sni`).
 fn is_bluetooth_tray(item: &TrayItem) -> bool {
     item.key.ends_with("/org/blueman/sni") || item.title == "blueman"
+}
+
+/// Значок сети от nm-applet в трее (`--indicator`: путь `…/nm_applet`).
+fn is_network_tray(item: &TrayItem) -> bool {
+    item.key.ends_with("/nm_applet")
 }
