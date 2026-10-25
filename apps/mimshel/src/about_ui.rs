@@ -128,7 +128,10 @@ impl AboutUi {
         };
         let size = win.size(d).unwrap_or((W, height(info)));
         let frame = render(info, size, fonts, icons);
-        win.present(d, &frame)
+        win.present(d, &frame)?;
+        // Вывод — только запрос в очереди: отправить сейчас, а не со
+        // следующим чужим запросом (окно стояло бы пустым до движения мыши).
+        d.sync()
     }
 }
 
