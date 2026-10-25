@@ -242,6 +242,15 @@ impl MenubarUi {
         {
             new.volume = old.volume;
             new.muted = old.muted;
+            // Громкости программ — как стоят ползунки в окошке.
+            if let Some(panel) = &self.sound_panel {
+                for app in &mut new.apps {
+                    if let Some(shown) = panel.sound.apps.iter().find(|a| a.name == app.name) {
+                        app.volume = shown.volume;
+                        app.muted = shown.muted;
+                    }
+                }
+            }
         }
         self.bar.volume = sound.as_ref().map(|s| s.icon().to_string());
         // Пока тащат ползунок, он главнее: ответ звуковой системы отстаёт.
@@ -563,6 +572,15 @@ impl MenubarUi {
             SoundAction::SetVolume(v) => {
                 self.change_volume(d, v)?;
                 self.popup_dirty = true;
+            }
+            SoundAction::SetAppVolume(i, v) => {
+                if let Some(panel) = &self.sound_panel
+                    && let Some(app) = panel.sound.apps.get(i)
+                {
+                    let _ = self.audio.send(Audio::AppVolume(app.inputs.clone(), v));
+                    self.volume_changed = Some(Instant::now());
+                    self.popup_dirty = true;
+                }
             }
             SoundAction::SetSink(i) => {
                 if let Some(panel) = &mut self.sound_panel

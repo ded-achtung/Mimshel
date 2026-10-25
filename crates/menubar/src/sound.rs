@@ -1,5 +1,6 @@
 //! Окошко громкости под значком динамика, как в macOS: «Звук» и проценты,
-//! ползунок (щелчок или перетаскивание), устройства вывода (галочка — у
+//! ползунок (щелчок или перетаскивание), громкость каждой программы, которая
+//! сейчас выводит звук (как микшер Windows), устройства вывода (галочка — у
 //! нынешнего) и «Настройки звука…». Здесь состояние, мышь и рисование;
 //! менять громкость — дело службы.
 
@@ -15,6 +16,8 @@ use crate::status::Sound;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     Slider,
+    /// Ползунок программы с этим номером в `apps`.
+    App(usize),
     Sink(usize),
     Settings,
 }
@@ -26,6 +29,8 @@ pub enum SoundAction {
     Redraw,
     Close,
     SetVolume(u32),
+    /// Громкость программы с этим номером в `apps`.
+    SetAppVolume(usize, u32),
     /// Сделать устройство с этим номером в `sinks` устройством по умолчанию.
     SetSink(usize),
     Settings,
@@ -34,8 +39,8 @@ pub enum SoundAction {
 pub struct SoundPanel {
     pub sound: Sound,
     pub hover: Option<Row>,
-    /// Тащат ползунок.
-    dragging: bool,
+    /// Какой ползунок тащат: общий (`Row::Slider`) или программы.
+    dragging: Option<Row>,
 }
 
 const WIDTH: f32 = 280.0;
@@ -44,6 +49,11 @@ const TITLE: f32 = 26.0;
 const SLIDER: f32 = 30.0;
 const SEPARATOR: f32 = 11.0;
 const ROW: f32 = 22.0;
+/// Программа: строка с названием и процентами и под ней ползунок.
+const APP_SLIDER: f32 = 22.0;
+const APP_H: f32 = ROW + APP_SLIDER;
+/// Больше программ не показываем — окошко не должно уходить за экран.
+const MAX_APPS: usize = 8;
 /// Слева у строк — место под галочку.
 const LEFT: f32 = 26.0;
 const INSET: f32 = 5.0;
@@ -78,7 +88,7 @@ impl SoundPanel {
         SoundPanel {
             sound,
             hover: None,
-            dragging: false,
+            dragging: None,
         }
     }
 
@@ -86,17 +96,40 @@ impl SoundPanel {
         PAD + TITLE
     }
 
-    /// Верх строки «Выход» (подпись над устройствами).
-    fn caption_top() -> f32 {
+    /// Сколько программ показано.
+    fn app_count(&self) -> usize {
+        self.sound.apps.len().min(MAX_APPS)
+    }
+
+    /// Верх строки «Программы» (подпись над программами).
+    fn apps_caption_top() -> f32 {
         Self::slider_top() + SLIDER + SEPARATOR
     }
 
-    fn sink_top(i: usize) -> f32 {
-        Self::caption_top() + ROW + i as f32 * ROW
+    fn app_top(i: usize) -> f32 {
+        Self::apps_caption_top() + ROW + i as f32 * APP_H
+    }
+
+    /// Середина ползунка программы `i` по высоте.
+    fn app_slider_cy(i: usize) -> f32 {
+        Self::app_top(i) + ROW + APP_SLIDER / 2.0 - 2.0
+    }
+
+    /// Верх строки «Выход» (подпись над устройствами). Программ нет — сразу
+    /// под общим ползунком.
+    fn caption_top(&self) -> f32 {
+        match self.app_count() {
+            0 => Self::slider_top() + SLIDER + SEPARATOR,
+            n => Self::app_top(n) + SEPARATOR,
+        }
+    }
+
+    fn sink_top(&self, i: usize) -> f32 {
+        self.caption_top() + ROW + i as f32 * ROW
     }
 
     fn settings_top(&self) -> f32 {
-        Self::sink_top(self.sound.sinks.len()) + SEPARATOR
+        self.sink_top(self.sound.sinks.len()) + SEPARATOR
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -114,8 +147,13 @@ impl SoundPanel {
         if (top..top + SLIDER).contains(&y) {
             return Some(Row::Slider);
         }
+        if let Some(i) = (0..self.app_count())
+            .find(|&i| (Self::app_top(i)..Self::app_top(i) + APP_H).contains(&y))
+        {
+            return Some(Row::App(i));
+        }
         if let Some(i) = (0..self.sound.sinks.len())
-            .find(|&i| (Self::sink_top(i)..Self::sink_top(i) + ROW).contains(&y))
+            .find(|&i| (self.sink_top(i)..self.sink_top(i) + ROW).contains(&y))
         {
             return Some(Row::Sink(i));
         }
@@ -137,8 +175,12 @@ impl SoundPanel {
         }
         match self.row_at(x, y) {
             Some(Row::Slider) => {
-                self.dragging = true;
+                self.dragging = Some(Row::Slider);
                 self.set_volume(Self::volume_at(x))
+            }
+            Some(Row::App(i)) => {
+                self.dragging = Some(Row::App(i));
+                self.set_app_volume(i, Self::volume_at(x))
             }
             Some(Row::Sink(i)) => SoundAction::SetSink(i),
             Some(Row::Settings) => SoundAction::Settings,
@@ -147,10 +189,14 @@ impl SoundPanel {
     }
 
     pub fn motion(&mut self, x: f32, y: f32) -> SoundAction {
-        if self.dragging {
-            return self.set_volume(Self::volume_at(x));
+        match self.dragging {
+            Some(Row::App(i)) => return self.set_app_volume(i, Self::volume_at(x)),
+            Some(_) => return self.set_volume(Self::volume_at(x)),
+            None => {}
         }
-        let hover = self.row_at(x, y).filter(|r| *r != Row::Slider);
+        let hover = self
+            .row_at(x, y)
+            .filter(|r| !matches!(r, Row::Slider | Row::App(_)));
         if hover == self.hover {
             return SoundAction::Nothing;
         }
@@ -160,11 +206,11 @@ impl SoundPanel {
 
     /// Тащат ли сейчас ползунок.
     pub fn dragging(&self) -> bool {
-        self.dragging
+        self.dragging.is_some()
     }
 
     pub fn release(&mut self) {
-        self.dragging = false;
+        self.dragging = None;
     }
 
     pub fn key(&mut self, key: Key) -> SoundAction {
@@ -184,6 +230,19 @@ impl SoundPanel {
         self.sound.volume = v;
         self.sound.muted = false;
         SoundAction::SetVolume(v)
+    }
+
+    /// То же для программы `i`.
+    fn set_app_volume(&mut self, i: usize, v: u32) -> SoundAction {
+        let Some(app) = self.sound.apps.get_mut(i) else {
+            return SoundAction::Nothing;
+        };
+        if v == app.volume && !app.muted {
+            return SoundAction::Nothing;
+        }
+        app.volume = v;
+        app.muted = false;
+        SoundAction::SetAppVolume(i, v)
     }
 
     pub fn render(&self, fonts: &mut Fonts) -> Canvas {
@@ -222,26 +281,29 @@ impl SoundPanel {
         let pw = fonts.measure(&pct, &TEXT);
         fonts.draw(&mut pm, &pct, &TEXT, TRACK_X1 - pw, ty, None);
 
-        // Ползунок: дорожка, заполненная часть и кружок.
-        let cy = Self::slider_top() + SLIDER / 2.0;
-        fill(
-            &mut pm,
-            rounded(TRACK_X0, cy - 3.0, TRACK_X1 - TRACK_X0, 6.0, 3.0),
-            TRACK,
-        );
-        let v = if self.sound.muted {
-            0
-        } else {
-            self.sound.volume
+        // Ползунок: дорожка, заполненная часть и кружок (`knob` — его радиус).
+        let slider = |pm: &mut Canvas, cy: f32, v: u32, knob: f32| {
+            fill(
+                pm,
+                rounded(TRACK_X0, cy - 3.0, TRACK_X1 - TRACK_X0, 6.0, 3.0),
+                TRACK,
+            );
+            let kx = TRACK_X0 + (TRACK_X1 - TRACK_X0) * v as f32 / 100.0;
+            fill(
+                pm,
+                rounded(TRACK_X0, cy - 3.0, (kx - TRACK_X0).max(6.0), 6.0, 3.0),
+                FILL,
+            );
+            fill(pm, circle(kx, cy, knob + 1.0), [0, 0, 0, 0x40]);
+            fill(pm, circle(kx, cy, knob), FILL);
         };
-        let kx = TRACK_X0 + (TRACK_X1 - TRACK_X0) * v as f32 / 100.0;
-        fill(
+        let shown = |v: u32, muted: bool| if muted { 0 } else { v };
+        slider(
             &mut pm,
-            rounded(TRACK_X0, cy - 3.0, (kx - TRACK_X0).max(6.0), 6.0, 3.0),
-            FILL,
+            Self::slider_top() + SLIDER / 2.0,
+            shown(self.sound.volume, self.sound.muted),
+            8.0,
         );
-        fill(&mut pm, circle(kx, cy, 9.0), [0, 0, 0, 0x40]);
-        fill(&mut pm, circle(kx, cy, 8.0), FILL);
 
         let separator = |pm: &mut Canvas, y: f32| {
             if let Some(r) = Rect::from_xywh(INSET + 5.0, y.round(), wf - 2.0 * INSET - 10.0, 1.0) {
@@ -249,12 +311,57 @@ impl SoundPanel {
             }
         };
         separator(&mut pm, Self::slider_top() + SLIDER + SEPARATOR / 2.0);
+
+        // Программы: название и проценты, под ними — свой ползунок.
+        if self.app_count() > 0 {
+            fonts.draw(
+                &mut pm,
+                "Программы",
+                &DIM,
+                TRACK_X0,
+                line_y(Self::apps_caption_top(), &DIM),
+                None,
+            );
+            for (i, app) in self.sound.apps.iter().take(MAX_APPS).enumerate() {
+                let top = Self::app_top(i);
+                let pct = if app.muted {
+                    "выкл.".to_string()
+                } else {
+                    format!("{} %", app.volume)
+                };
+                let pw = fonts.measure(&pct, &TEXT);
+                fonts.draw(
+                    &mut pm,
+                    &pct,
+                    &TEXT,
+                    TRACK_X1 - pw,
+                    line_y(top, &TEXT),
+                    None,
+                );
+                fonts.draw(
+                    &mut pm,
+                    &app.name,
+                    &TEXT,
+                    TRACK_X0,
+                    line_y(top, &TEXT),
+                    Some(TRACK_X1 - pw - TRACK_X0 - 8.0),
+                );
+                slider(
+                    &mut pm,
+                    Self::app_slider_cy(i),
+                    shown(app.volume, app.muted),
+                    6.5,
+                );
+            }
+            separator(&mut pm, self.caption_top() - SEPARATOR / 2.0);
+        }
+
         fonts.draw(
             &mut pm,
             "Выход",
             &DIM,
             TRACK_X0,
-            line_y(Self::caption_top(), &DIM),
+            line_y(self.caption_top(), &DIM),
             None,
         );
 
@@ -283,7 +390,7 @@ impl SoundPanel {
             row(
                 &mut pm,
                 fonts,
-                Self::sink_top(i),
+                self.sink_top(i),
                 &sink.description,
                 self.hover == Some(Row::Sink(i)),
                 sink.name == self.sound.default,
@@ -329,7 +436,7 @@ fn check(pm: &mut Canvas, x: f32, y: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::status::Sink;
+    use crate::status::{AppSound, Sink};
 
     fn panel() -> SoundPanel {
         SoundPanel::new(Sound {
@@ -346,6 +453,7 @@ mod tests {
                 },
             ],
             default: "a".into(),
+            apps: vec![],
         })
     }
 
@@ -357,21 +465,53 @@ mod tests {
         assert_eq!(p.motion(TRACK_X1 + 50.0, cy), SoundAction::SetVolume(100));
         assert_eq!(p.motion(TRACK_X1, cy), SoundAction::Nothing, "уже 100");
         p.release();
-        assert_eq!(
-            p.motion(100.0, SoundPanel::sink_top(1) + 3.0),
-            SoundAction::Redraw
-        );
+        assert_eq!(p.motion(100.0, p.sink_top(1) + 3.0), SoundAction::Redraw);
         assert_eq!(p.hover, Some(Row::Sink(1)));
-        assert_eq!(
-            p.press(100.0, SoundPanel::sink_top(1) + 3.0),
-            SoundAction::SetSink(1)
-        );
+        assert_eq!(p.press(100.0, p.sink_top(1) + 3.0), SoundAction::SetSink(1));
         assert_eq!(
             p.press(100.0, p.settings_top() + 3.0),
             SoundAction::Settings
         );
         assert_eq!(p.press(100.0, -5.0), SoundAction::Close, "мимо окошка");
         assert_eq!(p.key(Key::Left), SoundAction::SetVolume(95));
+    }
+
+    #[test]
+    fn app_sliders() {
+        let mut p = panel();
+        let sinks_before = p.sink_top(0);
+        p.sound.apps = vec![
+            AppSound {
+                name: "Firefox".into(),
+                inputs: vec![89, 91],
+                volume: 100,
+                muted: false,
+            },
+            AppSound {
+                name: "mpv".into(),
+                inputs: vec![90],
+                volume: 50,
+                muted: true,
+            },
+        ];
+        // Программы встают между общим ползунком и устройствами.
+        assert!(p.sink_top(0) > sinks_before);
+        let cy = SoundPanel::app_slider_cy(1);
+        assert_eq!(p.row_at(100.0, cy), Some(Row::App(1)));
+        assert_eq!(p.press(TRACK_X0, cy), SoundAction::SetAppVolume(1, 0));
+        assert_eq!(
+            p.motion(TRACK_X1, cy + 40.0),
+            SoundAction::SetAppVolume(1, 100),
+            "тащат — ползунок свой, куда бы ни ушла мышь"
+        );
+        p.release();
+        assert_eq!(p.sound.apps[1].volume, 100);
+        assert!(!p.sound.apps[1].muted);
+        // Общий ползунок не тронут.
+        assert_eq!(p.sound.volume, 40);
+        let mut fonts = Fonts::new("Inter");
+        let pm = p.render(&mut fonts);
+        assert_eq!((pm.width(), pm.height()), p.size());
     }
 
     #[test]

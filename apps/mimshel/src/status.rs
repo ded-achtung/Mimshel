@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use mimshel_menubar::status::{
-    Battery, Sound, SysBattery, parse_default_state, parse_sinks, sys_battery,
+    Battery, Sound, SysBattery, parse_app_sounds, parse_default_state, parse_sinks, sys_battery,
 };
 
 use crate::ui::Msg;
@@ -61,11 +61,15 @@ pub fn read_sound() -> Option<Sound> {
         .trim()
         .to_string();
     let (volume, muted) = parse_default_state(&list, &default)?;
+    let apps = output("pactl", &["list", "sink-inputs"])
+        .map(|t| parse_app_sounds(&t))
+        .unwrap_or_default();
     Some(Sound {
         volume,
         muted,
         sinks: parse_sinks(&list),
         default,
+        apps,
     })
 }
 
@@ -248,6 +252,8 @@ pub fn control_worker(tx: Sender<Msg>) -> mpsc::SyncSender<ControlRequest> {
 pub enum Audio {
     Refresh,
     Volume(u32),
+    /// Громкость программы: все её потоки и проценты.
+    AppVolume(Vec<u32>, u32),
     ToggleMute,
     Sink(String),
 }
@@ -261,6 +267,7 @@ pub fn audio_worker(events: Sender<Msg>) -> Sender<Audio> {
             while let Ok(next) = rx.try_recv() {
                 match (&cmd, &next) {
                     (Audio::Volume(_), Audio::Volume(_)) => cmd = next,
+                    (Audio::AppVolume(a, _), Audio::AppVolume(b, _)) if a == b => cmd = next,
                     _ => {
                         apply(cmd, &events);
                         cmd = next;
@@ -284,6 +291,13 @@ fn apply(cmd: Audio, tx: &Sender<Msg>) {
                 "pactl",
                 &["set-sink-volume", "@DEFAULT_SINK@", &format!("{v}%")],
             );
+        }
+        Audio::AppVolume(inputs, v) => {
+            for i in inputs {
+                let i = i.to_string();
+                run("pactl", &["set-sink-input-mute", &i, "0"]);
+                run("pactl", &["set-sink-input-volume", &i, &format!("{v}%")]);
+            }
         }
         Audio::ToggleMute => run("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "toggle"]),
         Audio::Sink(name) => run("pactl", &["set-default-sink", &name]),
@@ -367,7 +381,8 @@ pub fn watch_sound(tx: Sender<Msg>) {
     watch(
         "pactl",
         &["subscribe"],
-        |l| l.contains(" sink ") || l.contains(" server "),
+        // `sink-input` — программа начала или кончила играть, сменила громкость.
+        |l| l.contains(" sink ") || l.contains(" sink-input ") || l.contains(" server "),
         read_sound,
         Msg::Sound,
         tx,

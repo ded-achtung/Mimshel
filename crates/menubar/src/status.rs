@@ -19,6 +19,21 @@ pub struct Sound {
     pub sinks: Vec<Sink>,
     /// Имя устройства по умолчанию.
     pub default: String,
+    /// Программы, которые сейчас выводят звук, — у каждой своя громкость.
+    pub apps: Vec<AppSound>,
+}
+
+/// Программа, которая выводит звук: все её потоки вместе (у Firefox — по
+/// потоку на вкладку), как в микшере громкости Windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppSound {
+    pub name: String,
+    /// Номера потоков — для `pactl set-sink-input-volume`.
+    pub inputs: Vec<u32>,
+    /// Громкость первого потока, проценты.
+    pub volume: u32,
+    /// Все потоки без звука.
+    pub muted: bool,
 }
 
 impl Sound {
@@ -67,6 +82,53 @@ pub fn parse_sinks(text: &str) -> Vec<Sink> {
 /// sinks` — всё нужное уже есть в этом выводе, отдельные запуски pactl на
 /// каждый вопрос не нужны. Если устройство `default` в выводе не нашлось
 /// (или имя не известно), берётся первое.
+/// Программы со звуком из ответа `pactl list sink-inputs`: потоки одной
+/// программы (по `application.name`, иначе по имени файла программы) — в одну
+/// строку, в порядке появления.
+pub fn parse_app_sounds(text: &str) -> Vec<AppSound> {
+    let mut out: Vec<AppSound> = Vec::new();
+    for block in text.split("Sink Input #").skip(1) {
+        let Some(index) = block
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let lines = || block.lines().map(str::trim);
+        let prop = |key: &str| {
+            lines().find_map(|l| {
+                let v = l.strip_prefix(key)?.trim_start().strip_prefix('=')?;
+                Some(v.trim().trim_matches('"').to_string())
+            })
+        };
+        let name = prop("application.name")
+            .or_else(|| prop("application.process.binary"))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Без названия".into());
+        let volume = lines()
+            .find(|l| l.starts_with("Volume:"))
+            .and_then(parse_volume)
+            .unwrap_or(100);
+        let muted = lines()
+            .find(|l| l.starts_with("Mute:"))
+            .is_some_and(parse_mute);
+        match out.iter_mut().find(|a| a.name == name) {
+            Some(app) => {
+                app.inputs.push(index);
+                app.muted &= muted;
+            }
+            None => out.push(AppSound {
+                name,
+                inputs: vec![index],
+                volume,
+                muted,
+            }),
+        }
+    }
+    out
+}
+
 pub fn parse_default_state(text: &str, default: &str) -> Option<(u32, bool)> {
     let blocks: Vec<&str> = text.split("Sink #").skip(1).collect();
     let block = if default.is_empty() {
@@ -253,6 +315,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn app_sounds_grouped_by_program() {
+        let text = "Sink Input #89\n\tCorked: no\n\tMute: no\n\
+                    \tVolume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB\n\
+                    \tProperties:\n\t\tapplication.name = \"Firefox\"\n\
+                    \t\tapplication.process.binary = \"firefox\"\n\
+                    Sink Input #90\n\tMute: yes\n\tVolume: front-left: 32768 /  50% / -18.06 dB\n\
+                    \tProperties:\n\t\tapplication.process.binary = \"mpv\"\n\
+                    Sink Input #91\n\tMute: no\n\tVolume: front-left: 26214 /  40% / -23.88 dB\n\
+                    \tProperties:\n\t\tapplication.name = \"Firefox\"\n";
+        let apps = parse_app_sounds(text);
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].name, "Firefox");
+        assert_eq!(apps[0].inputs, [89, 91]);
+        assert_eq!((apps[0].volume, apps[0].muted), (100, false));
+        assert_eq!(apps[1].name, "mpv");
+        assert_eq!((apps[1].volume, apps[1].muted), (50, true));
+        assert!(parse_app_sounds("").is_empty());
+    }
+
+    #[test]
     fn sound() {
         let v = "Volume: front-left: 26214 /  40% / -23.88 dB,   front-right: 26214 /  40% / -23.88 dB\n        balance 0.00\n";
         assert_eq!(parse_volume(v), Some(40));
@@ -269,6 +351,7 @@ mod tests {
             muted: false,
             sinks,
             default: "hdmi".into(),
+            apps: vec![],
         };
         assert_eq!(s.icon(), "audio-volume-medium-symbolic");
         s.muted = true;
