@@ -27,14 +27,17 @@ impl Default for Palette {
             foreground: hex(0xcdd6f4),
             cursor: hex(0xf5e0dc),
             selection: hex(0x45475a),
+            // Обычные цвета (0–7) — насыщенные и потемнее: программы красят ими
+            // и фон (синие панели mc, полосы htop), и пастельный фон гасил
+            // светлые буквы. Яркие (8–15) — пастельные, для текста.
             ansi: [
-                hex(0x45475a),
-                hex(0xf38ba8),
-                hex(0xa6e3a1),
-                hex(0xf9e2af),
-                hex(0x89b4fa),
-                hex(0xf5c2e7),
-                hex(0x94e2d5),
+                hex(0x3b3f51),
+                hex(0xc94f6d),
+                hex(0x5fa85f),
+                hex(0xc9a03f),
+                hex(0x2f5fa8),
+                hex(0x9d5fae),
+                hex(0x3a9ea5),
                 hex(0xbac2de),
                 hex(0x585b70),
                 hex(0xf38ba8),
@@ -43,7 +46,7 @@ impl Default for Palette {
                 hex(0x89b4fa),
                 hex(0xf5c2e7),
                 hex(0x94e2d5),
-                hex(0xa6adc8),
+                hex(0xf4f6fb),
             ],
         }
     }
