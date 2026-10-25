@@ -27,6 +27,7 @@ const PACKAGES: &[&str] = &[
     "sassc",
     "network-manager-applet",
     "xfce4-taskmanager",
+    "kitty",
 ];
 /// Глобальное меню в панели Xfce (если строка меню — панель Xfce).
 const APPMENU_PACKAGES: &[&str] = &["vala-panel-appmenu-xfce", "vala-panel-appmenu-registrar"];
@@ -413,6 +414,21 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "команда блокировки → mimshel lock",
         xget("xfce4-session", "/general/LockCommand").as_deref()
             == Some(&*format!("{} lock", paths.shell_bin.display())),
+        "mimshel apply lock",
+    );
+    add(
+        "lock",
+        &format!(
+            "сочетание {} → {}",
+            crate::lock::LOCK_SHORTCUT,
+            crate::lock::LOCK_SHORTCUT_COMMAND
+        ),
+        xget(
+            "xfce4-keyboard-shortcuts",
+            &format!("/commands/custom/{}", crate::lock::LOCK_SHORTCUT),
+        )
+        .as_deref()
+            == Some(crate::lock::LOCK_SHORTCUT_COMMAND),
         "mimshel apply lock",
     );
     let xss = pgrep("^xss-lock(\\s|$)");

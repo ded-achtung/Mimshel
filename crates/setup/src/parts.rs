@@ -503,6 +503,14 @@ impl Plan<'_> {
             "string",
             &format!("{bin} lock"),
         );
+        // Super+L — как в большинстве систем; Ctrl+Alt+L у Xfce остаётся.
+        // xflock4 сам вызывает LockCommand.
+        xset(
+            "xfce4-keyboard-shortcuts",
+            &format!("/commands/custom/{}", crate::lock::LOCK_SHORTCUT),
+            "string",
+            crate::lock::LOCK_SHORTCUT_COMMAND,
+        );
         // xfce4-power-manager гасит экран через заставку X, а xss-lock на её
         // включение (и перед сном системы) запускает блокировку.
         let idle = self.config.lock_idle.to_string();
@@ -847,6 +855,7 @@ impl Plan<'_> {
         if crate::gtk_fixes::apply() {
             println!("  Проводник увидит изменения после перезапуска: thunar -q");
         }
+        crate::terminal::apply(&c.terminal);
     }
 
     /// Обои на все мониторы (и фон блокировки — из них же).

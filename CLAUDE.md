@@ -539,6 +539,17 @@ Python-скрипт, который делал вид macOS из чужих пр
 - Скрытые из Launchpad программы и переименования — через копии ярлыков с пометками
   `X-Macos-Look-*` в ~/.local/share/applications
 
+## Терминал и блокировка (25.10.2026)
+- **Терминал — kitty** (решение пользователя): Терминал Xfce не умеет OSC 52, и копирование в Claude Code
+  по SSH не доходило до буфера обмена. `crates/setup/src/terminal.rs`: при `[apps] terminal = ["kitty"]`
+  `apply look` пишет `TerminalEmulator=kitty` в `~/.config/xfce4/helpers.rc` (прежний — пометкой
+  `# mimshel: прежний TerminalEmulator=…`) и `crates/setup/data/kitty.conf`, если своего нет; `restore`
+  откатывает только помеченное. Свой терминал не пишем — «их и так много».
+- **Super+L → xflock4** ставит `apply lock` (`lock::LOCK_SHORTCUT`), `doctor` проверяет.
+- Поставить новую сборку на ноутбук по SSH, не перенося службу в SSH-сеанс (урок 17): `install -m 755
+  target/release/mimshel ~/.local/bin/mimshel` и `kill -TERM` только `mimshel daemon --child` — сторож из
+  графического сеанса поднимет службу из нового файла. `mimshel set` без `--no-apply` по SSH не звать.
+
 ## Уроки (наступали — не повторять)
 1. **Падение блокировщика на X11 снимает блокировку.** Любой код в процессе блокировки —
    только после стресс-теста с AddressSanitizer; всегда сторож-перезапуск.

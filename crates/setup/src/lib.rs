@@ -13,3 +13,4 @@ pub mod parts;
 pub mod paths;
 pub mod png_icons;
 mod sys;
+pub mod terminal;

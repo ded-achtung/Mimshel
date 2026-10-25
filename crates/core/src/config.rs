@@ -103,7 +103,9 @@ impl Default for Config {
             wallpaper: "space".into(),
             scale: None,
             png_icons: true,
-            terminal: vec!["xfce4-terminal".into(), "-x".into()],
+            // kitty, а не Терминал Xfce: тот не умеет OSC 52, и копирование
+            // из программ по SSH не попадало в буфер (решение 25.10.2026).
+            terminal: vec!["kitty".into()],
             apps_columns: 7,
             apps_rows: 4,
             apps_icon: 72,
@@ -111,7 +113,7 @@ impl Default for Config {
                 "thunar",
                 "macos-launchpad",
                 "firefox",
-                "xfce4-terminal",
+                "kitty",
                 "org.xfce.mousepad",
                 "xfce-settings-manager",
             ]
@@ -148,7 +150,8 @@ impl Default for Config {
             .to_vec(),
             rename_apps: [
                 ("thunar", "Проводник"),
-                ("xfce4-terminal", "Терминал"),
+                ("kitty", "Терминал"),
+                ("xfce4-terminal", "Терминал Xfce"),
                 ("org.xfce.mousepad", "Блокнот"),
                 ("xfce-settings-manager", "Системные настройки"),
                 ("xfce4-taskmanager", "Мониторинг системы"),

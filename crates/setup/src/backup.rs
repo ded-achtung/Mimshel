@@ -191,6 +191,24 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
             }
         }
     }
+    let lock_prop = format!("/commands/custom/{}", crate::lock::LOCK_SHORTCUT);
+    if xget("xfce4-keyboard-shortcuts", &lock_prop).as_deref()
+        == Some(crate::lock::LOCK_SHORTCUT_COMMAND)
+    {
+        step(&format!(
+            "сбросить сочетание {}",
+            crate::lock::LOCK_SHORTCUT
+        ));
+        if !dry {
+            xreset("xfce4-keyboard-shortcuts", &lock_prop);
+        }
+    }
+    for what in crate::terminal::owned() {
+        step(&what);
+    }
+    if !dry {
+        crate::terminal::cleanup()?;
+    }
     step("перезапустить настройки, окна, рабочий стол и панель Xfce");
     if !dry {
         spawn(&["xfsettingsd", "--replace"]);

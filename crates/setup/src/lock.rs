@@ -20,6 +20,11 @@ use crate::sys::{command, home, output, running, succeeds};
 /// до переименования — `shell lock-screen`).
 const LOCK_SCREEN: [&str; 2] = ["mimshel lock-screen", "shell lock-screen"];
 
+/// Сочетание блокировки, которое ставит `mimshel apply lock` (у Xfce есть
+/// только Ctrl+Alt+L), и его команда: xflock4 вызывает `LockCommand`.
+pub const LOCK_SHORTCUT: &str = "<Super>l";
+pub const LOCK_SHORTCUT_COMMAND: &str = "xflock4";
+
 /// Размер экрана из xrandr.
 pub fn screen_size() -> (i64, i64) {
     crate::sys::output_any(&["xrandr", "--current"])
