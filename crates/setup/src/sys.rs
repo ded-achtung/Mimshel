@@ -391,22 +391,23 @@ fn keyboards_ok(virtual_kbd: bool) -> bool {
         .ok()
         .or_else(|| session_env().remove("DISPLAY"))
         .unwrap_or_else(|| ":0".into());
+    // `None` — у устройства нет раскладки вовсе (датчик крышки ноутбука
+    // числится клавиатурой, но клавиш с буквами у него нет).
     let has_all = |args: &[&str]| {
         let symbols = output_any(args);
-        let line = symbols
-            .lines()
-            .find(|l| l.contains("xkb_symbols"))
-            .unwrap_or("");
-        want.split(',')
-            .filter(|c| !c.is_empty())
-            .all(|c| line.contains(c))
+        let line = symbols.lines().find(|l| l.contains("xkb_symbols"))?;
+        Some(
+            want.split(',')
+                .filter(|c| !c.is_empty())
+                .all(|c| line.contains(c)),
+        )
     };
     let ids = keyboards(&output_any(&["xinput", "list", "--short"]), virtual_kbd);
     if ids.is_empty() {
-        return has_all(&["xkbcomp", "-xkb", &display, "-"]);
+        return has_all(&["xkbcomp", "-xkb", &display, "-"]) == Some(true);
     }
     ids.iter()
-        .all(|id| has_all(&["xkbcomp", "-i", id, "-xkb", &display, "-"]))
+        .all(|id| has_all(&["xkbcomp", "-i", id, "-xkb", &display, "-"]) != Some(false))
 }
 
 /// Номера клавиатур из `xinput list --short`: подчинённые настоящие или
