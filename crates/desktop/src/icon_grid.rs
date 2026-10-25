@@ -290,9 +290,10 @@ impl IconGrid {
     }
 
     /// Запомнить нынешние клетки всех значков: после того как значок
-    /// передвинули руками, остальные не должны сами «затекать» в
-    /// освободившиеся клетки (как на Mac).
-    fn freeze(&mut self) {
+    /// передвинули руками (или убрали со стола — в папку, в корзину),
+    /// остальные не должны сами «затекать» в освободившиеся клетки (как на
+    /// Mac).
+    pub fn freeze(&mut self) {
         for (i, item) in self.items.iter().enumerate() {
             if let Some(&slot) = self.places.get(i) {
                 self.saved.insert(file_name(item), slot);
@@ -692,6 +693,17 @@ mod tests {
         for i in 0..g.items().len() {
             assert!(unique.insert(g.slot(i)), "повторяющаяся клетка для {i}");
         }
+    }
+
+    #[test]
+    fn removed_icon_leaves_hole() {
+        let mut g = IconGrid::new((0.0, 0.0, 4.0 * CELL_W, 3.0 * CELL_H));
+        g.set_items(vec![item("а"), item("б"), item("в"), item("г")]);
+        let (b, v) = (g.slot(1), g.slot(2));
+        // «а» унесли в папку: остальные стоят, где стояли.
+        g.freeze();
+        g.set_items(vec![item("б"), item("в"), item("г")]);
+        assert_eq!((g.slot(0), g.slot(1)), (b, v));
     }
 
     #[test]

@@ -580,6 +580,9 @@ impl DesktopUi {
             .filter(|t| t.kind == Kind::Folder)
             .map(|t| t.path.clone());
         if let Some(folder) = target {
+            // Остальные значки остаются на своих местах, когда эти уйдут.
+            self.grid.freeze();
+            desktop_files::save_places(self.grid.saved());
             for item in self.grid.selected_items() {
                 desktop_files::move_into(item.path.clone(), folder.clone());
             }
@@ -727,6 +730,8 @@ impl DesktopUi {
                 }
             }
             Key::Delete => {
+                self.grid.freeze();
+                desktop_files::save_places(self.grid.saved());
                 for item in self.grid.selected_items() {
                     desktop_files::trash(item);
                 }
@@ -934,6 +939,8 @@ impl DesktopUi {
                 shell_x11::copy_files(paths, command == DesktopCommand::Cut);
             }
             DesktopCommand::Trash => {
+                self.grid.freeze();
+                desktop_files::save_places(self.grid.saved());
                 for item in self.grid.selected_items() {
                     desktop_files::trash(item);
                 }
