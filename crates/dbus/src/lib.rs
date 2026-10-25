@@ -4,6 +4,7 @@
 pub mod appmenu;
 pub mod bluetooth;
 pub mod menu;
+pub mod menu_export;
 pub mod notify;
 pub mod registrar;
 pub mod tray;

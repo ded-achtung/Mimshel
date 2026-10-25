@@ -1,17 +1,17 @@
-//! Окно терминала (`mimshel terminal [ПАПКА]`) — отдельный процесс, не служба:
-//! упадёт терминал — док и строка меню останутся (урок 12). Внутри — сеансы
-//! `mimshel_terminal` (по одному на вкладку), здесь — окно и руки:
-//! - вкладки, как в macOS: полоска сверху, когда их две и больше;
-//!   Ctrl+Shift+T — новая (в папке текущей), Ctrl+Shift+W — закрыть,
-//!   Ctrl+PageUp/PageDown и Ctrl+(Shift+)Tab — соседняя, Alt+1…9 — по номеру;
-//!   мышью — щелчок, крестик или средняя кнопка (закрыть), «+» (новая);
-//! - клавиши → программе; Ctrl+Shift+C/V — копировать и вставить,
-//!   Shift+Insert — вставить выделенное, Shift+PageUp/PageDown — история;
-//! - мышь: тянуть — выделить (двойной щелчок — слово, тройной — строку),
-//!   выделенное сразу в «выделение» (вставка средней кнопкой), колёсико —
-//!   история; программе с мышью (htop, mc) — её щелчки;
-//! - OSC 52 (Claude Code, tmux, vim по SSH) — в буфер обмена;
-//! - заголовок вкладки и окна — от программы, размер сетки — по окну.
+//! Terminal window (`mimshel terminal [DIR]`) — a separate process, not the service:
+//! if the terminal crashes, the dock and menu bar stay (lesson 12). Inside are
+//! `mimshel_terminal` sessions (one per tab); this file is the window and input:
+//! - tabs like macOS: a tab strip on top when there are two or more;
+//!   Ctrl+Shift+T — new (in the current tab's folder), Ctrl+Shift+W — close,
+//!   Ctrl+PageUp/PageDown and Ctrl+(Shift+)Tab — neighbour, Alt+1…9 — by number;
+//!   mouse — click, the cross or middle button (close), «+» (new);
+//! - keys go to the program; Ctrl+Shift+C/V — copy and paste,
+//!   Shift+Insert — paste the selection, Shift+PageUp/PageDown — scrollback;
+//! - mouse: drag to select (double click — word, triple — line), the
+//!   selection goes straight to PRIMARY (middle-click paste), wheel —
+//!   scrollback; programs that want the mouse (htop, mc) get their clicks;
+//! - OSC 52 (Claude Code, tmux, vim over SSH) — to the clipboard;
+//! - tab and window titles come from the program, the grid follows the window;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 use mimshel_core::input::{Key, KeyPress, latin};
+use mimshel_dbus::menu_export::MenuSpec;
 use mimshel_render::Canvas;
 use mimshel_terminal::screen::{PAD, cell_at, grid_size};
 use mimshel_terminal::{Glyphs, Palette, Session, TermEvent, key_bytes};
@@ -26,16 +27,16 @@ use mimshel_text::{Fonts, Style};
 use mimshel_x11::{Display, Event};
 use tiny_skia::{Color, Paint, PathBuilder, PixmapPaint, Rect, Stroke, Transform};
 
-/// Класс окна — по нему док и строка меню узнают терминал.
+/// Window class — the dock and menu bar recognise the terminal by it.
 const WINDOW_CLASS: &str = "mimshel-terminal";
 const TITLE: &str = "Терминал";
-/// Размер шрифта в точках и сетка нового окна.
+/// Font size in points and the grid of a new window.
 const FONT_SIZE: f32 = 14.0;
 const START: (usize, usize) = (100, 30);
-/// Двойной и тройной щелчок — не дольше этого между нажатиями.
+/// Double and triple click — no longer than this between presses.
 const MULTI_CLICK: Duration = Duration::from_millis(400);
-/// Полоска вкладок (в точках): высота, наибольшая ширина вкладки, кнопка «+»,
-/// крестик у вкладки.
+/// Tab strip (in points): height, widest tab, the «+» button,
+/// the close cross of a tab.
 const BAR_H: f32 = 30.0;
 const TAB_MAX_W: f32 = 240.0;
 const PLUS_W: f32 = 34.0;
@@ -50,11 +51,13 @@ const TAB_DIM: [u8; 4] = [0x8c, 0x8f, 0xa8, 0xff];
 
 enum Wake {
     X(Event),
-    /// Сеанс вкладки с этим номером сообщил что-то новое.
+    /// The session of the tab with this id has something new.
     Term(u64),
+    /// A menu item was chosen in the top menu bar (item id).
+    Menu(i32),
 }
 
-/// Запустить окно терминала. Код выхода: 0 — оболочки закончили или окно закрыли.
+/// Run a terminal window. Exit code 0: the shells finished or the window was closed.
 pub fn run(dir: Option<PathBuf>) -> i32 {
     match terminal(dir) {
         Ok(()) => 0,
@@ -65,7 +68,7 @@ pub fn run(dir: Option<PathBuf>) -> i32 {
     }
 }
 
-/// Моноширинный шрифт системы (`fc-match monospace`), иначе DejaVu Sans Mono.
+/// The system monospace font (`fc-match monospace`), else DejaVu Sans Mono.
 fn mono_family() -> String {
     std::process::Command::new("fc-match")
         .args(["-f", "%{family}", "monospace"])
@@ -77,13 +80,13 @@ fn mono_family() -> String {
         .unwrap_or_else(|| "DejaVu Sans Mono".into())
 }
 
-/// Что сейчас делает левая кнопка мыши.
+/// What the left mouse button is doing now.
 #[derive(Clone, Copy, PartialEq)]
 enum Press {
     None,
-    /// Выделяем текст.
+    /// Selecting text.
     Selecting,
-    /// Кнопку нажали над программой, которая сама хочет мышь.
+    /// Pressed over a program that wants the mouse itself.
     Program(u8),
 }
 
@@ -93,7 +96,7 @@ struct Tab {
     title: String,
 }
 
-/// Куда попала мышь на полоске вкладок.
+/// Where the mouse is on the tab strip.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum BarHit {
     Tab(usize),
@@ -101,21 +104,21 @@ enum BarHit {
     Plus,
 }
 
-/// Вкладки окна и как их рисовать.
+/// The window's tabs and how to draw them.
 struct Tabs {
     list: Vec<Tab>,
     active: usize,
     next_id: u64,
     cell: (u32, u32),
     tx: Sender<Wake>,
-    /// Шрифт подписей вкладок (обычный, не моноширинный) — грузится, когда
-    /// вкладок впервые стало две.
+    /// Tab label font (regular, not monospace) — loaded the first time
+    /// there are two tabs.
     ui_fonts: Option<Fonts>,
     hover: Option<BarHit>,
 }
 
 impl Tabs {
-    /// Открыть вкладку в папке `dir` с сеткой `grid`.
+    /// Open a tab in folder `dir` with grid `grid`.
     fn open(&mut self, dir: Option<PathBuf>, grid: (usize, usize)) -> mimshel_x11::Result<()> {
         let id = self.next_id;
         self.next_id += 1;
@@ -150,7 +153,7 @@ impl Tabs {
         }
     }
 
-    /// Высота полоски вкладок в пикселях (одна вкладка — полоски нет).
+    /// Tab strip height in pixels (a single tab has no strip).
     fn bar_h(&self, scale: f32) -> u32 {
         if self.list.len() > 1 {
             (BAR_H * scale).round() as u32
@@ -159,7 +162,7 @@ impl Tabs {
         }
     }
 
-    /// Ширина вкладки в пикселях при ширине окна `w`.
+    /// Tab width in pixels for window width `w`.
     fn tab_w(&self, w: u32, scale: f32) -> f32 {
         let room = w as f32 - PLUS_W * scale;
         (room / self.list.len().max(1) as f32).min(TAB_MAX_W * scale)
@@ -180,7 +183,7 @@ impl Tabs {
         (x >= plus && x < plus + PLUS_W * scale).then_some(BarHit::Plus)
     }
 
-    /// Кадр окна `w`×`h` пикселей: полоска вкладок и активная вкладка.
+    /// Window frame `w`×`h` pixels: the tab strip and the active tab.
     fn render(
         &mut self,
         glyphs: &mut Glyphs,
@@ -233,7 +236,7 @@ impl Tabs {
             } else if hovered {
                 fill(&mut canvas, x, 0.0, tw, bh, TAB_HOVER);
             }
-            // Черта между вкладками.
+            // Divider between tabs.
             fill(
                 &mut canvas,
                 x + tw - 1.0,
@@ -253,7 +256,7 @@ impl Tabs {
                 ty,
                 Some(text_w),
             );
-            // Крестик: у активной и у той, над которой мышь.
+            // Close cross: on the active tab and the hovered one.
             if active || hovered {
                 let cx = x + tw - CLOSE_W * scale / 2.0 - 4.0 * scale;
                 let cy = bh / 2.0;
@@ -280,7 +283,7 @@ impl Tabs {
                 }
             }
         }
-        // «+» — новая вкладка.
+        // «+» — new tab.
         let px = self.list.len() as f32 * tw + PLUS_W * scale / 2.0;
         if self.hover == Some(BarHit::Plus) {
             fill(
@@ -312,37 +315,432 @@ impl Tabs {
     }
 }
 
-/// Сочетание для вкладок — что сделать (или `None`: нажатие для программы).
-enum TabKey {
-    New,
-    Close,
-    Next,
-    Prev,
-    Select(usize),
+/// What to do: the same from the top menu and from the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Cmd {
+    NewWindow,
+    NewTab,
+    CloseTab,
+    CloseWindow,
+    Copy,
+    Paste,
+    SelectAll,
+    ClearHistory,
+    Bigger,
+    Smaller,
+    NormalSize,
+    NextTab,
+    PrevTab,
+    SelectTab(usize),
 }
 
-fn tab_key(k: &KeyPress) -> Option<TabKey> {
+/// The window menu in the top menu bar, like macOS Terminal. Item ids
+/// come back on click ([`menu_cmd`]).
+fn menus() -> Vec<MenuSpec> {
+    vec![
+        MenuSpec::menu(
+            1,
+            "Оболочка",
+            vec![
+                MenuSpec::item(101, "Новое окно"),
+                MenuSpec::item(102, "Новая вкладка    Ctrl+Shift+T"),
+                MenuSpec::separator(103),
+                MenuSpec::item(104, "Закрыть вкладку    Ctrl+Shift+W"),
+                MenuSpec::item(105, "Закрыть окно"),
+            ],
+        ),
+        MenuSpec::menu(
+            2,
+            "Правка",
+            vec![
+                MenuSpec::item(201, "Копировать    Ctrl+Shift+C"),
+                MenuSpec::item(202, "Вставить    Ctrl+Shift+V"),
+                MenuSpec::item(203, "Выделить всё"),
+                MenuSpec::separator(204),
+                MenuSpec::item(205, "Очистить историю"),
+            ],
+        ),
+        MenuSpec::menu(
+            3,
+            "Вид",
+            vec![
+                MenuSpec::item(301, "Крупнее    Ctrl+Shift+="),
+                MenuSpec::item(302, "Мельче    Ctrl+Shift+−"),
+                MenuSpec::item(303, "Обычный размер    Ctrl+Shift+0"),
+            ],
+        ),
+        MenuSpec::menu(
+            4,
+            "Окно",
+            vec![
+                MenuSpec::item(401, "Следующая вкладка    Ctrl+PageDown"),
+                MenuSpec::item(402, "Предыдущая вкладка    Ctrl+PageUp"),
+            ],
+        ),
+    ]
+}
+
+fn menu_cmd(id: i32) -> Option<Cmd> {
+    Some(match id {
+        101 => Cmd::NewWindow,
+        102 => Cmd::NewTab,
+        104 => Cmd::CloseTab,
+        105 => Cmd::CloseWindow,
+        201 => Cmd::Copy,
+        202 => Cmd::Paste,
+        203 => Cmd::SelectAll,
+        205 => Cmd::ClearHistory,
+        301 => Cmd::Bigger,
+        302 => Cmd::Smaller,
+        303 => Cmd::NormalSize,
+        401 => Cmd::NextTab,
+        402 => Cmd::PrevTab,
+        _ => return None,
+    })
+}
+
+/// A window shortcut (tabs, clipboard, font size) or `None` — the key is
+/// for the program. Letters by key position (Russian layout too).
+fn shortcut(k: &KeyPress) -> Option<Cmd> {
     let letter = match k.key {
         Key::Char(c) => Some(latin(c)),
         _ => None,
     };
+    let ctrl_shift = k.ctrl && k.shift;
     match k.key {
-        _ if k.ctrl && k.shift && letter == Some('t') => Some(TabKey::New),
-        _ if k.ctrl && k.shift && letter == Some('w') => Some(TabKey::Close),
-        Key::PageDown if k.ctrl && !k.shift => Some(TabKey::Next),
-        Key::PageUp if k.ctrl && !k.shift => Some(TabKey::Prev),
-        Key::Tab if k.ctrl => Some(if k.shift { TabKey::Prev } else { TabKey::Next }),
+        _ if ctrl_shift && letter == Some('t') => Some(Cmd::NewTab),
+        _ if ctrl_shift && letter == Some('w') => Some(Cmd::CloseTab),
+        _ if ctrl_shift && letter == Some('n') => Some(Cmd::NewWindow),
+        _ if ctrl_shift && letter == Some('c') => Some(Cmd::Copy),
+        _ if ctrl_shift && letter == Some('v') => Some(Cmd::Paste),
+        // With Shift these keys give other characters: «+», «_», «)».
+        _ if ctrl_shift && matches!(letter, Some('=' | '+')) => Some(Cmd::Bigger),
+        _ if ctrl_shift && matches!(letter, Some('-' | '_')) => Some(Cmd::Smaller),
+        _ if ctrl_shift && matches!(letter, Some('0' | ')')) => Some(Cmd::NormalSize),
+        Key::PageDown if k.ctrl && !k.shift => Some(Cmd::NextTab),
+        Key::PageUp if k.ctrl && !k.shift => Some(Cmd::PrevTab),
+        Key::Tab if k.ctrl => Some(if k.shift { Cmd::PrevTab } else { Cmd::NextTab }),
         Key::Char(c @ '1'..='9') if k.alt && !k.ctrl => {
-            Some(TabKey::Select(c as usize - '1' as usize))
+            Some(Cmd::SelectTab(c as usize - '1' as usize))
         }
         _ => None,
+    }
+}
+
+/// The whole terminal window: tabs, font, size, mouse.
+struct Window {
+    d: Arc<Display>,
+    win: mimshel_x11::AppWindow,
+    tabs: Tabs,
+    glyphs: Glyphs,
+    family: String,
+    /// Font size in points (changed by «Bigger»/«Smaller»).
+    font_size: f32,
+    scale: f32,
+    /// Window size in pixels.
+    size: (u32, u32),
+    dirty: bool,
+    press: Press,
+    last_click: Option<(Instant, (usize, usize), u8)>,
+    shown_title: String,
+}
+
+impl Window {
+    fn cell(&self) -> (u32, u32) {
+        self.glyphs.cell
+    }
+
+    /// Grid for the area below the tab strip — for every tab.
+    fn regrid(&mut self) {
+        let bar = self.tabs.bar_h(self.scale);
+        let grid = grid_size(self.size.0, self.size.1.saturating_sub(bar), self.cell());
+        for t in &mut self.tabs.list {
+            t.session.resize(grid);
+        }
+        self.dirty = true;
+    }
+
+    /// Window point (points) → cell and whether it is the cell's right half (below the strip).
+    fn at(&self, x: i16, y: i16) -> ((usize, usize), bool) {
+        let cell = self.cell();
+        let bar = self.tabs.bar_h(self.scale) as f32;
+        let (x, y) = (f32::from(x) * self.scale, f32::from(y) * self.scale - bar);
+        let grid = self.tabs.active().session.size();
+        let c = cell_at(x, y, cell, grid);
+        let right = (x - PAD as f32) - (c.0 as f32 * cell.0 as f32) > cell.0 as f32 / 2.0;
+        (c, right)
+    }
+
+    fn new_tab(&mut self) -> mimshel_x11::Result<()> {
+        let cwd = self.tabs.active().session.cwd();
+        let grid = self.tabs.active().session.size();
+        self.tabs.open(cwd, grid)?;
+        self.regrid();
+        Ok(())
+    }
+
+    /// Close tab `i`. `false` — no tabs left, close the window.
+    fn close_tab(&mut self, i: usize) -> bool {
+        self.tabs.close(i);
+        if self.tabs.list.is_empty() {
+            return false;
+        }
+        self.regrid();
+        true
+    }
+
+    /// New font size: glyphs anew, a different cell — regrid every tab.
+    fn set_font(&mut self, size: f32) {
+        let size = size.clamp(8.0, 40.0);
+        if (size - self.font_size).abs() < f32::EPSILON {
+            return;
+        }
+        self.font_size = size;
+        self.glyphs = Glyphs::new(&self.family, (size * self.scale).round());
+        let cell = self.cell();
+        self.tabs.cell = cell;
+        let bar = self.tabs.bar_h(self.scale);
+        let grid = grid_size(self.size.0, self.size.1.saturating_sub(bar), cell);
+        for t in &mut self.tabs.list {
+            t.session.set_cell(cell, grid);
+        }
+        self.dirty = true;
+    }
+
+    /// Run a command. `false` — close the window.
+    fn cmd(&mut self, cmd: Cmd) -> mimshel_x11::Result<bool> {
+        self.dirty = true;
+        let session = &self.tabs.active().session;
+        match cmd {
+            Cmd::NewWindow => {
+                // A separate process, in the current tab's folder.
+                let mut c = std::process::Command::new(crate::guard::own_exe());
+                c.arg("terminal");
+                if let Some(dir) = session.cwd() {
+                    c.arg(dir);
+                }
+                use std::os::unix::process::CommandExt;
+                let _ = c
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .process_group(0)
+                    .spawn();
+            }
+            Cmd::NewTab => self.new_tab()?,
+            Cmd::CloseTab => return Ok(self.close_tab(self.tabs.active)),
+            Cmd::CloseWindow => return Ok(false),
+            Cmd::Copy => {
+                if let Some(text) = session.selection_text() {
+                    mimshel_x11::copy_text(text, false);
+                }
+            }
+            Cmd::Paste => {
+                if let Some(text) = mimshel_x11::clipboard_text(false) {
+                    session.paste(&text);
+                }
+            }
+            Cmd::SelectAll => session.select_all(),
+            Cmd::ClearHistory => session.clear_history(),
+            Cmd::Bigger => self.set_font(self.font_size + 1.0),
+            Cmd::Smaller => self.set_font(self.font_size - 1.0),
+            Cmd::NormalSize => self.set_font(FONT_SIZE),
+            Cmd::NextTab => self.tabs.active = (self.tabs.active + 1) % self.tabs.list.len(),
+            Cmd::PrevTab => {
+                let n = self.tabs.list.len();
+                self.tabs.active = (self.tabs.active + n - 1) % n;
+            }
+            Cmd::SelectTab(i) => {
+                if i < self.tabs.list.len() {
+                    self.tabs.active = i;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// An X event. `false` — close the window.
+    fn event(&mut self, ev: Event) -> mimshel_x11::Result<bool> {
+        let me = self.win.id();
+        let scale = self.scale;
+        let bar = self.tabs.bar_h(scale);
+        match ev {
+            Event::Close { window } if window == me => return Ok(false),
+            Event::Expose { window } if window == me => self.dirty = true,
+            Event::Configure { window } if window == me => {
+                if let Some((w, h)) = self.win.size(&self.d) {
+                    self.size = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
+                    self.regrid();
+                }
+            }
+            Event::Key(k) => {
+                if let Some(cmd) = shortcut(&k) {
+                    return self.cmd(cmd);
+                }
+                let session = &self.tabs.active().session;
+                if k.shift && k.key == Key::Insert {
+                    if let Some(text) = mimshel_x11::clipboard_text(true) {
+                        session.paste(&text);
+                    }
+                } else if k.shift && matches!(k.key, Key::PageUp | Key::PageDown) {
+                    session.scroll_page(k.key == Key::PageUp);
+                    self.dirty = true;
+                } else if let Some(bytes) = key_bytes(&k, session.mode()) {
+                    session.input(bytes);
+                    self.dirty = true;
+                }
+            }
+            Event::Button {
+                window,
+                x,
+                y,
+                button,
+            } if window == me => {
+                self.dirty = true;
+                // Tab strip.
+                if f32::from(y) * scale < bar as f32 {
+                    match (
+                        self.tabs.bar_hit(f32::from(x) * scale, self.size.0, scale),
+                        button,
+                    ) {
+                        (Some(BarHit::Tab(i)), 2) | (Some(BarHit::Close(i)), 1 | 2) => {
+                            return Ok(self.close_tab(i));
+                        }
+                        (Some(BarHit::Tab(i)), 1) => self.tabs.active = i,
+                        (Some(BarHit::Plus), 1) => self.new_tab()?,
+                        _ => {}
+                    }
+                    return Ok(true);
+                }
+                let (c, right) = self.at(x, y);
+                let session = &self.tabs.active().session;
+                match button {
+                    4 | 5 => session.wheel(button == 4, c),
+                    b if session.mouse_wanted() => {
+                        session.mouse_report(b - 1, c, true, false);
+                        self.press = Press::Program(b - 1);
+                    }
+                    1 => {
+                        let clicks = match self.last_click {
+                            Some((t, at, n)) if t.elapsed() < MULTI_CLICK && at == c => n % 3 + 1,
+                            _ => 1,
+                        };
+                        self.last_click = Some((Instant::now(), c, clicks));
+                        session.select_start(c, clicks, right);
+                        self.press = Press::Selecting;
+                    }
+                    2 => {
+                        if let Some(text) = mimshel_x11::clipboard_text(true) {
+                            session.paste(&text);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Motion { window, x, y } if window == me => {
+                let hover = (f32::from(y) * scale < bar as f32)
+                    .then(|| self.tabs.bar_hit(f32::from(x) * scale, self.size.0, scale))
+                    .flatten();
+                if hover != self.tabs.hover {
+                    self.tabs.hover = hover;
+                    self.dirty = true;
+                }
+                let (c, right) = self.at(x, y);
+                let session = &self.tabs.active().session;
+                match self.press {
+                    Press::Selecting => {
+                        session.select_update(c, right);
+                        self.dirty = true;
+                    }
+                    Press::Program(b) => session.mouse_report(b, c, true, true),
+                    Press::None => {}
+                }
+            }
+            Event::Leave { window } if window == me => {
+                if self.tabs.hover.take().is_some() {
+                    self.dirty = true;
+                }
+            }
+            Event::Release {
+                window,
+                x,
+                y,
+                button,
+            } if window == me => {
+                let (c, _) = self.at(x, y);
+                let session = &self.tabs.active().session;
+                match self.press {
+                    Press::Selecting if button == 1 => {
+                        // The selection goes straight to PRIMARY (middle-click paste).
+                        match session.selection_text() {
+                            Some(text) => mimshel_x11::copy_text(text, true),
+                            // Just a click — no selection.
+                            None => session.clear_selection(),
+                        }
+                        self.dirty = true;
+                    }
+                    Press::Program(b) => session.mouse_report(b, c, false, false),
+                    _ => {}
+                }
+                self.press = Press::None;
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// News from the session of tab `id`. `false` — close the window.
+    fn term_event(&mut self, id: u64) -> bool {
+        let Some(i) = self.tabs.find(id) else {
+            return true;
+        };
+        for e in self.tabs.list[i].session.poll() {
+            match e {
+                TermEvent::Redraw => self.dirty |= i == self.tabs.active,
+                TermEvent::Title(t) => {
+                    self.tabs.list[i].title = t;
+                    self.dirty = true;
+                }
+                TermEvent::ResetTitle => {
+                    self.tabs.list[i].title = TITLE.to_string();
+                    self.dirty = true;
+                }
+                TermEvent::Copy(text) => mimshel_x11::copy_text(text, false),
+                TermEvent::Bell => {}
+                // The tab's shell exited — close the tab.
+                TermEvent::Exit => return self.close_tab(i),
+            }
+        }
+        true
+    }
+
+    fn flush(&mut self) -> mimshel_x11::Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+        self.dirty = false;
+        let title = self.tabs.active().title.clone();
+        if title != self.shown_title {
+            self.win.set_title(&self.d, &title)?;
+            self.shown_title = title;
+        }
+        let focused = self.d.active_window() == Some(self.win.id());
+        if let Some(frame) = self
+            .tabs
+            .render(&mut self.glyphs, self.size, self.scale, focused)
+        {
+            self.win.present(&self.d, &frame)?;
+            self.d.sync()?;
+        }
+        Ok(())
     }
 }
 
 fn terminal(dir: Option<PathBuf>) -> mimshel_x11::Result<()> {
     let d = Arc::new(Display::connect()?);
     let scale = d.scale();
-    let mut glyphs = Glyphs::new(&mono_family(), (FONT_SIZE * scale).round());
+    let family = mono_family();
+    let glyphs = Glyphs::new(&family, (FONT_SIZE * scale).round());
     let cell = glyphs.cell;
     let px = |(cols, rows): (usize, usize)| {
         (
@@ -381,257 +779,53 @@ fn terminal(dir: Option<PathBuf>) -> mimshel_x11::Result<()> {
         });
     }
     win.show(&d)?;
-
-    let me = win.id();
-    let mut size = px(START);
-    let mut dirty = true;
-    let mut press = Press::None;
-    let mut last_click: Option<(Instant, (usize, usize), u8)> = None;
-    // Сетка под область без полоски вкладок.
-    let grid_for = |size: (u32, u32), bar: u32| grid_size(size.0, size.1.saturating_sub(bar), cell);
-    // Точка окна (точки) → клетка и правая ли половина клетки (под полоской).
-    let at = |x: i16, y: i16, grid: (usize, usize), bar: u32| {
-        let (x, y) = (f32::from(x) * scale, f32::from(y) * scale - bar as f32);
-        let c = cell_at(x, y, cell, grid);
-        let right = (x - PAD as f32) - (c.0 as f32 * cell.0 as f32) > cell.0 as f32 / 2.0;
-        (c, right)
-    };
-    // Число вкладок стало 1 или 2 — полоска появилась или ушла: сетка у всех.
-    let regrid = |tabs: &mut Tabs, size: (u32, u32)| {
-        let grid = grid_for(size, tabs.bar_h(scale));
-        for t in &mut tabs.list {
-            t.session.resize(grid);
+    // Menu at the top; without the service (registrar) — simply no menu.
+    let menu_tx = tx.clone();
+    let _menu = match mimshel_dbus::menu_export::export(win.id(), menus(), move |id| {
+        let _ = menu_tx.send(Wake::Menu(id));
+    }) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            eprintln!("Терминал: меню в строке меню не выставлено: {e}");
+            None
         }
     };
-    let mut shown_title = String::new();
 
+    let mut w = Window {
+        d,
+        win,
+        tabs,
+        glyphs,
+        family,
+        font_size: FONT_SIZE,
+        scale,
+        size: px(START),
+        dirty: true,
+        press: Press::None,
+        last_click: None,
+        shown_title: String::new(),
+    };
     'run: while let Ok(first) = rx.recv() {
         let mut batch = vec![first];
         while let Ok(more) = rx.try_recv() {
             batch.push(more);
         }
         for wake in batch {
-            let bar = tabs.bar_h(scale);
-            match wake {
-                Wake::Term(id) => {
-                    let Some(i) = tabs.find(id) else {
-                        continue;
-                    };
-                    for e in tabs.list[i].session.poll() {
-                        match e {
-                            TermEvent::Redraw => dirty |= i == tabs.active,
-                            TermEvent::Title(t) => {
-                                tabs.list[i].title = t;
-                                dirty = true;
-                            }
-                            TermEvent::ResetTitle => {
-                                tabs.list[i].title = TITLE.to_string();
-                                dirty = true;
-                            }
-                            TermEvent::Copy(text) => mimshel_x11::copy_text(text, false),
-                            TermEvent::Bell => {}
-                            TermEvent::Exit => {
-                                tabs.close(i);
-                                if tabs.list.is_empty() {
-                                    break 'run;
-                                }
-                                regrid(&mut tabs, size);
-                                dirty = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                Wake::X(Event::Close { window }) if window == me => break 'run,
-                Wake::X(Event::Expose { window }) if window == me => dirty = true,
-                Wake::X(Event::Configure { window }) if window == me => {
-                    if let Some((w, h)) = win.size(&d) {
-                        size = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
-                        regrid(&mut tabs, size);
-                        dirty = true;
-                    }
-                }
-                Wake::X(Event::Key(k)) => {
-                    if let Some(action) = tab_key(&k) {
-                        match action {
-                            TabKey::New => {
-                                let cwd = tabs.active().session.cwd();
-                                let grid = tabs.active().session.size();
-                                tabs.open(cwd, grid)?;
-                                regrid(&mut tabs, size);
-                            }
-                            TabKey::Close => {
-                                tabs.close(tabs.active);
-                                if tabs.list.is_empty() {
-                                    break 'run;
-                                }
-                                regrid(&mut tabs, size);
-                            }
-                            TabKey::Next => tabs.active = (tabs.active + 1) % tabs.list.len(),
-                            TabKey::Prev => {
-                                tabs.active = (tabs.active + tabs.list.len() - 1) % tabs.list.len();
-                            }
-                            TabKey::Select(n) => {
-                                if n < tabs.list.len() {
-                                    tabs.active = n;
-                                }
-                            }
-                        }
-                        dirty = true;
-                        continue;
-                    }
-                    let session = &tabs.active().session;
-                    let letter = match k.key {
-                        Key::Char(c) => Some(latin(c)),
-                        _ => None,
-                    };
-                    if k.ctrl && k.shift && letter == Some('c') {
-                        if let Some(text) = session.selection_text() {
-                            mimshel_x11::copy_text(text, false);
-                        }
-                    } else if k.ctrl && k.shift && letter == Some('v') {
-                        if let Some(text) = mimshel_x11::clipboard_text(false) {
-                            session.paste(&text);
-                        }
-                    } else if k.shift && k.key == Key::Insert {
-                        if let Some(text) = mimshel_x11::clipboard_text(true) {
-                            session.paste(&text);
-                        }
-                    } else if k.shift && matches!(k.key, Key::PageUp | Key::PageDown) {
-                        session.scroll_page(k.key == Key::PageUp);
-                        dirty = true;
-                    } else if let Some(bytes) = key_bytes(&k, session.mode()) {
-                        session.input(bytes);
-                        dirty = true;
-                    }
-                }
-                Wake::X(Event::Button {
-                    window,
-                    x,
-                    y,
-                    button,
-                }) if window == me => {
-                    // Полоска вкладок.
-                    if f32::from(y) * scale < bar as f32 {
-                        match (tabs.bar_hit(f32::from(x) * scale, size.0, scale), button) {
-                            (Some(BarHit::Tab(i)), 2) | (Some(BarHit::Close(i)), 1 | 2) => {
-                                tabs.close(i);
-                                if tabs.list.is_empty() {
-                                    break 'run;
-                                }
-                                regrid(&mut tabs, size);
-                            }
-                            (Some(BarHit::Tab(i)), 1) => tabs.active = i,
-                            (Some(BarHit::Plus), 1) => {
-                                let cwd = tabs.active().session.cwd();
-                                let grid = tabs.active().session.size();
-                                tabs.open(cwd, grid)?;
-                                regrid(&mut tabs, size);
-                            }
-                            _ => {}
-                        }
-                        dirty = true;
-                        continue;
-                    }
-                    let session = &tabs.active().session;
-                    let grid = session.size();
-                    let (c, right) = at(x, y, grid, bar);
-                    match button {
-                        4 | 5 => session.wheel(button == 4, c),
-                        b if session.mouse_wanted() => {
-                            session.mouse_report(b - 1, c, true, false);
-                            press = Press::Program(b - 1);
-                        }
-                        1 => {
-                            let clicks = match last_click {
-                                Some((t, at, n)) if t.elapsed() < MULTI_CLICK && at == c => {
-                                    n % 3 + 1
-                                }
-                                _ => 1,
-                            };
-                            last_click = Some((Instant::now(), c, clicks));
-                            session.select_start(c, clicks, right);
-                            press = Press::Selecting;
-                        }
-                        2 => {
-                            if let Some(text) = mimshel_x11::clipboard_text(true) {
-                                session.paste(&text);
-                            }
-                        }
-                        _ => {}
-                    }
-                    dirty = true;
-                }
-                Wake::X(Event::Motion { window, x, y }) if window == me => {
-                    let hover = (f32::from(y) * scale < bar as f32)
-                        .then(|| tabs.bar_hit(f32::from(x) * scale, size.0, scale))
-                        .flatten();
-                    if hover != tabs.hover {
-                        tabs.hover = hover;
-                        dirty = true;
-                    }
-                    let session = &tabs.active().session;
-                    match press {
-                        Press::Selecting => {
-                            let (c, right) = at(x, y, session.size(), bar);
-                            session.select_update(c, right);
-                            dirty = true;
-                        }
-                        Press::Program(b) => {
-                            let (c, _) = at(x, y, session.size(), bar);
-                            session.mouse_report(b, c, true, true);
-                        }
-                        Press::None => {}
-                    }
-                }
-                Wake::X(Event::Leave { window }) if window == me => {
-                    if tabs.hover.take().is_some() {
-                        dirty = true;
-                    }
-                }
-                Wake::X(Event::Release {
-                    window,
-                    x,
-                    y,
-                    button,
-                }) if window == me => {
-                    let session = &tabs.active().session;
-                    match press {
-                        Press::Selecting if button == 1 => {
-                            // Выделенное — сразу в «выделение» (вставка средней кнопкой).
-                            match session.selection_text() {
-                                Some(text) => mimshel_x11::copy_text(text, true),
-                                // Просто щелчок — выделения нет.
-                                None => session.clear_selection(),
-                            }
-                            dirty = true;
-                        }
-                        Press::Program(b) => {
-                            let (c, _) = at(x, y, session.size(), bar);
-                            session.mouse_report(b, c, false, false);
-                        }
-                        _ => {}
-                    }
-                    press = Press::None;
-                }
-                Wake::X(_) => {}
+            let keep = match wake {
+                Wake::X(ev) => w.event(ev)?,
+                Wake::Term(id) => w.term_event(id),
+                Wake::Menu(id) => match menu_cmd(id) {
+                    Some(cmd) => w.cmd(cmd)?,
+                    None => true,
+                },
+            };
+            if !keep {
+                break 'run;
             }
         }
-        if dirty {
-            dirty = false;
-            let title = tabs.active().title.clone();
-            if title != shown_title {
-                win.set_title(&d, &title)?;
-                shown_title = title;
-            }
-            let focused = d.active_window() == Some(me);
-            if let Some(frame) = tabs.render(&mut glyphs, size, scale, focused) {
-                win.present(&d, &frame)?;
-                d.sync()?;
-            }
-        }
+        w.flush()?;
     }
-    win.destroy(&d)?;
+    w.win.destroy(&w.d)?;
     Ok(())
 }
 
@@ -649,8 +843,8 @@ mod tests {
         }
     }
 
-    /// Две настоящие вкладки: полоска появляется, сетка под ней, щелчки по
-    /// полоске попадают куда нужно. `MIMSHEL_TAB_PNG=файл` — сохранить кадр.
+    /// Two real tabs: the strip appears, the grid is below it, clicks on the
+    /// strip land where they should. `MIMSHEL_TAB_PNG=file` saves the frame.
     #[test]
     fn two_tabs_render_with_bar() {
         let (tx, _rx) = mpsc::channel();
@@ -665,11 +859,11 @@ mod tests {
             hover: None,
         };
         tabs.open(None, (60, 10)).unwrap();
-        assert_eq!(tabs.bar_h(1.0), 0, "одна вкладка — без полоски");
+        assert_eq!(tabs.bar_h(1.0), 0, "one tab — no strip");
         tabs.open(None, (60, 10)).unwrap();
         tabs.list[0].title = "mc [ded@ded-gamingseries]:~".into();
         tabs.list[1].title = "ded@ded-gamingseries:~".into();
-        assert_eq!(tabs.active, 1, "новая вкладка — активная");
+        assert_eq!(tabs.active, 1, "the new tab is active");
         let bar = tabs.bar_h(1.0);
         assert_eq!(bar, BAR_H as u32);
         let w = 700;
@@ -685,38 +879,66 @@ mod tests {
         }
         tabs.close(0);
         assert_eq!((tabs.list.len(), tabs.active), (1, 0));
-        assert_eq!(tabs.bar_h(1.0), 0, "снова одна — полоска ушла");
+        assert_eq!(tabs.bar_h(1.0), 0, "one again — the strip is gone");
     }
 
     #[test]
     fn tab_shortcuts() {
         assert!(matches!(
-            tab_key(&key(Key::Char('T'), true, true, false)),
-            Some(TabKey::New)
+            shortcut(&key(Key::Char('T'), true, true, false)),
+            Some(Cmd::NewTab)
         ));
         assert!(
             matches!(
-                tab_key(&key(Key::Char('Е'), true, true, false)),
-                Some(TabKey::New)
+                shortcut(&key(Key::Char('Е'), true, true, false)),
+                Some(Cmd::NewTab)
             ),
-            "в русской раскладке — по месту клавиши"
+            "Russian layout — by key position"
         );
         assert!(matches!(
-            tab_key(&key(Key::PageDown, true, false, false)),
-            Some(TabKey::Next)
+            shortcut(&key(Key::PageDown, true, false, false)),
+            Some(Cmd::NextTab)
         ));
         assert!(matches!(
-            tab_key(&key(Key::Tab, true, true, false)),
-            Some(TabKey::Prev)
+            shortcut(&key(Key::Tab, true, true, false)),
+            Some(Cmd::PrevTab)
         ));
         assert!(matches!(
-            tab_key(&key(Key::Char('3'), false, false, true)),
-            Some(TabKey::Select(2))
+            shortcut(&key(Key::Char('3'), false, false, true)),
+            Some(Cmd::SelectTab(2))
         ));
         assert!(
-            tab_key(&key(Key::Char('t'), true, false, false)).is_none(),
-            "Ctrl+T без Shift — программе (bash: поменять буквы местами)"
+            shortcut(&key(Key::Char('t'), true, false, false)).is_none(),
+            "Ctrl+T without Shift goes to the program (bash: transpose chars)"
         );
-        assert!(tab_key(&key(Key::PageUp, false, true, false)).is_none());
+        assert!(shortcut(&key(Key::PageUp, false, true, false)).is_none());
+        // Font size: with Shift these keys give «+», «_», «)».
+        assert_eq!(
+            shortcut(&key(Key::Char('+'), true, true, false)),
+            Some(Cmd::Bigger)
+        );
+        assert_eq!(
+            shortcut(&key(Key::Char('_'), true, true, false)),
+            Some(Cmd::Smaller)
+        );
+        assert_eq!(
+            shortcut(&key(Key::Char(')'), true, true, false)),
+            Some(Cmd::NormalSize)
+        );
+        assert_eq!(
+            shortcut(&key(Key::Char('C'), true, true, false)),
+            Some(Cmd::Copy)
+        );
+        // Menu and keys share the same commands.
+        assert_eq!(menu_cmd(102), Some(Cmd::NewTab));
+        assert_eq!(menu_cmd(103), None, "separator");
+        let ids: Vec<i32> = menus()
+            .iter()
+            .flat_map(|m| m.children.iter().filter(|i| !i.separator).map(|i| i.id))
+            .collect();
+        assert!(
+            ids.iter().all(|&id| menu_cmd(id).is_some()),
+            "every item has a command"
+        );
     }
 }

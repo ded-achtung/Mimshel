@@ -63,7 +63,7 @@ pub struct Session {
     size: (usize, usize),
     /// Палитра — для ответов на «какой у тебя цвет» (OSC 10/11/4).
     palette: Palette,
-    /// Номер процесса оболочки — узнать её текущую папку.
+    /// Shell process id — to find its current folder.
     shell_pid: u32,
 }
 
@@ -110,8 +110,8 @@ impl Session {
         })
     }
 
-    /// Папка, где сейчас оболочка (`cd` в ней меняет её) — новая вкладка
-    /// откроется там же.
+    /// The shell's current folder (`cd` changes it) — a new tab
+    /// opens there.
     pub fn cwd(&self) -> Option<PathBuf> {
         std::fs::read_link(format!("/proc/{}/cwd", self.shell_pid)).ok()
     }
@@ -245,6 +245,38 @@ impl Session {
         if let Some(sel) = &mut self.term.lock().selection {
             sel.update(point, side);
         }
+    }
+
+    /// Select everything: scrollback and screen.
+    pub fn select_all(&self) {
+        let mut term = self.term.lock();
+        let history = term.grid().history_size() as i32;
+        let (cols, lines) = (term.columns(), term.screen_lines() as i32);
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(-history), Column(0)),
+            Side::Left,
+        );
+        sel.update(
+            Point::new(Line(lines - 1), Column(cols.saturating_sub(1))),
+            Side::Right,
+        );
+        term.selection = Some(sel);
+    }
+
+    /// Forget the scrollback (what scrolled off the top).
+    pub fn clear_history(&self) {
+        let mut term = self.term.lock();
+        term.grid_mut().clear_history();
+        term.scroll_display(Scroll::Bottom);
+        term.selection = None;
+    }
+
+    /// New cell size (the font changed) and a grid to match.
+    pub fn set_cell(&mut self, cell: (u32, u32), size: (usize, usize)) {
+        self.cell = cell;
+        self.size = (0, 0);
+        self.resize(size);
     }
 
     pub fn clear_selection(&self) {
