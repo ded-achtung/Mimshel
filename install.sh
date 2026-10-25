@@ -57,37 +57,53 @@ sudo pacman -Syu --needed "${PKGS[@]}"
 ok "Пакеты на месте"
 
 # --- Оформление Colloid: значки, курсор, тема окон --------------------------
-fetch() { # fetch ИМЯ АДРЕС — скачать или обновить исходник в $SRC
-    # Архив без интернета (tools/make-offline.sh) — исходник уже рядом.
-    if [ -d "$ROOT/offline/$1" ]; then
-        [ -d "$SRC/$1" ] || cp -r "$ROOT/offline/$1" "$SRC/$1"
-        return
-    fi
-    if [ -d "$SRC/$1/.git" ]; then
-        git -C "$SRC/$1" pull --ff-only -q || true
+# Pinned commits of the third-party sources (COLLOID_*_URL/REV).
+. "$ROOT/packaging/third-party.sh"
+
+# Commit a source copy in $SRC is at: git HEAD, or the marker that
+# tools/make-offline.sh leaves in copies without .git.
+rev_of() {
+    if [ -d "$1/.git" ]; then
+        git -C "$1" rev-parse HEAD 2>/dev/null
     else
-        git clone -q --depth 1 "$2" "$SRC/$1"
+        cat "$1/.mimshel-rev" 2>/dev/null
     fi
+}
+fetch() { # fetch NAME URL REV — put exactly commit REV of NAME into $SRC/NAME
+    local dir="$SRC/$1"
+    [ "$(rev_of "$dir")" = "$3" ] && return
+    rm -rf "$dir"
+    if [ -d "$ROOT/offline/$1" ]; then
+        # Offline archive (tools/make-offline.sh): the source is already here.
+        [ "$(cat "$ROOT/offline/$1/.mimshel-rev" 2>/dev/null)" = "$3" ] \
+            || fail "В архиве другая версия $1, чем ждёт установщик. Соберите архив заново: tools/make-offline.sh"
+        cp -r "$ROOT/offline/$1" "$dir"
+    else
+        git init -q "$dir"
+        git -C "$dir" fetch -q --depth 1 "$2" "$3"
+        git -C "$dir" checkout -q --detach FETCH_HEAD
+    fi
+    [ "$(rev_of "$dir")" = "$3" ] || fail "$1: скачалась не та версия (ждали $3)."
 }
 if [ -d "$HOME/.local/share/icons/Colloid-Dark" ]; then
     ok "Значки Colloid уже стоят"
 else
     step "Значки Colloid"
-    fetch Colloid-icon-theme https://github.com/vinceliuice/Colloid-icon-theme.git
+    fetch Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
     (cd "$SRC/Colloid-icon-theme" && ./install.sh)
 fi
 if [ -d "$HOME/.local/share/icons/Colloid-cursors" ]; then
     ok "Курсор Colloid уже стоит"
 else
     step "Курсор Colloid"
-    fetch Colloid-icon-theme https://github.com/vinceliuice/Colloid-icon-theme.git
+    fetch Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
     (cd "$SRC/Colloid-icon-theme/cursors" && ./install.sh)
 fi
 if [ -d "$HOME/.themes/Colloid-Dark" ]; then
     ok "Тема окон Colloid уже стоит"
 else
     step "Тема окон Colloid (тёмная, обычные кнопки окна)"
-    fetch Colloid-gtk-theme https://github.com/vinceliuice/Colloid-gtk-theme.git
+    fetch Colloid-gtk-theme "$COLLOID_GTK_URL" "$COLLOID_GTK_REV"
     (cd "$SRC/Colloid-gtk-theme" && ./install.sh -c dark --tweaks normal)
 fi
 
