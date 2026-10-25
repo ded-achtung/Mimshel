@@ -208,6 +208,7 @@ pub fn about() -> About {
     }
     rows.extend([
         ("Диск", disk),
+        ("Оболочка", format!("Mimshel {}", env!("CARGO_PKG_VERSION"))),
         ("Экран", screen),
         (
             "Ядро",

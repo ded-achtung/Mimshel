@@ -31,6 +31,7 @@ const HELP: &str = "\
                         упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
   mimshel snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
+  mimshel --version       версия программы
   mimshel terminal [ПАПКА] свой терминал (отдельное окно; оболочка — в папке);
                         mimshel terminal -e ПРОГРАММА … — запустить программу в нём
   mimshel folder [ПАПКА…] открыть папку в окне (по умолчанию — домашнюю; через службу,
@@ -120,6 +121,9 @@ fn main() {
         }
         Some("backups") => std::process::exit(setup::backups()),
         Some("restore") => std::process::exit(setup::restore(&args[1..])),
+        Some("--version" | "-V" | "version") => {
+            println!("mimshel {}", env!("CARGO_PKG_VERSION"));
+        }
         Some("terminal") => {
             let (dir, command) = term_ui::parse_args(&args[1..]);
             std::process::exit(term_ui::run(dir, command))
