@@ -169,8 +169,15 @@ pub fn user_name() -> String {
 /// `exe` — наша программа (запускается как `mimshel lock-screen`).
 /// Возвращает код выхода экрана блокировки (0 — разблокировали паролем).
 pub fn supervise(exe: &Path) -> i32 {
-    // Экран уже показан (например, блокировка по бездействию и команда из
-    // меню одновременно) — второй не нужен.
+    // Only one guard at a time. Before sleep both xss-lock and the Xfce power
+    // manager ask to lock at the same moment; checking the process list let
+    // both through (two lock screens, the password asked twice). The kernel
+    // gives an abstract socket name to one process only and frees it when the
+    // process ends, even by a crash.
+    let Some(_guard) = single_guard(&guard_name()) else {
+        return 0;
+    };
+    // A lock screen already shown without a guard (started by hand) — no second one.
     if LOCK_SCREEN.iter().any(|name| running(name)) {
         return 0;
     }
@@ -192,6 +199,20 @@ pub fn supervise(exe: &Path) -> i32 {
             }
         },
     )
+}
+
+/// Name of the guard's «lock»: one per user and display.
+fn guard_name() -> String {
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    format!("mimshel-lock-guard-{}-{display}", crate::sys::uid())
+}
+
+/// Take the guard «lock» (an abstract Unix socket name); `None` — another
+/// guard holds it. Released when the returned listener is dropped.
+fn single_guard(name: &str) -> Option<std::os::unix::net::UnixListener> {
+    use std::os::linux::net::SocketAddrExt;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).ok()?;
+    std::os::unix::net::UnixListener::bind_addr(&addr).ok()
 }
 
 fn supervise_with(
@@ -258,6 +279,21 @@ mod tests {
             |n, _| retries = n,
         );
         assert_eq!((result, attempts, retries), (0, 151, 150));
+    }
+
+    #[test]
+    fn only_one_guard_at_a_time() {
+        let name = format!("mimshel-test-guard-{}", std::process::id());
+        let first = single_guard(&name).expect("the first guard takes the lock");
+        assert!(
+            single_guard(&name).is_none(),
+            "the second one finds it taken"
+        );
+        drop(first);
+        assert!(
+            single_guard(&name).is_some(),
+            "released when the first ends"
+        );
     }
 
     #[test]
