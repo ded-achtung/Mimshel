@@ -14,6 +14,7 @@ mod menubar_ui;
 mod notify_ui;
 mod setup;
 mod status;
+mod term_ui;
 mod ui;
 
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ const HELP: &str = "\
                         упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
   mimshel snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
+  mimshel terminal [ПАПКА] свой терминал (отдельное окно; оболочка — в папке)
   mimshel folder [ПАПКА…] открыть папку в окне (по умолчанию — домашнюю; через службу,
                         без неё или при parts.folders = thunar — в Thunar)
   mimshel test-apps       список программ, которые увидит окно «Программы»
@@ -116,6 +118,9 @@ fn main() {
         }
         Some("backups") => std::process::exit(setup::backups()),
         Some("restore") => std::process::exit(setup::restore(&args[1..])),
+        Some("terminal") => {
+            std::process::exit(term_ui::run(args.get(1).map(std::path::PathBuf::from)))
+        }
         Some("folder") => {
             for path in folder_ui::folder_args(&args[1..]) {
                 if !ui::ask_daemon_folder(&path) {

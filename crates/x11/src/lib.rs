@@ -14,7 +14,7 @@ mod shm;
 mod windows;
 
 pub use app_window::AppWindow;
-pub use clipboard::{clipboard_files, copy_files, percent_decode};
+pub use clipboard::{clipboard_files, clipboard_text, copy_files, copy_text, percent_decode};
 pub use desktop::DesktopWindow;
 pub use dnd::DragTarget;
 pub use dock::DockWindow;
@@ -965,6 +965,18 @@ impl Keymap {
             key::Page_Up | key::KP_Page_Up => Key::PageUp,
             key::Page_Down | key::KP_Page_Down => Key::PageDown,
             key::F2 => Key::F2,
+            key::F1 => Key::F(1),
+            key::F3 => Key::F(3),
+            key::F4 => Key::F(4),
+            key::F5 => Key::F(5),
+            key::F6 => Key::F(6),
+            key::F7 => Key::F(7),
+            key::F8 => Key::F(8),
+            key::F9 => Key::F(9),
+            key::F10 => Key::F(10),
+            key::F11 => Key::F(11),
+            key::F12 => Key::F(12),
+            key::Insert | key::KP_Insert => Key::Insert,
             key::XF86_AudioRaiseVolume => Key::VolumeUp,
             key::XF86_AudioLowerVolume => Key::VolumeDown,
             key::XF86_AudioMute | key::XF86_AudioMicMute => Key::VolumeMute,

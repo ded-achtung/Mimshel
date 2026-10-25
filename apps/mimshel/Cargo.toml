@@ -20,6 +20,7 @@ mimshel-widgets = { path = "../../crates/widgets" }
 mimshel-setup = { path = "../../crates/setup" }
 mimshel-desktop = { path = "../../crates/desktop" }
 mimshel-folder = { path = "../../crates/folder" }
+mimshel-terminal = { path = "../../crates/terminal" }
 toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 inotify = { version = "0.11.5", default-features = false }
 mimshel-wallpaper = { path = "../../crates/wallpaper" }

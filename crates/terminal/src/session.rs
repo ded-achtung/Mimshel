@@ -1,0 +1,349 @@
+//! Сеанс терминала: оболочка в псевдотерминале (PTY), ядро Alacritty, которое
+//! разбирает её вывод, и всё, что с ним делают: ввод, смена размера,
+//! прокрутка истории, выделение, мышь для программ (htop, vim), ответы
+//! программам (какой цвет, какой размер).
+//!
+//! Чтение PTY идёт в потоке Alacritty; он сообщает о событиях через
+//! [`Proxy`]: событие — в очередь и `wake` (окно просыпается и зовёт
+//! [`Session::poll`]).
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
+
+use alacritty_terminal::event::Notify;
+use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
+use alacritty_terminal::event_loop::{EventLoop, Notifier};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::test::TermSize;
+use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::tty;
+use tiny_skia::Pixmap;
+
+use crate::glyphs::Glyphs;
+use crate::palette::Palette;
+
+/// Что сеанс сообщает окну.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TermEvent {
+    /// Появилось новое — перерисовать.
+    Redraw,
+    Title(String),
+    ResetTitle,
+    /// Программа просит положить текст в буфер обмена (OSC 52: Claude Code,
+    /// tmux, vim по SSH). Читать буфер программам не даём.
+    Copy(String),
+    Bell,
+    /// Оболочка закончила работу — окно закрыть.
+    Exit,
+}
+
+/// Куда ядро Alacritty шлёт события.
+#[derive(Clone)]
+pub struct Proxy {
+    tx: Sender<Event>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl EventListener for Proxy {
+    fn send_event(&self, event: Event) {
+        let _ = self.tx.send(event);
+        (self.wake)();
+    }
+}
+
+pub struct Session {
+    term: Arc<FairMutex<Term<Proxy>>>,
+    notifier: Notifier,
+    events: Receiver<Event>,
+    cell: (u32, u32),
+    size: (usize, usize),
+    /// Палитра — для ответов на «какой у тебя цвет» (OSC 10/11/4).
+    palette: Palette,
+}
+
+impl Session {
+    /// Запустить оболочку пользователя в сетке `cols`×`rows` клеток размером
+    /// `cell` пикселей. `dir` — папка, где она откроется.
+    pub fn spawn(
+        (cols, rows): (usize, usize),
+        cell: (u32, u32),
+        dir: Option<PathBuf>,
+        palette: Palette,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> std::io::Result<Session> {
+        let mut env = std::collections::HashMap::new();
+        // Программы узнают по TERM, что умеет терминал: умеем всё, что xterm, и 24-битный цвет.
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        env.insert("COLORTERM".to_string(), "truecolor".to_string());
+        let options = tty::Options {
+            working_directory: dir,
+            drain_on_exit: true,
+            env,
+            ..tty::Options::default()
+        };
+        let pty = tty::new(&options, window_size((cols, rows), cell), 0)?;
+        let (tx, events) = mpsc::channel();
+        let proxy = Proxy {
+            tx,
+            wake: Arc::new(wake),
+        };
+        let term = Term::new(Config::default(), &TermSize::new(cols, rows), proxy.clone());
+        let term = Arc::new(FairMutex::new(term));
+        let event_loop = EventLoop::new(term.clone(), proxy, pty, true, false)?;
+        let notifier = Notifier(event_loop.channel());
+        event_loop.spawn();
+        Ok(Session {
+            term,
+            notifier,
+            events,
+            cell,
+            size: (cols, rows),
+            palette,
+        })
+    }
+
+    /// Разобрать накопившиеся события ядра: на просьбы программ ответить
+    /// сразу, остальное — окну.
+    pub fn poll(&mut self) -> Vec<TermEvent> {
+        let mut out = Vec::new();
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {
+                    out.push(TermEvent::Redraw);
+                }
+                Event::Title(t) => out.push(TermEvent::Title(t)),
+                Event::ResetTitle => out.push(TermEvent::ResetTitle),
+                Event::ClipboardStore(_, text) => out.push(TermEvent::Copy(text)),
+                // Читать буфер обмена программе не даём (ядро и так не просит,
+                // пока OSC 52 только на копирование) — на всякий случай пусто.
+                Event::ClipboardLoad(..) => {}
+                Event::PtyWrite(text) => self.write(text.into_bytes()),
+                Event::ColorRequest(index, format) => {
+                    let term = self.term.lock();
+                    let rgb = self.palette.resolve(
+                        alacritty_terminal::vte::ansi::Color::Indexed(index.min(255) as u8),
+                        term.colors(),
+                    );
+                    let rgb = match index {
+                        256 => self.palette.foreground,
+                        257 => self.palette.background,
+                        258 => self.palette.cursor,
+                        _ => rgb,
+                    };
+                    drop(term);
+                    let reply = format(alacritty_terminal::vte::ansi::Rgb {
+                        r: rgb[0],
+                        g: rgb[1],
+                        b: rgb[2],
+                    });
+                    self.write(reply.into_bytes());
+                }
+                Event::TextAreaSizeRequest(format) => {
+                    let reply = format(window_size(self.size, self.cell));
+                    self.write(reply.into_bytes());
+                }
+                Event::Bell => out.push(TermEvent::Bell),
+                Event::Exit | Event::ChildExit(_) => out.push(TermEvent::Exit),
+            }
+        }
+        out
+    }
+
+    /// Отдать программе байты (нажатия, вставку).
+    pub fn write(&self, bytes: Vec<u8>) {
+        self.notifier.notify(bytes);
+    }
+
+    /// Нажатие или вставка: вернуться к последним строкам и снять выделение.
+    pub fn input(&self, bytes: Vec<u8>) {
+        {
+            let mut term = self.term.lock();
+            term.scroll_display(Scroll::Bottom);
+            term.selection = None;
+        }
+        self.write(bytes);
+    }
+
+    /// Вставить текст: в режиме «скобок» (bash, vim) — в скобках, чтобы
+    /// программа не выполнила строки по одной.
+    pub fn paste(&self, text: &str) {
+        let text = text.replace("\r\n", "\r").replace('\n', "\r");
+        let bytes = if self.mode().contains(TermMode::BRACKETED_PASTE) {
+            // Внутри вставки не должно быть конца скобок — иначе её можно «закрыть».
+            let safe = text.replace("\x1b[201~", "");
+            format!("\x1b[200~{safe}\x1b[201~").into_bytes()
+        } else {
+            text.into_bytes()
+        };
+        self.input(bytes);
+    }
+
+    pub fn mode(&self) -> TermMode {
+        *self.term.lock().mode()
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        self.size
+    }
+
+    /// Окно сменило размер — сетка и PTY (программа получит SIGWINCH).
+    pub fn resize(&mut self, size: (usize, usize)) {
+        if size == self.size {
+            return;
+        }
+        self.size = size;
+        self.term.lock().resize(TermSize::new(size.0, size.1));
+        self.notifier.on_resize(window_size(size, self.cell));
+    }
+
+    /// Прокрутить историю на `lines` строк (вверх — больше нуля).
+    pub fn scroll(&self, lines: i32) {
+        self.term.lock().scroll_display(Scroll::Delta(lines));
+    }
+
+    pub fn scroll_page(&self, up: bool) {
+        self.term
+            .lock()
+            .scroll_display(if up { Scroll::PageUp } else { Scroll::PageDown });
+    }
+
+    /// Точка сетки под клеткой экрана (с учётом прокрутки истории).
+    fn point(&self, col: usize, row: usize) -> Point {
+        let offset = self.term.lock().grid().display_offset() as i32;
+        Point::new(Line(row as i32 - offset), Column(col))
+    }
+
+    /// Начать выделение: `clicks` — 1 (знаки), 2 (слово), 3 (строки).
+    pub fn select_start(&self, (col, row): (usize, usize), clicks: u8, right_half: bool) {
+        let point = self.point(col, row);
+        let kind = match clicks {
+            2 => SelectionType::Semantic,
+            3.. => SelectionType::Lines,
+            _ => SelectionType::Simple,
+        };
+        let side = if right_half { Side::Right } else { Side::Left };
+        self.term.lock().selection = Some(Selection::new(kind, point, side));
+    }
+
+    pub fn select_update(&self, (col, row): (usize, usize), right_half: bool) {
+        let point = self.point(col, row);
+        let side = if right_half { Side::Right } else { Side::Left };
+        if let Some(sel) = &mut self.term.lock().selection {
+            sel.update(point, side);
+        }
+    }
+
+    pub fn clear_selection(&self) {
+        self.term.lock().selection = None;
+    }
+
+    /// Выделенный текст (пустое выделение — `None`).
+    pub fn selection_text(&self) -> Option<String> {
+        self.term
+            .lock()
+            .selection_to_string()
+            .filter(|t| !t.is_empty())
+    }
+
+    /// Программа сама хочет мышь (htop, vim с `mouse=a`, mc).
+    pub fn mouse_wanted(&self) -> bool {
+        self.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    /// Сообщить программе о мыши (SGR: `ESC [ < кнопка ; столбец ; строка M/m`).
+    /// `button`: 0–2 — кнопки, 64/65 — колёсико; `drag` — движение с нажатой.
+    pub fn mouse_report(&self, button: u8, (col, row): (usize, usize), pressed: bool, drag: bool) {
+        let mode = self.mode();
+        if !mode.contains(TermMode::SGR_MOUSE) {
+            // Старый способ — только нажатия в пределах 223 клеток.
+            if !pressed || col > 222 || row > 222 {
+                return;
+            }
+            let b = button + if drag { 32 } else { 0 };
+            self.write(vec![
+                0x1b,
+                b'[',
+                b'M',
+                32 + b,
+                33 + col as u8,
+                33 + row as u8,
+            ]);
+            return;
+        }
+        let b = button + if drag { 32 } else { 0 };
+        let end = if pressed { 'M' } else { 'm' };
+        self.write(format!("\x1b[<{b};{};{}{end}", col + 1, row + 1).into_bytes());
+    }
+
+    /// Колёсико: в истории — прокрутка; программе с мышью — сообщить; на
+    /// втором экране (less, man) без мыши — стрелки, как в других терминалах.
+    pub fn wheel(&self, up: bool, cell: (usize, usize)) {
+        let mode = self.mode();
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            self.mouse_report(if up { 64 } else { 65 }, cell, true, false);
+        } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+            let arrow: &[u8] = match (up, mode.contains(TermMode::APP_CURSOR)) {
+                (true, true) => b"\x1bOA",
+                (true, false) => b"\x1b[A",
+                (false, true) => b"\x1bOB",
+                (false, false) => b"\x1b[B",
+            };
+            self.write(arrow.repeat(3));
+        } else {
+            self.scroll(if up { 3 } else { -3 });
+        }
+    }
+
+    /// Кадр `w`×`h` пикселей.
+    pub fn render(&self, glyphs: &mut Glyphs, size: (u32, u32), focused: bool) -> Option<Pixmap> {
+        let term = self.term.lock();
+        crate::screen::render(&term, glyphs, &self.palette, size, focused)
+    }
+
+    /// Сколько строк в сетке (для проверок).
+    pub fn screen_lines(&self) -> usize {
+        self.term.lock().screen_lines()
+    }
+}
+
+fn window_size((cols, rows): (usize, usize), (cw, ch): (u32, u32)) -> WindowSize {
+    WindowSize {
+        num_lines: rows as u16,
+        num_cols: cols as u16,
+        cell_width: cw as u16,
+        cell_height: ch as u16,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Настоящий сеанс: оболочка печатает — сетка это видит, OSC 52 доходит.
+    #[test]
+    fn shell_output_and_osc52() {
+        let mut s = Session::spawn((40, 5), (8, 18), None, Palette::default(), || {}).unwrap();
+        s.input(b"printf 'privet\\033]52;c;0J/RgNC40LLQtdGC\\a'; echo\r".to_vec());
+        let start = Instant::now();
+        let mut copied = None;
+        while start.elapsed() < Duration::from_secs(5) && copied.is_none() {
+            for e in s.poll() {
+                if let TermEvent::Copy(t) = e {
+                    copied = Some(t);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(copied.as_deref(), Some("Привет"), "OSC 52 — в буфер обмена");
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0);
+        let pm = s.render(&mut glyphs, (400, 120), true).unwrap();
+        assert_eq!((pm.width(), pm.height()), (400, 120));
+        s.resize((60, 8));
+        assert_eq!(s.screen_lines(), 8);
+    }
+}

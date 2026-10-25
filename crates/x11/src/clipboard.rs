@@ -5,6 +5,11 @@
 //! - [`copy_files`] — «Копировать»/«Вырезать» на столе: поток держит буфер и
 //!   отдаёт список тем же видом, пока буфер не займёт кто-то другой.
 //!
+//!
+//! И просто текст (для терминала): [`copy_text`] и [`clipboard_text`] — в
+//! обычном буфере (CLIPBOARD, Ctrl+C/V) и в выделении (PRIMARY, вставка
+//! средней кнопкой мыши).
+//!
 //! Отдельные соединения с X: ожидание ответов не мешает основному потоку
 //! событий службы.
 
@@ -162,6 +167,123 @@ fn serve(paths: &[PathBuf], cut: bool) -> crate::Result<()> {
             _ => {}
         }
     }
+}
+
+/// Положить текст в буфер обмена (`primary` — в выделение, для вставки
+/// средней кнопкой). Поток отвечает на просьбы вставить, пока буфер наш.
+pub fn copy_text(text: String, primary: bool) {
+    std::thread::spawn(move || {
+        if let Err(e) = serve_text(&text, primary) {
+            eprintln!("Буфер обмена: {e}");
+        }
+    });
+}
+
+fn serve_text(text: &str, primary: bool) -> crate::Result<()> {
+    let (conn, screen) = RustConnection::connect(None)?;
+    let root = conn.setup().roots[screen].root;
+    let window = conn.generate_id()?;
+    conn.create_window(
+        COPY_DEPTH_FROM_PARENT,
+        window,
+        root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        0,
+        &CreateWindowAux::new(),
+    )?;
+    let atom = |name: &str| -> crate::Result<Atom> {
+        Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
+    };
+    let selection = if primary {
+        AtomEnum::PRIMARY.into()
+    } else {
+        atom("CLIPBOARD")?
+    };
+    let targets = atom("TARGETS")?;
+    let utf8 = atom("UTF8_STRING")?;
+    let plain = atom("text/plain;charset=utf-8")?;
+    let text_atom = atom("TEXT")?;
+    let string: Atom = AtomEnum::STRING.into();
+    conn.set_selection_owner(window, selection, CURRENT_TIME)?;
+    if conn.get_selection_owner(selection)?.reply()?.owner != window {
+        return Err("буфер обмена не удалось занять".into());
+    }
+    loop {
+        match conn.wait_for_event()? {
+            XEvent::SelectionClear(_) => return Ok(()),
+            XEvent::SelectionRequest(req) => {
+                let data = if req.target == targets {
+                    Some((
+                        AtomEnum::ATOM.into(),
+                        Data::Atoms(vec![targets, utf8, plain, text_atom, string]),
+                    ))
+                } else if [utf8, plain, text_atom, string].contains(&req.target) {
+                    Some((req.target, Data::Text(text.to_string())))
+                } else {
+                    None
+                };
+                answer(&conn, &req, data)?;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Текст из буфера обмена (`primary` — из выделения). `None` — пусто или
+/// владелец не ответил.
+pub fn clipboard_text(primary: bool) -> Option<String> {
+    let (conn, screen) = RustConnection::connect(None).ok()?;
+    let root = conn.setup().roots.get(screen)?.root;
+    let window = conn.generate_id().ok()?;
+    conn.create_window(
+        COPY_DEPTH_FROM_PARENT,
+        window,
+        root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        0,
+        &CreateWindowAux::new(),
+    )
+    .ok()?;
+    let atom = |name: &str| -> Option<u32> {
+        Some(
+            conn.intern_atom(false, name.as_bytes())
+                .ok()?
+                .reply()
+                .ok()?
+                .atom,
+        )
+    };
+    let selection = if primary {
+        AtomEnum::PRIMARY.into()
+    } else {
+        atom("CLIPBOARD")?
+    };
+    let into = atom("MIMSHEL_CLIPBOARD")?;
+    for target in [atom("UTF8_STRING")?, AtomEnum::STRING.into()] {
+        conn.convert_selection(window, selection, target, into, CURRENT_TIME)
+            .ok()?;
+        conn.flush().ok()?;
+        if !wait_notify(&conn) {
+            continue;
+        }
+        let reply = conn
+            .get_property(true, window, into, AtomEnum::ANY, 0, 1 << 22)
+            .ok()?
+            .reply()
+            .ok()?;
+        return Some(String::from_utf8_lossy(&reply.value).into_owned());
+    }
+    None
 }
 
 /// Что отдать просящей программе.
