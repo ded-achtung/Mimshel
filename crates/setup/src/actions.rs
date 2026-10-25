@@ -109,7 +109,8 @@ fn zenity(args: &[&str]) -> bool {
     out.status.success()
 }
 
-fn confirm(title: &str, text: &str, ok: &str, icon: &str) -> bool {
+/// Вопрос «да/нет» окном zenity (`text` — разметка Pango). `true` — нажали `ok`.
+pub fn confirm(title: &str, text: &str, ok: &str, icon: &str) -> bool {
     zenity(&[
         "--question",
         &format!("--title={title}"),

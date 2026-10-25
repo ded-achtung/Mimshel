@@ -154,6 +154,20 @@ pub fn scan_with(dir: &Path, mime: &MimeDb, locale: Option<&Locale>, hidden: boo
                 });
             }
             let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+            // Чужой ярлык (из архива, из загрузок) — под своим именем файла и
+            // значком ярлыка: подпись и значок из файла выдали бы его за документ.
+            if file_name.ends_with(".desktop") && !trusted_launcher(&path) {
+                return Some(Item {
+                    path,
+                    name: file_name,
+                    kind: Kind::Launcher,
+                    icons: vec![
+                        "application-x-desktop".into(),
+                        "application-x-executable".into(),
+                    ],
+                    size,
+                });
+            }
             if file_name.ends_with(".desktop")
                 && let Ok(text) = std::fs::read_to_string(&path)
             {
@@ -187,6 +201,15 @@ pub fn scan_with(dir: &Path, mime: &MimeDb, locale: Option<&Locale>, hidden: boo
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     items
+}
+
+/// Ярлыку можно доверять, если у файла есть право на выполнение (как в Xfce и
+/// GNOME): скачанный или распакованный файл его обычно не получает, а свой
+/// ярлык человек помечает сам — или соглашается запустить, и пометку ставит
+/// программа.
+pub fn trusted_launcher(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 /// Свободное имя в папке `dir`: `имя`, `имя 2`, `имя 3`… (у файла — перед
@@ -271,15 +294,37 @@ mod tests {
             "[Desktop Entry]\nName=VLC\nName[ru]=Медиаплеер\nIcon=vlc\nExec=vlc\n",
         )
         .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                dir.join("vlc.desktop"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        // Без права на выполнение — притворяется документом: не верим.
+        std::fs::write(
+            dir.join("счёт.desktop"),
+            "[Desktop Entry]\nName=Счёт.pdf\nIcon=application-pdf\nExec=sh -c x\n",
+        )
+        .unwrap();
         let ru = Locale::parse("ru_RU.UTF-8");
         let items = scan(&dir, &db(), ru.as_ref());
         let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(
             names,
-            ["Проекты", "Анкета.pdf", "заметка.txt", "Медиаплеер"]
+            [
+                "Проекты",
+                "Анкета.pdf",
+                "заметка.txt",
+                "Медиаплеер",
+                "счёт.desktop"
+            ]
         );
         assert_eq!(items[0].kind, Kind::Folder);
         assert_eq!(items[3].icons[0], "vlc");
+        assert_eq!(items[4].kind, Kind::Launcher);
+        assert_eq!(items[4].icons[0], "application-x-desktop");
         assert_eq!(free_name(&dir, "Проекты"), dir.join("Проекты 2"));
         assert_eq!(free_name(&dir, "заметка.txt"), dir.join("заметка 2.txt"));
         assert_eq!(free_name(&dir, "новый.txt"), dir.join("новый.txt"));

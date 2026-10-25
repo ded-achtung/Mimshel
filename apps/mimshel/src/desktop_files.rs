@@ -12,7 +12,8 @@ use std::time::Duration;
 use inotify::{Inotify, WatchMask};
 use std::collections::HashMap;
 
-use mimshel_desktop::files::{Item, Kind, MimeDb, free_name, scan};
+use mimshel_apps::entry::DesktopEntry;
+use mimshel_desktop::files::{Item, Kind, MimeDb, free_name, scan, trusted_launcher};
 use mimshel_desktop::icon_grid::Slot;
 
 use crate::desktop_ui::DesktopMsg;
@@ -90,7 +91,8 @@ pub fn watch(dir: PathBuf, tx: Sender<Msg>) {
 pub fn open(item: &Item) {
     let path = item.path.display().to_string();
     match item.kind {
-        Kind::Launcher => spawn(&["gio", "launch", &path], None),
+        Kind::Launcher if trusted_launcher(&item.path) => spawn(&["gio", "launch", &path], None),
+        Kind::Launcher => launch_untrusted(item.path.clone()),
         // gio не нашёл программу (бывает, когда список «тип → программа» в
         // ~/.local/share/applications устарел) — пробуем xdg-open.
         _ => spawn(
@@ -104,6 +106,54 @@ pub fn open(item: &Item) {
             None,
         ),
     }
+}
+
+/// Ярлык без права на выполнение: сначала спросить, показав настоящую
+/// команду. Согласились — пометить его выполняемым (больше не спросим, как
+/// «Пометить исполняемым» в Xfce) и запустить.
+fn launch_untrusted(path: PathBuf) {
+    std::thread::spawn(move || {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let exec = DesktopEntry::parse(&text)
+            .string("Exec")
+            .unwrap_or_default();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let question = format!(
+            "«{}» — ярлык программы, а не документ.\n\
+             Он выполнит команду:\n\n<tt>{}</tt>\n\n\
+             Запускайте, только если доверяете тому, откуда он взялся.",
+            pango_escape(&name),
+            pango_escape(&exec),
+        );
+        if !mimshel_setup::actions::confirm(
+            "Запустить ярлык?",
+            &question,
+            "Запустить",
+            "dialog-warning",
+        ) {
+            return;
+        }
+        if let Err(e) = mark_executable(&path) {
+            error(&format!("Ярлык не помечен выполняемым: {e}"));
+            return;
+        }
+        spawn(&["gio", "launch", &path.display().to_string()], None);
+    });
+}
+
+/// Добавить право на выполнение тем, кому разрешено чтение (`chmod +x`).
+fn mark_executable(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path)?.permissions().mode();
+    let mode = mode | ((mode & 0o444) >> 2);
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
+/// Текст для разметки Pango (окна zenity): `<`, `>`, `&` — не теги.
+fn pango_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// В корзину (её видит и корзина в доке).
@@ -384,6 +434,34 @@ pub fn spawn(args: &[&str], dir: Option<&Path>) {
 #[cfg(test)]
 mod transfer_tests {
     use super::*;
+
+    #[test]
+    fn untrusted_launcher_becomes_trusted_after_consent() {
+        use std::os::unix::fs::PermissionsExt;
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mimshel-launcher-{}-{id}.desktop",
+            std::process::id()
+        ));
+        std::fs::write(&path, "[Desktop Entry]\nExec=true\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(!trusted_launcher(&path));
+        mark_executable(&path).unwrap();
+        // Право на выполнение — только тем, кто может читать.
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert!(trusted_launcher(&path));
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            pango_escape("sh -c 'a <b> && c'"),
+            "sh -c 'a &lt;b&gt; &amp;&amp; c'"
+        );
+    }
 
     #[test]
     fn move_and_copy_never_replace_an_existing_file() {
