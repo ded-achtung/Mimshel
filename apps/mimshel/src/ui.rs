@@ -139,6 +139,14 @@ pub fn load_config() -> Config {
     }
 }
 
+/// Запустить программу: на видеокарте NVIDIA, если так выбрано в настройках
+/// или просит ярлык. Настройки читаются заново — галочку в доке могли
+/// переключить только что.
+pub fn launch_app(app: &App, terminal: &[String]) -> std::io::Result<u32> {
+    let dgpu = load_config().on_dgpu(&app.id, app.prefers_dgpu);
+    app.launch(terminal, dgpu)
+}
+
 pub fn config_store(path: PathBuf) -> crate::config_store::Store {
     let good = if mimshel_core::names::flag("CONFIG") {
         None
@@ -871,7 +879,7 @@ impl Ui<'_> {
             Action::Close => self.hide()?,
             Action::Launch(app) => {
                 self.hide()?;
-                match app.launch(&self.terminal) {
+                match launch_app(&app, &self.terminal) {
                     Ok(_) => {
                         if let Some(dock) = &mut self.dock {
                             dock.launched(&app);

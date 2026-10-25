@@ -12,7 +12,7 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use mimshel_apps::App;
-use mimshel_core::config::{Config, DockHide, set_dock_apps};
+use mimshel_core::config::{Config, DockHide, set_dgpu_apps, set_dock_apps};
 use mimshel_dock::{
     Action, Dock, Look, Menu, MenuCommand, MenuResult, POOF, Preview, PreviewCard, Rect, THUMB_H,
     THUMB_W, poof_image, should_hide, thumbnail,
@@ -109,6 +109,12 @@ impl DockUi {
             terminal: config.terminal.clone(),
             screen: (u32::from(sw), u32::from(sh)),
         };
+        if mimshel_apps::gpu::offload_available() {
+            ui.dock.set_dgpu(Some((
+                config.dgpu_apps.clone(),
+                config.no_dgpu_apps.clone(),
+            )));
+        }
         ui.dock.set_trash(trash_full());
         watch_trash(ui.tx.clone());
         d.watch_root()?;
@@ -612,7 +618,7 @@ impl DockUi {
         match action {
             Action::Nothing => {}
             Action::Launch(app) => {
-                if let Err(e) = app.launch(&self.terminal) {
+                if let Err(e) = crate::ui::launch_app(&app, &self.terminal) {
                     eprintln!("Не удалось запустить «{}»: {e}", app.name);
                 }
                 self.start_ticking();
@@ -630,6 +636,19 @@ impl DockUi {
             }
             Action::OpenTrash => trash_call("DisplayTrash"),
             Action::EmptyTrash => trash_call("EmptyTrash"),
+            Action::ToggleDgpu { app_id, prefers } => {
+                let config = crate::ui::load_config();
+                let (yes, no) = config.toggled_dgpu(&app_id, prefers);
+                if let Some(path) = crate::ui::config_path()
+                    && let Err(e) = save_dgpu(&path, &yes, &no)
+                {
+                    eprintln!(
+                        "Не удалось сохранить выбор видеокарты в {}: {e}",
+                        path.display()
+                    );
+                }
+                self.dock.set_dgpu(Some((yes, no)));
+            }
             Action::Pinned(list) => {
                 // Полоса стала шире или уже — обновить резерв места и скрытие.
                 self.place(d)?;
@@ -956,6 +975,18 @@ fn painted_columns(pm: &tiny_skia::Pixmap) -> Option<(u32, u32)> {
         }
     }
     (x0 < x1).then_some((x0 as u32, x1 as u32))
+}
+
+/// Записать списки `[apps] dgpu` и `no_dgpu`; остальное в файле не меняется.
+fn save_dgpu(path: &Path, yes: &[String], no: &[String]) -> std::io::Result<()> {
+    crate::ui::config_store(path.to_path_buf()).edit(|text| {
+        set_dgpu_apps(text, yes, no).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "в файле ошибка, исправьте её — тогда выбор сохранится",
+            )
+        })
+    })
 }
 
 /// Записать закреплённые значки в `[dock] apps` файла настроек; остальное

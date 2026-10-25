@@ -20,7 +20,7 @@ pub use preview::{Preview, PreviewCard, THUMB_H, THUMB_W, thumbnail};
 use std::time::{Duration, Instant};
 
 use mimshel_apps::App;
-use mimshel_core::config::{DockHide, dock_entry, dock_entry_matches};
+use mimshel_core::config::{DockHide, dgpu_wanted, dock_entry, dock_entry_matches};
 use mimshel_core::windows::WindowInfo;
 use tiny_skia::Pixmap;
 
@@ -41,6 +41,11 @@ pub enum Action {
     Close(Vec<u32>),
     /// Закреплённые значки поменялись — сохранить новый список в настройки.
     Pinned(Vec<String>),
+    /// Переключили «на видеокарте NVIDIA» у программы (ярлык, просит ли он сам).
+    ToggleDgpu {
+        app_id: String,
+        prefers: bool,
+    },
     OpenTrash,
     /// Очистить корзину — только с подтверждением.
     EmptyTrash,
@@ -59,6 +64,9 @@ pub struct Dock {
     pub(crate) look: Look,
     apps: Vec<App>,
     pinned: Vec<String>,
+    /// Есть ли видеокарта NVIDIA для запуска программ и списки `[apps] dgpu`,
+    /// `no_dgpu` — для пункта меню «Запускать на видеокарте NVIDIA».
+    dgpu: Option<(Vec<String>, Vec<String>)>,
     /// Окна программ (снизу вверх) и номер программы, к которой окно относится.
     windows: Vec<(WindowInfo, Option<usize>)>,
     /// Иконки окон без ярлыка.
@@ -87,6 +95,7 @@ impl Dock {
             look,
             apps,
             pinned,
+            dgpu: None,
             windows: Vec::new(),
             window_icons: Vec::new(),
             active: None,
@@ -307,6 +316,16 @@ impl Dock {
                 enabled: true,
                 indent: false,
             });
+            if let (Some((yes, no)), Some(app)) = (&self.dgpu, &item.app) {
+                entries.push(MenuEntry {
+                    label: "Запускать на видеокарте NVIDIA".into(),
+                    command: MenuCommand::ToggleDgpu,
+                    checked: dgpu_wanted(yes, no, &app.id, app.prefers_dgpu),
+                    separator_before: false,
+                    enabled: true,
+                    indent: false,
+                });
+            }
         }
         if running {
             entries.push(MenuEntry {
@@ -336,6 +355,13 @@ impl Dock {
                 None => Action::Nothing,
             },
             MenuCommand::Quit => Action::Close(item.windows.clone()),
+            MenuCommand::ToggleDgpu => match &item.app {
+                Some(app) => Action::ToggleDgpu {
+                    app_id: app.id.clone(),
+                    prefers: app.prefers_dgpu,
+                },
+                None => Action::Nothing,
+            },
             MenuCommand::Activate(w) => Action::Activate(w),
             MenuCommand::OpenTrash => Action::OpenTrash,
             MenuCommand::EmptyTrash => Action::EmptyTrash,
@@ -353,6 +379,12 @@ impl Dock {
                 Action::Pinned(self.pinned.clone())
             }
         }
+    }
+
+    /// Видеокарта NVIDIA для запуска программ есть (`Some` — списки `[apps]
+    /// dgpu` и `no_dgpu`) или нет (`None` — пункта в меню нет).
+    pub fn set_dgpu(&mut self, lists: Option<(Vec<String>, Vec<String>)>) {
+        self.dgpu = lists;
     }
 
     /// Над доком открыто меню или миниатюры (тогда подпись над значком не рисуется).
@@ -471,6 +503,7 @@ pub(crate) mod tests {
             terminal: false,
             startup_wm_class: None,
             no_display: false,
+            prefers_dgpu: false,
         }
     }
 

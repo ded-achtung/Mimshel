@@ -38,6 +38,7 @@ pub(crate) fn trash_app(full: bool) -> App {
         terminal: false,
         startup_wm_class: None,
         no_display: false,
+        prefers_dgpu: false,
     }
 }
 

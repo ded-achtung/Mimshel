@@ -73,6 +73,11 @@ pub struct Config {
     /// Программы, которые не показываются в окнах «Программы» и «Поиск»
     /// (остаются установленными и запускаются как раньше).
     pub hide_apps: Vec<String>,
+    /// Программы, которые всегда запускаются на дискретной видеокарте NVIDIA
+    /// (`[apps] dgpu`), и те, что не запускаются на ней, хотя их ярлык просит
+    /// (`[apps] no_dgpu`). Записи — имена ярлыков, как в `[dock] apps`.
+    pub dgpu_apps: Vec<String>,
+    pub no_dgpu_apps: Vec<String>,
     /// Названия программ в строке меню, окне «Программы» и доке:
     /// (идентификатор ярлыка, новое название).
     pub rename_apps: Vec<(String, String)>,
@@ -148,6 +153,8 @@ impl Default for Config {
             ]
             .map(String::from)
             .to_vec(),
+            dgpu_apps: Vec::new(),
+            no_dgpu_apps: Vec::new(),
             rename_apps: [
                 ("thunar", "Проводник"),
                 ("kitty", "Терминал"),
@@ -358,6 +365,12 @@ impl Config {
         if let Some(v) = list("apps", "hide") {
             c.hide_apps = v;
         }
+        if let Some(v) = list("apps", "dgpu") {
+            c.dgpu_apps = v;
+        }
+        if let Some(v) = list("apps", "no_dgpu") {
+            c.no_dgpu_apps = v;
+        }
         if let Some(table) = get("apps", "rename").and_then(|v| v.as_inline_table()) {
             let renames: Vec<(String, String)> = table
                 .iter()
@@ -473,6 +486,10 @@ terminal = {terminal}
 # Служебные программы, которых не видно в AppsPanel и SearchPanel
 # (сами остаются установленными).
 hide = {hide_apps}
+# Программы на видеокарте NVIDIA (ноутбук в гибридном режиме): dgpu — всегда,
+# no_dgpu — никогда, хотя ярлык просит. Меняется и само — меню значка в доке.
+dgpu = {dgpu}
+no_dgpu = {no_dgpu}
 # Названия программ в строке меню, окне «Программы» и доке: ярлык = «Новое имя».
 rename = {rename}
 ",
@@ -499,6 +516,8 @@ rename = {rename}
             screen_off = self.lock_screen_off,
             terminal = list(&self.terminal),
             hide_apps = list(&self.hide_apps),
+            dgpu = list(&self.dgpu_apps),
+            no_dgpu = list(&self.no_dgpu_apps),
             rename = renames_to_toml(&self.rename_apps),
             p_dock = part("dock"),
             p_menubar = part("menubar"),
@@ -562,6 +581,50 @@ pub fn dock_entry(id: &str) -> &str {
 /// и полным именем файла).
 pub fn dock_entry_matches(entry: &str, id: &str) -> bool {
     id == entry || dock_entry(id) == entry
+}
+
+impl Config {
+    /// Запускать ли программу `app_id` на видеокарте NVIDIA: выбор человека,
+    /// иначе — просьба ярлыка (`prefers`).
+    pub fn on_dgpu(&self, app_id: &str, prefers: bool) -> bool {
+        dgpu_wanted(&self.dgpu_apps, &self.no_dgpu_apps, app_id, prefers)
+    }
+
+    /// Списки `[apps] dgpu` и `no_dgpu` после переключения галочки «на
+    /// NVIDIA» у программы `app_id`. Запись в списке — только если выбор
+    /// расходится с просьбой ярлыка (`prefers`).
+    pub fn toggled_dgpu(&self, app_id: &str, prefers: bool) -> (Vec<String>, Vec<String>) {
+        let on = !self.on_dgpu(app_id, prefers);
+        let keep = |list: &[String]| -> Vec<String> {
+            list.iter()
+                .filter(|e| !dock_entry_matches(e, app_id))
+                .cloned()
+                .collect()
+        };
+        let (mut yes, mut no) = (keep(&self.dgpu_apps), keep(&self.no_dgpu_apps));
+        let entry = dock_entry(app_id).to_string();
+        if on && !prefers {
+            yes.push(entry);
+        } else if !on && prefers {
+            no.push(entry);
+        }
+        (yes, no)
+    }
+}
+
+/// [`Config::on_dgpu`] по одним спискам `[apps] dgpu` и `no_dgpu` (они есть
+/// и у дока — для галочки в меню значка).
+pub fn dgpu_wanted(yes: &[String], no: &[String], app_id: &str, prefers: bool) -> bool {
+    let listed = |list: &[String]| list.iter().any(|e| dock_entry_matches(e, app_id));
+    !listed(no) && (prefers || listed(yes))
+}
+
+/// [`set_value`] для `[apps] dgpu` и `no_dgpu`.
+pub fn set_dgpu_apps(text: &str, yes: &[String], no: &[String]) -> Option<String> {
+    let yes: Array = yes.iter().map(String::as_str).collect();
+    let no: Array = no.iter().map(String::as_str).collect();
+    let text = set_value(text, "apps", "dgpu", Value::Array(yes))?;
+    set_value(&text, "apps", "no_dgpu", Value::Array(no))
 }
 
 /// [`set_value`] для `[dock] apps`.
@@ -787,6 +850,11 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "apps.hide",
         "программы, скрытые из окон «Программы» и «Поиск», через запятую",
     ),
+    ("apps.dgpu", "программы на видеокарте NVIDIA, через запятую"),
+    (
+        "apps.no_dgpu",
+        "программы не на NVIDIA, хотя их ярлык просит, через запятую",
+    ),
     (
         "apps.rename",
         "названия программ: «ярлык: Новое имя» через запятую",
@@ -856,7 +924,9 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 .collect(),
         )),
         // Пустой список — ничего не скрывать (и не переименовывать).
-        "apps.hide" => Ok(Value::Array(comma_list(input).into_iter().collect())),
+        "apps.hide" | "apps.dgpu" | "apps.no_dgpu" => {
+            Ok(Value::Array(comma_list(input).into_iter().collect()))
+        }
         "apps.rename" => {
             let mut table = toml_edit::InlineTable::new();
             for (app, name) in parse_renames(input) {
@@ -911,7 +981,10 @@ pub fn toml_error(text: &str) -> Option<String> {
                     || item
                         .as_integer()
                         .is_some_and(|n| (i64::from(min)..=i64::from(max)).contains(&n))
-            } else if key == "dock.apps" || key == "apps.terminal" || key == "apps.hide" {
+            } else if matches!(
+                key.as_str(),
+                "dock.apps" | "apps.terminal" | "apps.hide" | "apps.dgpu" | "apps.no_dgpu"
+            ) {
                 item.as_array().is_some_and(|a| {
                     a.iter().all(|v| {
                         v.as_str()
@@ -1127,6 +1200,30 @@ mod tests {
         assert_eq!(c.dock_hide, DockHide::Smart);
         assert_eq!(c.menubar_height, 28);
         assert_eq!(Config::from_toml("это не toml ["), Config::default());
+    }
+
+    #[test]
+    fn dgpu_choice_and_toggle() {
+        let mut c = Config::default();
+        // Ярлык просит NVIDIA — на ней; не просит — нет.
+        assert!(c.on_dgpu("steam.desktop", true));
+        assert!(!c.on_dgpu("blender.desktop", false));
+        // Включили у blender — в dgpu; выключили у steam — в no_dgpu.
+        (c.dgpu_apps, c.no_dgpu_apps) = c.toggled_dgpu("blender.desktop", false);
+        assert_eq!(c.dgpu_apps, ["blender"]);
+        assert!(c.on_dgpu("blender.desktop", false));
+        (c.dgpu_apps, c.no_dgpu_apps) = c.toggled_dgpu("steam.desktop", true);
+        assert_eq!(c.no_dgpu_apps, ["steam"]);
+        assert!(!c.on_dgpu("steam.desktop", true));
+        // Обратно — списки пустеют.
+        (c.dgpu_apps, c.no_dgpu_apps) = c.toggled_dgpu("blender.desktop", false);
+        (c.dgpu_apps, c.no_dgpu_apps) = c.toggled_dgpu("steam.desktop", true);
+        assert!(c.dgpu_apps.is_empty() && c.no_dgpu_apps.is_empty());
+        // Запись в файл и обратно.
+        let text = set_dgpu_apps(&c.to_toml(), &["houdini".into()], &[]).unwrap();
+        let back = Config::from_toml(&text);
+        assert_eq!(back.dgpu_apps, ["houdini"]);
+        assert!(back.on_dgpu("houdini.desktop", false));
     }
 
     #[test]

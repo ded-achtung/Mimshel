@@ -38,6 +38,9 @@ pub struct App {
     /// `NoDisplay=true`: не показывать в окнах «Поиск» и «Программы». Доку такие
     /// ярлыки всё равно нужны (значок «Программы», окна служебных программ).
     pub no_display: bool,
+    /// Программа просит мощную (дискретную) видеокарту: `PrefersNonDefaultGPU`
+    /// по стандарту freedesktop или `X-KDE-RunOnDiscreteGpu`.
+    pub prefers_dgpu: bool,
 }
 
 /// Где искать ярлыки и для кого.
@@ -223,6 +226,7 @@ fn make_app(id: String, path: PathBuf, e: &DesktopEntry, s: &Settings) -> Option
         terminal: e.boolean("Terminal"),
         startup_wm_class: e.string("StartupWMClass"),
         no_display: e.boolean("NoDisplay"),
+        prefers_dgpu: e.boolean("PrefersNonDefaultGPU") || e.boolean("X-KDE-RunOnDiscreteGpu"),
         id,
         path,
     })
@@ -282,6 +286,20 @@ mod tests {
         assert!(all[1].no_display);
         assert_eq!(apps[1].path, user.0.join("editor.desktop"));
         assert_eq!(apps[0].command, ["Files"]);
+    }
+
+    #[test]
+    fn prefers_discrete_gpu() {
+        let dir = TempDir::new("dgpu");
+        dir.write("steam.desktop", &app("Steam", "PrefersNonDefaultGPU=true"));
+        dir.write(
+            "kgame.desktop",
+            &app("KGame", "X-KDE-RunOnDiscreteGpu=true"),
+        );
+        dir.write("files.desktop", &app("Files", ""));
+        let apps = load(&settings(&[&dir]));
+        let dgpu = |n: &str| apps.iter().find(|a| a.name == n).unwrap().prefers_dgpu;
+        assert!(dgpu("Steam") && dgpu("KGame") && !dgpu("Files"));
     }
 
     #[test]

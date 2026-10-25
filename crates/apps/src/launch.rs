@@ -10,8 +10,9 @@ use crate::App;
 
 impl App {
     /// Запускает программу и возвращает номер её процесса. `terminal` — команда
-    /// терминала, после которой идёт запускаемая программа (`xfce4-terminal -x`).
-    pub fn launch(&self, terminal: &[String]) -> io::Result<u32> {
+    /// терминала, после которой идёт запускаемая программа (`xfce4-terminal -x`);
+    /// `dgpu` — на дискретной видеокарте NVIDIA (если она есть).
+    pub fn launch(&self, terminal: &[String], dgpu: bool) -> io::Result<u32> {
         let argv = self.argv(terminal);
         let (program, args) = argv
             .split_first()
@@ -33,6 +34,9 @@ impl App {
             .env("GIO_LAUNCHED_DESKTOP_FILE", &self.path);
         if let Some(dir) = self.working_dir.as_ref().filter(|d| d.is_dir()) {
             cmd.current_dir(dir);
+        }
+        if dgpu && crate::gpu::offload_available() {
+            cmd.envs(crate::gpu::OFFLOAD_ENV);
         }
         let mut child = cmd.spawn()?;
         let pid = child.id();
@@ -72,6 +76,7 @@ mod tests {
             terminal,
             startup_wm_class: None,
             no_display: false,
+            prefers_dgpu: false,
         }
     }
 
@@ -94,7 +99,9 @@ mod tests {
             "echo \"$GIO_LAUNCHED_DESKTOP_FILE $GIO_LAUNCHED_DESKTOP_FILE_PID $$\" > {}",
             flag.display()
         );
-        let pid = app(&["sh", "-c", &script], false).launch(&[]).unwrap();
+        let pid = app(&["sh", "-c", &script], false)
+            .launch(&[], false)
+            .unwrap();
         for _ in 0..100 {
             if std::fs::read_to_string(&flag).is_ok_and(|s| !s.is_empty()) {
                 break;

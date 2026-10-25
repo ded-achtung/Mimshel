@@ -4,6 +4,7 @@
 
 pub mod entry;
 pub mod exec;
+pub mod gpu;
 mod index;
 mod launch;
 pub mod process;

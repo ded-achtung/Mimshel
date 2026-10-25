@@ -212,6 +212,7 @@ pub(crate) mod tests {
             terminal: false,
             startup_wm_class: None,
             no_display: false,
+            prefers_dgpu: false,
         }
     }
 
