@@ -65,6 +65,14 @@ Alpha. It is used daily on a real laptop (EndeavourOS, Xfce, X11), but expect
 rough edges. Wayland is not planned: the target programs (Houdini and others) run
 on X11.
 
+**Security notes.**
+- The lock screen protects an unattended session from people at the keyboard. It
+  is not a barrier against a malicious program already running in your X11
+  session: on X11 any client can read input and stack windows. No X11 locker can
+  change that.
+- The installer builds the Colloid themes from commits pinned in
+  `packaging/third-party.sh`, never from whatever upstream has today.
+
 ## Installing
 
 You need EndeavourOS or Arch Linux with the Xfce desktop in an X11 session. In a
