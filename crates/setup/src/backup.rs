@@ -292,11 +292,9 @@ fn replace_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
         return Err(e);
     }
     let had_dst = dst.symlink_metadata().is_ok();
-    if had_dst {
-        if let Err(e) = std::fs::rename(dst, &old) {
-            let _ = remove_tree(&new);
-            return Err(e);
-        }
+    if had_dst && let Err(e) = std::fs::rename(dst, &old) {
+        let _ = remove_tree(&new);
+        return Err(e);
     }
     if let Err(e) = std::fs::rename(&new, dst) {
         if had_dst {
