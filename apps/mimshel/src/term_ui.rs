@@ -15,6 +15,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
@@ -55,7 +56,14 @@ enum Wake {
     Term(u64),
     /// A menu item was chosen in the top menu bar (item id).
     Menu(i32),
+    /// All system fonts have loaded (emoji, CJK) — redraw missing characters.
+    Fonts,
+    /// Cursor blink tick.
+    Blink,
 }
+
+/// Cursor blink half-period.
+const BLINK: Duration = Duration::from_millis(530);
 
 /// What to open: `[DIR]` or `-e PROGRAM [ARGS…]` (also `-x`, `--`, as other
 /// terminals accept — programs with `Terminal=true` are launched this way).
@@ -76,6 +84,18 @@ pub fn run(dir: Option<PathBuf>, command: Option<Vec<String>>) -> i32 {
             1
         }
     }
+}
+
+/// Open a web address in the default browser (detached).
+fn open_url(url: &str) {
+    use std::os::unix::process::CommandExt;
+    let _ = std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn();
 }
 
 /// The system monospace font (`fc-match monospace`), else DejaVu Sans Mono.
@@ -253,10 +273,11 @@ impl Tabs {
         (w, h): (u32, u32),
         scale: f32,
         focused: bool,
+        cursor_on: bool,
     ) -> Option<tiny_skia::Pixmap> {
         let bar = self.bar_h(scale);
         let session = &self.active().session;
-        let mut term = session.render(glyphs, (w, h.saturating_sub(bar)), focused)?;
+        let mut term = session.render(glyphs, (w, h.saturating_sub(bar)), focused, cursor_on)?;
         // Scrollback scrollbar on the right (only when there is history).
         let (history, offset) = session.history();
         if history > 0 {
@@ -543,7 +564,9 @@ struct Window {
     win: mimshel_x11::AppWindow,
     tabs: Tabs,
     glyphs: Glyphs,
-    family: String,
+    /// Cursor blink: wanted now (the ticker thread reads it) and which half.
+    blink: Arc<AtomicBool>,
+    cursor_on: bool,
     /// Font size in points (changed by «Bigger»/«Smaller»).
     font_size: f32,
     scale: f32,
@@ -627,7 +650,7 @@ impl Window {
             return;
         }
         self.font_size = size;
-        self.glyphs = Glyphs::new(&self.family, (size * self.scale).round());
+        self.glyphs.set_size((size * self.scale).round());
         let cell = self.cell();
         self.tabs.cell = cell;
         let bar = self.tabs.bar_h(self.scale);
@@ -721,6 +744,8 @@ impl Window {
                     self.dirty = true;
                 } else if let Some(bytes) = key_bytes(&k, session.mode()) {
                     session.input(bytes);
+                    // Typing shows the cursor at once, then the blink resumes.
+                    self.cursor_on = true;
                     self.dirty = true;
                 }
             }
@@ -767,7 +792,23 @@ impl Window {
                 let session = &self.tabs.active().session;
                 // Shift + wheel always scrolls the terminal's own history, even
                 // when the program took the mouse (Claude Code, mc, htop).
-                let shift = self.d.modifiers().1;
+                let (ctrl, shift) = self.d.modifiers();
+                // Ctrl + wheel — font size, as in a browser.
+                if ctrl && matches!(button, 4 | 5) {
+                    return self.cmd(if button == 4 {
+                        Cmd::Bigger
+                    } else {
+                        Cmd::Smaller
+                    });
+                }
+                // Ctrl + click on a web address — open it in the browser.
+                if ctrl
+                    && button == 1
+                    && let Some(url) = session.url_at(c)
+                {
+                    open_url(&url);
+                    return Ok(true);
+                }
                 match button {
                     4 | 5 if shift => session.scroll(if button == 4 { 3 } else { -3 }),
                     4 | 5 => session.wheel(button == 4, c),
@@ -899,10 +940,18 @@ impl Window {
             self.shown_title = title;
         }
         let focused = self.d.active_window() == Some(self.win.id());
-        if let Some(frame) = self
-            .tabs
-            .render(&mut self.glyphs, self.size, self.scale, focused)
-        {
+        let blinking = focused && self.tabs.active().session.cursor_blinking();
+        self.blink.store(blinking, Ordering::Relaxed);
+        if !blinking {
+            self.cursor_on = true;
+        }
+        if let Some(frame) = self.tabs.render(
+            &mut self.glyphs,
+            self.size,
+            self.scale,
+            focused,
+            self.cursor_on,
+        ) {
             self.win.present(&self.d, &frame)?;
             self.d.sync()?;
         }
@@ -913,8 +962,11 @@ impl Window {
 fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::Result<()> {
     let d = Arc::new(Display::connect()?);
     let scale = d.scale();
-    let family = mono_family();
-    let glyphs = Glyphs::new(&family, (FONT_SIZE * scale).round());
+    let (tx, rx) = mpsc::channel::<Wake>();
+    let fonts_tx = tx.clone();
+    let glyphs = Glyphs::new(&mono_family(), (FONT_SIZE * scale).round(), move || {
+        let _ = fonts_tx.send(Wake::Fonts);
+    });
     let cell = glyphs.cell;
     let px = |(cols, rows): (usize, usize)| {
         (
@@ -930,7 +982,6 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
     };
     let win = d.create_app_window(WINDOW_CLASS, TITLE, to_pt(px(START)), to_pt(px((20, 4))))?;
 
-    let (tx, rx) = mpsc::channel::<Wake>();
     let mut tabs = Tabs {
         list: Vec::new(),
         active: 0,
@@ -971,7 +1022,8 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         win,
         tabs,
         glyphs,
-        family,
+        blink: Arc::new(AtomicBool::new(false)),
+        cursor_on: true,
         font_size: FONT_SIZE,
         scale,
         size: px(START),
@@ -980,6 +1032,19 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         last_click: None,
         shown_title: String::new(),
     };
+    // Blink ticker: wakes the window only while the program wants blinking.
+    {
+        let blink = Arc::clone(&w.blink);
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(BLINK);
+                if blink.load(Ordering::Relaxed) && tx.send(Wake::Blink).is_err() {
+                    break;
+                }
+            }
+        });
+    }
     'run: while let Ok(first) = rx.recv() {
         let mut batch = vec![first];
         while let Ok(more) = rx.try_recv() {
@@ -993,6 +1058,15 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
                     Some(cmd) => w.cmd(cmd)?,
                     None => true,
                 },
+                Wake::Fonts => {
+                    w.dirty |= w.glyphs.refresh();
+                    true
+                }
+                Wake::Blink => {
+                    w.cursor_on = !w.cursor_on;
+                    w.dirty = true;
+                    true
+                }
             };
             if !keep {
                 break 'run;
@@ -1023,7 +1097,7 @@ mod tests {
     #[test]
     fn two_tabs_render_with_bar() {
         let (tx, _rx) = mpsc::channel();
-        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0);
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0, || {});
         let mut tabs = Tabs {
             list: Vec::new(),
             active: 0,
@@ -1048,7 +1122,7 @@ mod tests {
         assert_eq!(tabs.bar_hit(tw - 5.0, w, 1.0), Some(BarHit::Close(0)));
         assert_eq!(tabs.bar_hit(2.0 * tw + 5.0, w, 1.0), Some(BarHit::Plus));
         tabs.hover = Some(BarHit::Tab(0));
-        let frame = tabs.render(&mut glyphs, (w, 260), 1.0, true).unwrap();
+        let frame = tabs.render(&mut glyphs, (w, 260), 1.0, true, true).unwrap();
         assert_eq!((frame.width(), frame.height()), (w, 260));
         if let Some(path) = std::env::var_os("MIMSHEL_TAB_PNG") {
             frame.save_png(path).unwrap();
@@ -1063,7 +1137,7 @@ mod tests {
     #[test]
     fn scrollbar_appears_with_history() {
         let (tx, _rx) = mpsc::channel();
-        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0);
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0, || {});
         let mut tabs = Tabs {
             list: Vec::new(),
             active: 0,
@@ -1089,7 +1163,7 @@ mod tests {
         session.scroll(100);
         assert_eq!(session.history().1, 100);
         let (w, h) = (420, 240);
-        let frame = tabs.render(&mut glyphs, (w, h), 1.0, true).unwrap();
+        let frame = tabs.render(&mut glyphs, (w, h), 1.0, true, true).unwrap();
         if let Some(path) = std::env::var_os("MIMSHEL_SB_PNG") {
             frame.save_png(path).unwrap();
         }

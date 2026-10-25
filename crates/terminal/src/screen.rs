@@ -41,8 +41,13 @@ impl Frame {
         }
     }
 
-    /// Наложить знак цветом `fg` поверх того, что уже есть.
+    /// Stamp a glyph in colour `fg` over what is there (a colour glyph — in
+    /// its own colours).
     fn blend(&mut self, x: u32, y: u32, mask: &crate::glyphs::Mask, fg: Rgb) {
+        if let Some(color) = &mask.color {
+            self.blend_color(x, y, mask, color);
+            return;
+        }
         for my in 0..mask.h {
             let row = y + my;
             if row >= self.h {
@@ -60,6 +65,31 @@ impl Frame {
                 let i = ((row * self.w + col) * 4) as usize;
                 for (dst, &f) in self.data[i..i + 3].iter_mut().zip(&fg) {
                     *dst = ((u16::from(f) * a + u16::from(*dst) * (255 - a)) / 255) as u8;
+                }
+            }
+        }
+    }
+
+    /// A colour glyph (premultiplied RGBA) over what is there.
+    fn blend_color(&mut self, x: u32, y: u32, mask: &crate::glyphs::Mask, color: &[[u8; 4]]) {
+        for my in 0..mask.h {
+            let row = y + my;
+            if row >= self.h {
+                break;
+            }
+            for mx in 0..mask.w {
+                let col = x + mx;
+                if col >= self.w {
+                    break;
+                }
+                let [r, g, b, a] = color[(my * mask.w + mx) as usize];
+                if a == 0 {
+                    continue;
+                }
+                let i = ((row * self.w + col) * 4) as usize;
+                let keep = 255 - u16::from(a);
+                for (dst, src) in self.data[i..i + 3].iter_mut().zip([r, g, b]) {
+                    *dst = (u16::from(src) + u16::from(*dst) * keep / 255).min(255) as u8;
                 }
             }
         }
@@ -95,6 +125,7 @@ pub fn render<T: EventListener>(
     pal: &Palette,
     (w, h): (u32, u32),
     focused: bool,
+    cursor_on: bool,
 ) -> Option<Pixmap> {
     let mut frame = Frame::new(w.max(1), h.max(1), pal.background);
     let content = term.renderable_content();
@@ -131,7 +162,10 @@ pub fn render<T: EventListener>(
         if content.selection.is_some_and(|s| s.contains(cell.point)) {
             bg = pal.selection;
         }
-        let is_cursor = focused && cursor.point == cell.point && cursor.shape == CursorShape::Block;
+        let is_cursor = focused
+            && cursor_on
+            && cursor.point == cell.point
+            && cursor.shape == CursorShape::Block;
         if is_cursor {
             fg = bg;
             bg = pal.cursor;
@@ -152,7 +186,7 @@ pub fn render<T: EventListener>(
         }
     }
     // Курсор не сплошной: линия, черта снизу или рамка (окно не активно).
-    if let Some((x, y)) = at(cursor.point) {
+    if let Some((x, y)) = at(cursor.point).filter(|_| cursor_on) {
         match cursor.shape {
             CursorShape::Beam => frame.rect(x, y, 2, ch, pal.cursor),
             CursorShape::Underline => frame.rect(x, y + ch - 2, cw, 2, pal.cursor),

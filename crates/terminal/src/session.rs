@@ -370,10 +370,33 @@ impl Session {
         }
     }
 
-    /// Кадр `w`×`h` пикселей.
-    pub fn render(&self, glyphs: &mut Glyphs, size: (u32, u32), focused: bool) -> Option<Pixmap> {
+    /// A `w`×`h`-pixel frame. `cursor_on` — false in the «off» half of a blink.
+    pub fn render(
+        &self,
+        glyphs: &mut Glyphs,
+        size: (u32, u32),
+        focused: bool,
+        cursor_on: bool,
+    ) -> Option<Pixmap> {
         let term = self.term.lock();
-        crate::screen::render(&term, glyphs, &self.palette, size, focused)
+        crate::screen::render(&term, glyphs, &self.palette, size, focused, cursor_on)
+    }
+
+    /// The program asked for a blinking cursor (DECSCUSR, `CSI ?12h`).
+    pub fn cursor_blinking(&self) -> bool {
+        self.term.lock().cursor_style().blinking
+    }
+
+    /// The web address under screen cell `(col, row)`, if any (Ctrl+click
+    /// opens it). Only within one screen row.
+    pub fn url_at(&self, (col, row): (usize, usize)) -> Option<String> {
+        let term = self.term.lock();
+        let offset = term.grid().display_offset() as i32;
+        let line = Line(row as i32 - offset);
+        let cols = term.columns();
+        let chars: Vec<char> = (0..cols).map(|c| term.grid()[line][Column(c)].c).collect();
+        drop(term);
+        crate::links::url_at(&chars, col)
     }
 
     /// Сколько строк в сетке (для проверок).
@@ -413,8 +436,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(copied.as_deref(), Some("Привет"), "OSC 52 — в буфер обмена");
-        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0);
-        let pm = s.render(&mut glyphs, (400, 120), true).unwrap();
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0, || {});
+        let pm = s.render(&mut glyphs, (400, 120), true, true).unwrap();
         assert_eq!((pm.width(), pm.height()), (400, 120));
         s.resize((60, 8));
         assert_eq!(s.screen_lines(), 8);
