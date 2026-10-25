@@ -18,7 +18,9 @@ pub fn action(name: &str, shell: &Path) -> i32 {
                 "--info",
                 "--title=Об этом компьютере",
                 &format!("--text={}", about_text()),
-                "--icon=computer",
+                // Свой знак — планета (ставит `mimshel apply menubar`); нет его
+                // в теме — zenity покажет обычный значок сведений.
+                &format!("--icon={}", crate::parts::LOGO_NAME),
                 "--width=420",
             ]);
         }
