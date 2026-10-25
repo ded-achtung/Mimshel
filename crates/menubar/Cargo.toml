@@ -8,6 +8,7 @@ license.workspace = true
 mimshel-render = { path = "../render" }
 mimshel-apps = { path = "../apps" }
 mimshel-core = { path = "../core" }
+mimshel-dbus = { path = "../dbus" }
 mimshel-icons = { path = "../icons" }
 mimshel-text = { path = "../text" }
 mimshel-widgets = { path = "../widgets" }

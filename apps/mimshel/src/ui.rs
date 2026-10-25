@@ -86,6 +86,8 @@ pub(crate) enum Msg {
     Dnd(bool),
     /// Значки трея или меню значка.
     Tray(mimshel_dbus::TrayUpdate),
+    /// Bluetooth: адаптер и устройства (`None` — адаптера или службы нет).
+    Bluetooth(Option<mimshel_dbus::bluetooth::BtState>),
     /// Глобальное меню активного окна.
     AppMenu(mimshel_dbus::AppMenuUpdate),
     /// Уведомление пришло или программа его закрыла.
@@ -119,6 +121,7 @@ impl Msg {
             Msg::Clock(_) => "часы".into(),
             Msg::Sound(_) | Msg::Control(..) | Msg::Battery(_) | Msg::Dnd(_) => "состояние".into(),
             Msg::Tray(_) => "трей".into(),
+            Msg::Bluetooth(_) => "bluetooth".into(),
             Msg::AppMenu(_) => "меню программы".into(),
             Msg::Notify(_) | Msg::ToggleCenter => "уведомления".into(),
             Msg::Fonts(_) => "шрифты".into(),
@@ -768,6 +771,12 @@ impl Ui<'_> {
                 }
                 None => Ok(()),
             },
+            Msg::Bluetooth(state) => {
+                if let Some(menubar) = &mut self.menubar {
+                    menubar.set_bluetooth_state(state);
+                }
+                Ok(())
+            }
         }
     }
 

@@ -51,6 +51,8 @@ pub enum ControlAction {
     SetDnd(bool),
     SetVolume(u32),
     NetworkSettings,
+    /// Открыть список устройств Bluetooth (щелчок по названию плитки).
+    OpenBluetooth,
 }
 
 pub struct ControlPanel {
@@ -161,6 +163,11 @@ impl ControlPanel {
         self.dragging
     }
 
+    /// Правый край кружка со значком у плиток слева (с запасом для пальца).
+    fn circle_right() -> f32 {
+        PAD + 8.0 + 2.0 * R + 2.0 + 4.0
+    }
+
     pub fn press(&mut self, x: f32, y: f32) -> ControlAction {
         let (w, h) = self.size();
         if x < 0.0 || y < 0.0 || x >= w as f32 || y >= h as f32 {
@@ -176,11 +183,14 @@ impl ControlPanel {
                 }
                 None => ControlAction::NetworkSettings,
             },
+            // Кружок со значком — включить или выключить, название — список
+            // устройств (как в macOS: стрелка у плитки).
             Some(Tile::Bluetooth) => match s.bluetooth {
-                Some(on) => {
+                Some(on) if x < Self::circle_right() => {
                     s.bluetooth = Some(!on);
                     ControlAction::SetBluetooth(!on)
                 }
+                Some(_) => ControlAction::OpenBluetooth,
                 None => ControlAction::Nothing,
             },
             Some(Tile::Dnd) => {
@@ -407,6 +417,11 @@ mod tests {
         assert_eq!(
             p.press(40.0, PAD + 6.0 + ROW + 20.0),
             ControlAction::SetBluetooth(true)
+        );
+        // По названию плитки Bluetooth — список устройств.
+        assert_eq!(
+            p.press(LEFT_W - 20.0, PAD + 6.0 + ROW + 20.0),
+            ControlAction::OpenBluetooth
         );
     }
 

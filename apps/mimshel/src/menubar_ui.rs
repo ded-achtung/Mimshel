@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use mimshel_apps::App;
 use mimshel_core::config::Config;
 use mimshel_core::keyboard::layout_label;
+use mimshel_dbus::bluetooth::{Bluetooth, BtCmd, BtState};
 use mimshel_dbus::{
     AppMenu, AppMenuCmd, AppMenuUpdate, GtkPaths, MenuItem, Source, Tray, TrayCmd, TrayItem,
     TrayUpdate,
@@ -19,8 +20,8 @@ use mimshel_dbus::{
 use mimshel_icons::Icons;
 use mimshel_menubar::status::{Battery, Sound};
 use mimshel_menubar::{
-    AppleItem, Bar, CalendarAction, CalendarPanel, ControlAction, ControlPanel, ControlState, Part,
-    SoundAction, SoundPanel, apple_menu,
+    AppleItem, Bar, BluetoothAction, BluetoothPanel, CalendarAction, CalendarPanel, ControlAction,
+    ControlPanel, ControlState, Part, SoundAction, SoundPanel, apple_menu,
 };
 use mimshel_text::Fonts;
 use mimshel_widgets::{Menu, MenuEntry, MenuResult};
@@ -92,6 +93,11 @@ pub struct MenubarUi {
     control_panel: Option<ControlPanel>,
     /// Календарь по щелчку на часах.
     calendar: Option<CalendarPanel>,
+    /// Устройства Bluetooth (из Пункта управления), связь с BlueZ и последнее
+    /// известное состояние.
+    bluetooth_panel: Option<BluetoothPanel>,
+    bt: Option<Bluetooth>,
+    bt_state: Option<BtState>,
     /// Названия месяцев и дней на языке системы (читаются один раз).
     calendar_names: Option<mimshel_menubar::Names>,
     popup: Popup,
@@ -131,6 +137,9 @@ impl MenubarUi {
             sound_panel: None,
             control_panel: None,
             calendar: None,
+            bluetooth_panel: None,
+            bt: None,
+            bt_state: None,
             calendar_names: None,
             popup: d.create_popup("menubar-menu")?,
             popup_x: 0,
@@ -149,7 +158,17 @@ impl MenubarUi {
         status::watch_battery(tx.clone());
         status::watch_dnd(tx.clone());
         let tray_tx = tx.clone();
+        let bt_tx = tx.clone();
         let menu_tx = tx;
+        ui.bt = match mimshel_dbus::bluetooth::start(move |s| {
+            let _ = bt_tx.send(Msg::Bluetooth(s));
+        }) {
+            Ok(bt) => Some(bt),
+            Err(e) => {
+                eprintln!("Bluetooth не подключён (нет системной шины?): {e}");
+                None
+            }
+        };
         ui.appmenu = match mimshel_dbus::appmenu::start(move |u| {
             let _ = menu_tx.send(Msg::AppMenu(u));
         }) {
@@ -190,6 +209,24 @@ impl MenubarUi {
         }
     }
 
+    /// Новое состояние Bluetooth — в открытое окошко устройств.
+    pub fn set_bluetooth_state(&mut self, state: Option<BtState>) {
+        if let Some(panel) = &mut self.bluetooth_panel {
+            match &state {
+                Some(s) => panel.state = s.clone(),
+                // Служба bluetooth остановилась — показывать нечего.
+                None => panel.state.powered = false,
+            }
+            self.popup_dirty = true;
+        }
+        self.bt_state = state;
+        let on = self.bluetooth_on();
+        if let Some(panel) = &mut self.control_panel {
+            panel.state.bluetooth = on;
+            self.popup_dirty = true;
+        }
+    }
+
     pub fn set_clock(&mut self, text: String) {
         if self.bar.clock != text {
             self.bar.clock = text;
@@ -227,10 +264,20 @@ impl MenubarUi {
     pub fn set_control(&mut self, network: mimshel_menubar::Network, bluetooth: Option<bool>) {
         self.network = network;
         self.bluetooth = bluetooth;
+        let bluetooth = self.bluetooth_on();
         if let Some(panel) = &mut self.control_panel {
             panel.state.network = self.network.clone();
             panel.state.bluetooth = bluetooth;
             self.popup_dirty = true;
+        }
+    }
+
+    /// Включён ли Bluetooth: у службы bluetooth (адаптер включают и выключают
+    /// там), без неё — по блокировке радио (rfkill). `None` — адаптера нет.
+    fn bluetooth_on(&self) -> Option<bool> {
+        match &self.bt_state {
+            Some(s) => Some(s.powered),
+            None => self.bluetooth,
         }
     }
 
@@ -262,6 +309,7 @@ impl MenubarUi {
             || self.sound_panel.is_some()
             || self.control_panel.is_some()
             || self.calendar.is_some()
+            || self.bluetooth_panel.is_some()
     }
 
     /// Окно строки меню (сама полоса или её всплывающее окно).
@@ -309,6 +357,10 @@ impl MenubarUi {
                     let action = panel.motion(x, y);
                     self.calendar_action(d, action)?;
                 }
+                if let Some(panel) = &mut self.bluetooth_panel {
+                    let action = panel.motion(x, y);
+                    self.bluetooth_action(d, action)?;
+                }
             }
             Event::Button { window, x, y, .. } if window == popup => {
                 let (x, y) = (f32::from(x), f32::from(y));
@@ -324,6 +376,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.calendar {
                     let action = panel.press(x, y);
                     self.calendar_action(d, action)?;
+                } else if let Some(panel) = &mut self.bluetooth_panel {
+                    let action = panel.press(x, y);
+                    self.bluetooth_action(d, action)?;
                 }
             }
             Event::Release { window, .. } if window == popup => {
@@ -370,6 +425,9 @@ impl MenubarUi {
                 } else if let Some(panel) = &mut self.calendar {
                     let action = panel.key(k.key);
                     self.calendar_action(d, action)?;
+                } else if let Some(panel) = &mut self.bluetooth_panel {
+                    let action = panel.key(k.key);
+                    self.bluetooth_action(d, action)?;
                 }
             }
             Event::Expose { window } if window == popup => self.popup_dirty = true,
@@ -673,7 +731,7 @@ impl MenubarUi {
         let _ = self.audio.send(Audio::Refresh);
         let panel = ControlPanel::new(ControlState {
             network: self.network.clone(),
-            bluetooth: self.bluetooth,
+            bluetooth: self.bluetooth_on(),
             dnd: self.dnd,
             sound: self.sound.clone(),
         });
@@ -692,7 +750,12 @@ impl MenubarUi {
                 self.popup_dirty = true;
             }
             ControlAction::SetBluetooth(on) => {
-                let _ = self.control.try_send(ControlRequest::Bluetooth(on));
+                match &self.bt {
+                    Some(bt) => bt.send(BtCmd::Power(on)),
+                    None => {
+                        let _ = self.control.try_send(ControlRequest::Bluetooth(on));
+                    }
+                }
                 self.popup_dirty = true;
             }
             ControlAction::SetDnd(on) => {
@@ -703,9 +766,62 @@ impl MenubarUi {
                 self.change_volume(d, v)?;
                 self.popup_dirty = true;
             }
+            ControlAction::OpenBluetooth => {
+                // Окошко устройств — на месте Пункта управления.
+                let x = f32::from(self.popup_x);
+                self.close_popup(d)?;
+                self.open_bluetooth(d, x)?;
+            }
             ControlAction::NetworkSettings => {
                 self.close_popup(d)?;
                 run(&["nm-connection-editor".to_string()]);
+            }
+        }
+        Ok(())
+    }
+
+    fn open_bluetooth(&mut self, d: &Display, x: f32) -> Result<()> {
+        let Some(state) = self.bt_state.clone() else {
+            return Ok(());
+        };
+        // Пока окошко открыто, ищем устройства рядом.
+        if let Some(bt) = &self.bt {
+            bt.send(BtCmd::Scan(true));
+        }
+        let panel = BluetoothPanel::new(state);
+        let size = panel.size();
+        self.bluetooth_panel = Some(panel);
+        self.show_popup(d, Part::Control, x, size)
+    }
+
+    fn bluetooth_action(&mut self, d: &Display, action: BluetoothAction) -> Result<()> {
+        let send = |bt: &Option<Bluetooth>, cmd: BtCmd| {
+            if let Some(bt) = bt {
+                bt.send(cmd);
+            }
+        };
+        match action {
+            BluetoothAction::Nothing => {}
+            BluetoothAction::Redraw => self.popup_dirty = true,
+            BluetoothAction::Close => self.close_popup(d)?,
+            BluetoothAction::Power(on) => {
+                send(&self.bt, BtCmd::Power(on));
+                if on {
+                    send(&self.bt, BtCmd::Scan(true));
+                }
+                self.popup_dirty = true;
+            }
+            BluetoothAction::Connect(path) => {
+                send(&self.bt, BtCmd::Connect(path));
+                self.popup_dirty = true;
+            }
+            BluetoothAction::Disconnect(path) => {
+                send(&self.bt, BtCmd::Disconnect(path));
+                self.popup_dirty = true;
+            }
+            BluetoothAction::Settings => {
+                self.close_popup(d)?;
+                run(&["blueman-manager".to_string()]);
             }
         }
         Ok(())
@@ -899,10 +1015,16 @@ impl MenubarUi {
     /// Закрыть меню или окошко громкости (если открыто): например, перед
     /// открытием «Поиска».
     pub fn close_popup(&mut self, d: &Display) -> Result<()> {
+        if self.bluetooth_panel.is_some()
+            && let Some(bt) = &self.bt
+        {
+            bt.send(BtCmd::Scan(false));
+        }
         if self.menu.take().is_some()
             | self.sound_panel.take().is_some()
             | self.control_panel.take().is_some()
             | self.calendar.take().is_some()
+            | self.bluetooth_panel.take().is_some()
         {
             self.popup.hide(d)?;
             self.bar.open = None;
@@ -1004,6 +1126,17 @@ impl MenubarUi {
                 )?;
                 self.popup.present(d, &panel.render(fonts, icons))?;
             } else if let Some(panel) = &self.calendar {
+                self.popup.present(d, &panel.render(fonts))?;
+            } else if let Some(panel) = &self.bluetooth_panel {
+                // Список растёт по мере поиска — окно под размер.
+                let (w, h) = panel.size();
+                self.popup.set_geometry(
+                    d,
+                    self.popup_x,
+                    self.bar.height as i16,
+                    w as u16,
+                    h as u16,
+                )?;
                 self.popup.present(d, &panel.render(fonts))?;
             }
         }

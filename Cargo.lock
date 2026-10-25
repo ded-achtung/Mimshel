@@ -898,6 +898,7 @@ version = "0.1.0"
 dependencies = [
  "mimshel-apps",
  "mimshel-core",
+ "mimshel-dbus",
  "mimshel-icons",
  "mimshel-render",
  "mimshel-text",
