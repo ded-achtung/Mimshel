@@ -502,6 +502,14 @@ impl MenubarUi {
                     Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,
                     Some((Part::Volume, px)) => self.open_sound(d, px)?,
                     Some((Part::Control, px)) => self.open_control(d, px)?,
+                    // Значок Bluetooth (blueman) — своё окошко устройств,
+                    // как из Пункта управления; правая кнопка — меню blueman.
+                    Some((Part::Tray(i), px))
+                        if self.bt_state.is_some()
+                            && self.tray_items.get(i).is_some_and(is_bluetooth_tray) =>
+                    {
+                        self.open_bluetooth(d, Part::Tray(i), px)?
+                    }
                     Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
                     Some((Part::Menu(i), px)) => {
                         // Читаем меню заново: доступность пунктов могла поменяться.
@@ -788,7 +796,7 @@ impl MenubarUi {
                 // Окошко устройств — на месте Пункта управления.
                 let x = f32::from(self.popup_x);
                 self.close_popup(d)?;
-                self.open_bluetooth(d, x)?;
+                self.open_bluetooth(d, Part::Control, x)?;
             }
             ControlAction::NetworkSettings => {
                 self.close_popup(d)?;
@@ -798,7 +806,8 @@ impl MenubarUi {
         Ok(())
     }
 
-    fn open_bluetooth(&mut self, d: &Display, x: f32) -> Result<()> {
+    /// Окошко устройств Bluetooth под частью строки `part` (левый край — `x`).
+    fn open_bluetooth(&mut self, d: &Display, part: Part, x: f32) -> Result<()> {
         let Some(state) = self.bt_state.clone() else {
             return Ok(());
         };
@@ -809,7 +818,7 @@ impl MenubarUi {
         let panel = BluetoothPanel::new(state);
         let size = panel.size();
         self.bluetooth_panel = Some(panel);
-        self.show_popup(d, Part::Control, x, size)
+        self.show_popup(d, part, x, size)
     }
 
     fn bluetooth_action(&mut self, d: &Display, action: BluetoothAction) -> Result<()> {
@@ -1377,4 +1386,9 @@ fn watch_clock(format: String, tx: Sender<Msg>) {
             }
         }
     });
+}
+
+/// Значок Bluetooth от blueman в трее (`Id = blueman`, путь `/org/blueman/sni`).
+fn is_bluetooth_tray(item: &TrayItem) -> bool {
+    item.key.ends_with("/org/blueman/sni") || item.title == "blueman"
 }
