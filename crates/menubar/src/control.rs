@@ -368,6 +368,7 @@ mod tests {
                 muted: false,
                 sinks: vec![],
                 default: String::new(),
+                apps: vec![],
             }),
         }
     }
