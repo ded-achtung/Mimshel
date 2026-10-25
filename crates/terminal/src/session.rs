@@ -63,6 +63,8 @@ pub struct Session {
     size: (usize, usize),
     /// Палитра — для ответов на «какой у тебя цвет» (OSC 10/11/4).
     palette: Palette,
+    /// Номер процесса оболочки — узнать её текущую папку.
+    shell_pid: u32,
 }
 
 impl Session {
@@ -86,6 +88,7 @@ impl Session {
             ..tty::Options::default()
         };
         let pty = tty::new(&options, window_size((cols, rows), cell), 0)?;
+        let shell_pid = pty.child().id();
         let (tx, events) = mpsc::channel();
         let proxy = Proxy {
             tx,
@@ -103,7 +106,14 @@ impl Session {
             cell,
             size: (cols, rows),
             palette,
+            shell_pid,
         })
+    }
+
+    /// Папка, где сейчас оболочка (`cd` в ней меняет её) — новая вкладка
+    /// откроется там же.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{}/cwd", self.shell_pid)).ok()
     }
 
     /// Разобрать накопившиеся события ядра: на просьбы программ ответить
