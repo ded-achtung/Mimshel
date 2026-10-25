@@ -52,3 +52,5 @@
 - [ ] После трёх пользовательских тестов пересмотреть приоритеты и документировать границы проекта.
 
 **Note:** since v0.0.2-alpha the Cargo workspace version matches the release tag (`0.0.2-alpha`; `mimshel --version`). Tag `v0.0.1-alpha` predates that and the code there says `0.1.0`.
+
+**Roadmap review (2026-10-25):** what to do, postpone or drop after the audit — see `docs/roadmap-review.md`.
