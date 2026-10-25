@@ -8,6 +8,7 @@
 //! захватывается клавиатура (до долей секунды, пока грузятся шрифты и фон),
 //! и только потом рисуется полный вид.
 
+use std::ffi::{CStr, CString};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -18,6 +19,7 @@ use mimshel_lock::{Frame, Layout, Phase};
 use mimshel_text::Fonts;
 use mimshel_x11::{Display, Event, Key, KeyPress, Popup};
 use tiny_skia::Pixmap;
+use zeroize::Zeroizing;
 
 use mimshel_setup::lock::log;
 
@@ -112,7 +114,10 @@ struct LockUi<'a> {
     bg: Pixmap,
     /// Последний показанный кадр (для Expose).
     frame: Option<Pixmap>,
-    password: Vec<char>,
+    /// The typed password: one buffer, wiped on drop. Allocated for
+    /// `MAX_PASSWORD` chars up front so typing never reallocates (a
+    /// reallocation would leave an unwiped copy behind).
+    password: Zeroizing<String>,
     phase: Phase,
     wrong_since: Option<Instant>,
     time: String,
@@ -144,7 +149,7 @@ impl<'a> LockUi<'a> {
             fonts: Fonts::new(&config.font),
             bg,
             frame: None,
-            password: Vec::new(),
+            password: Zeroizing::new(String::with_capacity(MAX_PASSWORD * 4)),
             phase: Phase::Idle,
             wrong_since: None,
             time: String::new(),
@@ -166,7 +171,7 @@ impl<'a> LockUi<'a> {
             time: &self.time,
             date: &self.date,
             placeholder: &self.placeholder,
-            typed: self.password.len(),
+            typed: self.password.chars().count(),
             phase: self.phase,
         };
         let Some(frame) = mimshel_lock::frame(&self.layout, &self.bg, &state, &mut self.fonts)
@@ -234,7 +239,7 @@ impl<'a> LockUi<'a> {
                     self.phase = Phase::Idle;
                     self.wrong_since = None;
                 }
-                if self.password.len() < MAX_PASSWORD {
+                if self.password.chars().count() < MAX_PASSWORD {
                     self.password.push(c);
                     self.redraw()?;
                 }
@@ -284,12 +289,7 @@ impl<'a> LockUi<'a> {
         self.phase = Phase::Verifying;
         self.redraw()?;
         self.display.sync()?;
-        let password: String = self.password.iter().collect();
-        let ok = authenticate(&self.user, &password);
-        // Копию тоже стереть: память строки вернётся в общий запас программы.
-        let mut bytes = password.into_bytes();
-        bytes.fill(0);
-        drop(bytes);
+        let ok = authenticate(&self.user, &self.password);
         self.clear_password();
         if ok {
             log("пароль верный — разблокировано");
@@ -356,10 +356,10 @@ impl<'a> LockUi<'a> {
         self.date = date;
     }
 
-    /// Пароль стирается из памяти сразу после проверки.
+    /// The password is wiped from memory right after the check.
     fn clear_password(&mut self) {
-        self.password.fill('\0');
-        self.password.clear();
+        // Zeroizes the whole buffer (capacity included) and keeps it.
+        zeroize::Zeroize::zeroize(&mut *self.password);
     }
 }
 
@@ -385,13 +385,32 @@ fn clock() -> (String, String) {
     )
 }
 
+/// Answers PAM's questions with borrowed credentials. Unlike
+/// `pam::PasswordConv`, it keeps no copy of the password of its own.
+struct LockConv<'p> {
+    user: &'p str,
+    password: &'p str,
+}
+
+impl pam::Conversation for LockConv<'_> {
+    fn prompt_echo(&mut self, _msg: &CStr) -> Result<CString, ()> {
+        CString::new(self.user).map_err(|_| ())
+    }
+    // The pam crate copies this answer for libpam and then drops it; that
+    // short-lived copy is outside our control.
+    fn prompt_blind(&mut self, _msg: &CStr) -> Result<CString, ()> {
+        CString::new(self.password).map_err(|_| ())
+    }
+    fn info(&mut self, _msg: &CStr) {}
+    fn error(&mut self, msg: &CStr) {
+        log(&format!("PAM: {}", msg.to_string_lossy()));
+    }
+}
+
 /// Проверка пароля через PAM (цепочка та же, что при входе в систему).
 fn authenticate(user: &str, password: &str) -> bool {
-    match pam::Client::with_password(PAM_SERVICE) {
-        Ok(mut client) => {
-            client.conversation_mut().set_credentials(user, password);
-            client.authenticate().is_ok()
-        }
+    match pam::Client::with_conversation(PAM_SERVICE, LockConv { user, password }) {
+        Ok(mut client) => client.authenticate().is_ok(),
         Err(e) => {
             // Не «неверный пароль», а сломалась сама проверка — в журнал.
             log(&format!("PAM не начал проверку: {e}"));
@@ -452,4 +471,43 @@ pub fn snapshot(text: &str, file: &str) -> mimshel_x11::Result<()> {
         mimshel_lock::frame(&layout, &bg, &state, &mut fonts).ok_or("экран не нарисован")?;
     frame.save_png(file)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pam::Conversation;
+
+    #[test]
+    fn conversation_answers_with_borrowed_credentials() {
+        let password = Zeroizing::new(String::from("пароль"));
+        let mut conv = LockConv {
+            user: "ded",
+            password: &password,
+        };
+        let msg = CString::new("Password: ").unwrap();
+        assert_eq!(conv.prompt_echo(&msg).unwrap().as_bytes(), b"ded");
+        assert_eq!(
+            conv.prompt_blind(&msg).unwrap().as_bytes(),
+            "пароль".as_bytes()
+        );
+        // A NUL inside cannot be passed to PAM: refuse instead of truncating.
+        let mut bad = LockConv {
+            user: "ded",
+            password: "a\0b",
+        };
+        assert!(bad.prompt_blind(&msg).is_err());
+    }
+
+    #[test]
+    fn password_buffer_never_reallocates() {
+        let mut password = Zeroizing::new(String::with_capacity(MAX_PASSWORD * 4));
+        let start = password.as_ptr();
+        for _ in 0..MAX_PASSWORD {
+            password.push('𝄞'); // 4 bytes in UTF-8, the worst case
+        }
+        assert_eq!(password.as_ptr(), start);
+        zeroize::Zeroize::zeroize(&mut *password);
+        assert!(password.is_empty());
+    }
 }
