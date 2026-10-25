@@ -124,8 +124,17 @@ pub fn confirm(title: &str, text: &str, ok: &str, icon: &str) -> bool {
     ])
 }
 
-/// Текст «Об этом компьютере» (разметка Pango для zenity).
-pub fn about_text() -> String {
+/// Сведения «Об этом компьютере»: название системы, её сборка и строки
+/// «что — какое» (у второй видеокарты подпись пустая).
+#[derive(Debug, Clone, PartialEq)]
+pub struct About {
+    pub name: String,
+    pub build: String,
+    pub rows: Vec<(&'static str, String)>,
+}
+
+/// Собрать сведения (доли секунды: lspci, df, xrandr, glxinfo).
+pub fn about() -> About {
     let os_release = read(Path::new("/etc/os-release"));
     let os = |key: &str| {
         os_release.lines().find_map(|l| {
@@ -145,12 +154,24 @@ pub fn about_text() -> String {
         .find(|l| l.starts_with("MemTotal"))
         .and_then(|l| l.split_whitespace().nth(1)?.parse().ok())
         .unwrap_or(0.0);
-    let gpu = output_any(&["lspci"])
+    // Название видеокарты, которая рисует экран, — у OpenGL (у встроенной AMD
+    // lspci знает только кодовое имя «Phoenix1»). nvidia-smi не спрашиваем:
+    // он будит спящую видеокарту NVIDIA.
+    let renderer = output_any(&["glxinfo", "-B"])
         .lines()
-        .find(|l| l.contains(" VGA ") || l.contains("3D controller"))
-        .map_or("—".to_string(), |l| {
-            l.split_once(": ").map_or(l, |(_, v)| v).to_string()
-        });
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("OpenGL renderer string:")
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let gpus: Vec<String> = output_any(&["lspci"])
+        .lines()
+        .filter(|l| {
+            l.contains(" VGA ") || l.contains("3D controller") || l.contains("Display controller")
+        })
+        .map(|l| gpu_name(l, &renderer))
+        .collect();
     let disk = output(&["df", "-B1", "--output=used,size", "/"])
         .and_then(|o| {
             let mut n = o.lines().nth(1)?.split_whitespace();
@@ -166,7 +187,7 @@ pub fn about_text() -> String {
             Some(v.trim().replace(" x ", "×"))
         })
         .unwrap_or_else(|| "—".into());
-    let rows = [
+    let mut rows = vec![
         (
             "Компьютер",
             read(Path::new("/proc/sys/kernel/hostname"))
@@ -178,7 +199,14 @@ pub fn about_text() -> String {
             "Память",
             format!("{} ГБ", (mem_kb / 1024.0 / 1024.0).round_ties_even()),
         ),
-        ("Графика", gpu),
+    ];
+    if gpus.is_empty() {
+        rows.push(("Графика", "—".to_string()));
+    }
+    for (i, g) in gpus.into_iter().enumerate() {
+        rows.push((if i == 0 { "Графика" } else { "" }, g));
+    }
+    rows.extend([
         ("Диск", disk),
         ("Экран", screen),
         (
@@ -187,18 +215,60 @@ pub fn about_text() -> String {
                 .trim()
                 .to_string(),
         ),
-    ];
-    let name = os("NAME").unwrap_or_else(|| "Linux".into());
-    let build = os("BUILD_ID")
-        .filter(|v| !v.is_empty())
-        .or_else(|| os("VERSION_ID"))
-        .unwrap_or_default();
+    ]);
+    About {
+        name: os("NAME").unwrap_or_else(|| "Linux".into()),
+        build: os("BUILD_ID")
+            .filter(|v| !v.is_empty())
+            .or_else(|| os("VERSION_ID"))
+            .unwrap_or_default(),
+        rows,
+    }
+}
+
+/// Понятное название видеокарты из строки `lspci`. `renderer` — имя от
+/// OpenGL (`AMD Radeon 780M Graphics (radeonsi, …)`): у AMD оно лучше
+/// кодового имени из lspci.
+fn gpu_name(line: &str, renderer: &str) -> String {
+    let desc = line.split_once(": ").map_or(line, |(_, d)| d);
+    let desc = desc.split(" (rev").next().unwrap_or(desc).trim();
+    let bracket = desc
+        .rsplit_once('[')
+        .and_then(|(_, b)| b.split_once(']'))
+        .map(|(b, _)| b.trim());
+    if desc.starts_with("NVIDIA") {
+        return match bracket {
+            Some(b) => format!("NVIDIA {b}"),
+            None => desc.to_string(),
+        };
+    }
+    if desc.starts_with("Advanced Micro Devices") || desc.contains("[AMD/ATI]") {
+        let gl = renderer.split(" (").next().unwrap_or("").trim();
+        if gl.starts_with("AMD") {
+            return gl.to_string();
+        }
+        let model = desc.rsplit("] ").next().unwrap_or(desc);
+        return format!("AMD {model}");
+    }
+    if desc.starts_with("Intel") {
+        return match bracket {
+            Some(b) => format!("Intel {b}"),
+            None => desc.to_string(),
+        };
+    }
+    desc.to_string()
+}
+
+/// Текст «Об этом компьютере» (разметка Pango для zenity — когда службы нет).
+pub fn about_text() -> String {
+    let a = about();
     let mut text = format!(
         "<span size=\"x-large\" weight=\"bold\">{}</span>\n<span foreground=\"#888\">{}</span>\n\n",
-        escape(&name),
-        escape(&build)
+        escape(&a.name),
+        escape(&a.build)
     );
-    let lines: Vec<String> = rows
+    let lines: Vec<String> = a
+        .rows
         .iter()
         .map(|(k, v)| format!("<b>{}</b>   {}", escape(k), escape(v)))
         .collect();
@@ -213,4 +283,30 @@ fn escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+#[cfg(test)]
+mod about_tests {
+    use super::*;
+
+    #[test]
+    fn gpu_names() {
+        let nv = "01:00.0 VGA compatible controller: NVIDIA Corporation AD106M [GeForce RTX 4070 Max-Q / Mobile] (rev a1)";
+        let amd = "06:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Phoenix1 (rev c1)";
+        assert_eq!(gpu_name(nv, ""), "NVIDIA GeForce RTX 4070 Max-Q / Mobile");
+        assert_eq!(
+            gpu_name(
+                amd,
+                "AMD Radeon 780M Graphics (radeonsi, phoenix, ACO, DRM 3.64)"
+            ),
+            "AMD Radeon 780M Graphics"
+        );
+        assert_eq!(
+            gpu_name(amd, "NVIDIA GeForce RTX 4070 Laptop GPU/PCIe/SSE2"),
+            "AMD Phoenix1",
+            "экран рисует NVIDIA — у AMD остаётся кодовое имя"
+        );
+        let intel = "00:02.0 VGA compatible controller: Intel Corporation Alder Lake-P GT2 [Iris Xe Graphics] (rev 0c)";
+        assert_eq!(gpu_name(intel, ""), "Intel Iris Xe Graphics");
+    }
 }

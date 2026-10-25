@@ -106,6 +106,10 @@ pub(crate) enum Msg {
     Folder(Box<crate::folder_ui::FolderMsg>),
     /// Открыть папку в окне (команда `mimshel folder`, двойной щелчок на столе).
     OpenFolder(PathBuf),
+    /// Показать «Об этом компьютере» (команда `about` через сокет).
+    ShowAbout,
+    /// Сведения для «Об этом компьютере» собраны.
+    About(Box<mimshel_setup::actions::About>),
     /// Перенос брошенных файлов закончен — сообщить источнику (XDND).
     DropFinished {
         ticket: u64,
@@ -133,6 +137,7 @@ impl Msg {
             Msg::Desktop(_) => "стол".into(),
             Msg::Folder(_) => "окно папки".into(),
             Msg::OpenFolder(_) => "открыть папку".into(),
+            Msg::ShowAbout | Msg::About(_) => "об этом компьютере".into(),
             Msg::DropFinished { .. } => "перенос".into(),
         }
     }
@@ -191,6 +196,14 @@ pub fn ask_daemon_folder(path: &std::path::Path) -> bool {
     crate::ipc::socket_path()
         .and_then(UnixStream::connect)
         .and_then(|mut s| s.write_all(format!("folder {}\n", path.display()).as_bytes()))
+        .is_ok()
+}
+
+/// Просит службу показать «Об этом компьютере». `false` — службы нет.
+pub fn ask_daemon_about() -> bool {
+    crate::ipc::socket_path()
+        .and_then(UnixStream::connect)
+        .and_then(|mut s| s.write_all(b"about\n"))
         .is_ok()
 }
 
@@ -377,6 +390,8 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         folders,
         menubar,
         notify,
+        about: crate::about_ui::AboutUi::new(),
+        tx: tx.clone(),
     };
     ui.flush()?;
     step("окна");
@@ -466,6 +481,9 @@ struct Ui<'a> {
     folders: Option<FolderUi>,
     menubar: Option<MenubarUi>,
     notify: Option<NotifyUi>,
+    about: crate::about_ui::AboutUi,
+    /// Для потоков, которые служба запускает сама (сведения «Об этом компьютере»).
+    tx: Sender<Msg>,
 }
 
 impl Ui<'_> {
@@ -607,6 +625,8 @@ impl Ui<'_> {
     fn flush(&mut self) -> Result<()> {
         let timing = mimshel_core::names::flag("TIMING");
         let t = Instant::now();
+        self.about
+            .flush(self.display, &mut self.fonts, &mut self.icons)?;
         // Окна папок — первыми: их ждут (только что открыли папку).
         if let Some(folders) = &mut self.folders {
             folders.flush(self.display, &mut self.fonts, &mut self.icons)?;
@@ -690,6 +710,11 @@ impl Ui<'_> {
                 }
                 None => Ok(()),
             },
+            Msg::ShowAbout => {
+                crate::about_ui::AboutUi::request(self.tx.clone());
+                Ok(())
+            }
+            Msg::About(info) => self.about.show(self.display, *info),
             Msg::OpenFolder(path) => match &mut self.folders {
                 Some(folders) => folders.open(self.display, path),
                 // Свой Проводник выключен — прежний (Thunar).
@@ -854,6 +879,9 @@ impl Ui<'_> {
         {
             desktop.event(self.display, &mut self.fonts, ev)?;
             handled = true;
+        }
+        if !to_panel && self.about.wants(self.display, &ev) {
+            return self.about.event(self.display, ev);
         }
         if let Some(folders) = &mut self.folders
             && !to_panel

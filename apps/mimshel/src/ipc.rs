@@ -106,8 +106,11 @@ impl Client {
     }
 }
 
-/// Команда службе: окно (`search`, `apps`) или `folder ПУТЬ`.
+/// Команда службе: окно (`search`, `apps`), `folder ПУТЬ` или `about`.
 fn command(text: &str) -> Option<Msg> {
+    if text.trim() == "about" {
+        return Some(Msg::ShowAbout);
+    }
     if let Some(path) = text.strip_prefix("folder ") {
         let path = std::path::PathBuf::from(path);
         return path.is_absolute().then_some(Msg::OpenFolder(path));
