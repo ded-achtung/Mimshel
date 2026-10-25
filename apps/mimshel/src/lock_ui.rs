@@ -136,17 +136,7 @@ impl<'a> LockUi<'a> {
         dark: Pixmap,
     ) -> LockUi<'a> {
         let bg = background(&config.wallpaper, layout).unwrap_or(dark);
-        let user = std::env::var("USER")
-            .ok()
-            .filter(|u| !u.is_empty())
-            .or_else(|| {
-                std::env::var("HOME").ok().and_then(|home| {
-                    std::path::Path::new(&home)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                })
-            })
-            .unwrap_or_default();
+        let user = mimshel_setup::lock::user_name();
         let mut ui = LockUi {
             display,
             popup,

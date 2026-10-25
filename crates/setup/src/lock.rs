@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mimshel_lock::Layout;
 
-use crate::sys::{command, home, running, succeeds};
+use crate::sys::{command, home, output, running, succeeds};
 
 /// Экран блокировки в списке процессов (команда `mimshel lock-screen`;
 /// до переименования — `shell lock-screen`).
@@ -94,11 +94,7 @@ pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, Stri
     let out = dir.join(format!("bg-{w}x{h}.png"));
     let stamp = dir.join(format!("bg-{w}x{h}.key"));
     let face = home().join(".face");
-    let user = std::env::var("USER")
-        .ok()
-        .filter(|u| !u.is_empty())
-        .or_else(|| home().file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_default();
+    let user = user_name();
     let mtime = |p: &Path| {
         std::fs::metadata(p)
             .and_then(|m| m.modified())
@@ -150,6 +146,18 @@ pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, Stri
     std::fs::rename(&tmp, &out).map_err(|e| e.to_string())?;
     std::fs::write(&stamp, &key).map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+/// Имя пользователя для PAM и подписи. Берётся у системы по номеру процесса
+/// (`id -un`): `$USER` может быть пустым или чужим (запуск через `su`, `env`),
+/// и тогда верный пароль не подходил бы — экран было бы не разблокировать.
+pub fn user_name() -> String {
+    output(&["id", "-un"])
+        .map(|s| s.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .or_else(|| std::env::var("USER").ok().filter(|u| !u.is_empty()))
+        .or_else(|| home().file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// Заблокировать экран и держать блокировку, пока не введён верный пароль.
