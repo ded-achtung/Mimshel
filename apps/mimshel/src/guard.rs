@@ -1,12 +1,12 @@
-//! Сторож службы. `shell daemon` сам ничего не рисует: он запускает настоящую
-//! службу (`shell daemon --child`) отдельным процессом и, если та упала,
+//! Сторож службы. `mimshel daemon` сам ничего не рисует: он запускает настоящую
+//! службу (`mimshel daemon --child`) отдельным процессом и, если та упала,
 //! запускает заново. Служба рисует док — без сторожа её падение оставило бы
 //! рабочий стол без дока до перезахода (урок 12 в CLAUDE.md).
 //!
 //! Сам сторож почти ничего не делает, поэтому падать ему не с чего. С X у него
 //! только тихое соединение: закрылся X (выход из сеанса) — сторож выходит, а
 //! не перезапускает службу (иначе, запущенный не из сеанса, например по SSH,
-//! он пережил бы выход и цеплялся к X следующего сеанса). Остановить обоих: `pkill -f 'shell daemon'` (так делает `shell apply service`).
+//! он пережил бы выход и цеплялся к X следующего сеанса). Остановить обоих: `pkill -f 'mimshel daemon'` (так делает `mimshel apply service`).
 //! Служба следит за сторожем и выходит, если его не стало.
 
 use std::fs::{File, OpenOptions};
@@ -28,11 +28,11 @@ const LOG_LIMIT: u64 = 1024 * 1024;
 pub fn run() -> ! {
     if crate::ui::daemon_running() {
         eprintln!("Служба уже запущена.");
-        // И в журнал: запуск при входе или из shell apply иначе выходит молча.
+        // И в журнал: запуск при входе или из mimshel apply иначе выходит молча.
         log("служба уже запущена — второй сторож не нужен, выхожу");
         std::process::exit(0);
     }
-    match shell_x11::ServerWatch::connect() {
+    match mimshel_x11::ServerWatch::connect() {
         Ok(watch) => {
             std::thread::spawn(move || {
                 watch.wait_closed();
@@ -127,19 +127,19 @@ fn describe(status: &ExitStatus) -> String {
 /// Путь к своей программе. Если её файл заменили новой сборкой (`install`),
 /// ядро добавляет к пути « (deleted)» — тогда берём новый файл по тому же пути.
 pub fn own_exe() -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shell"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(mimshel_core::names::APP));
     match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
         Some(path) => PathBuf::from(path),
         None => exe,
     }
 }
 
-/// `~/.local/state/shell/daemon.log`.
+/// `~/.local/state/mimshel/daemon.log`.
 pub fn log_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(base.join("shell/daemon.log"))
+    Some(mimshel_core::names::dir_in(&base).join("daemon.log"))
 }
 
 fn log_file() -> Option<File> {

@@ -134,7 +134,7 @@ impl Icons {
             pixmaps,
             cache: HashMap::new(),
             folders: RefCell::new(HashMap::new()),
-            scale: shell_render::scale(),
+            scale: mimshel_render::scale(),
         }
     }
 
@@ -208,7 +208,7 @@ impl Icons {
     /// (при масштабе 2 — вдвое больше: рисовать с уменьшением до `size`).
     /// Запоминается: второй раз — мгновенно.
     pub fn get(&mut self, name: &str, size: u32) -> Option<&Pixmap> {
-        let px = shell_render::to_px(size, self.scale);
+        let px = mimshel_render::to_px(size, self.scale);
         let key = (name.to_string(), px);
         if !self.cache.contains_key(&key) {
             // Рисунок выбираем по размеру в точках: у одного имени в разных

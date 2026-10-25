@@ -1,6 +1,6 @@
 //! Окна папок — свой Проводник в службе (часть `parts.folders`). Окно
 //! открывается сразу: шрифты и значки уже в памяти службы, а список файлов
-//! читается в потоке. Сам вид окна — `shell_folder::FolderView`; здесь —
+//! читается в потоке. Сам вид окна — `mimshel_folder::FolderView`; здесь —
 //! окна на экране, слежение за папкой (inotify), меню по правому щелчку,
 //! переименование полем, перетаскивание (внутри окна, в другие окна и на
 //! стол — по XDND) и действия с файлами (общие со столом, `desktop_files`).
@@ -13,24 +13,24 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use inotify::{Inotify, WatchMask};
-use shell_core::config::Config;
-use shell_desktop::files::{Item, MimeDb, scan, scan_with};
-use shell_desktop::rename_box::{RenameBox, RenameResult};
-use shell_folder::view::{DEFAULT_SIZE, MIN_SIZE};
-use shell_folder::{Action, FolderView, Place};
-use shell_icons::Icons;
-use shell_text::Fonts;
-use shell_widgets::{Menu, MenuEntry, MenuResult};
-use shell_x11::{AppWindow, Display, DragTarget, Event, Popup};
+use mimshel_core::config::Config;
+use mimshel_desktop::files::{Item, MimeDb, scan, scan_with};
+use mimshel_desktop::rename_box::{RenameBox, RenameResult};
+use mimshel_folder::view::{DEFAULT_SIZE, MIN_SIZE};
+use mimshel_folder::{Action, FolderView, Place};
+use mimshel_icons::Icons;
+use mimshel_text::Fonts;
+use mimshel_widgets::{Menu, MenuEntry, MenuResult};
+use mimshel_x11::{AppWindow, Display, DragTarget, Event, Popup};
 
 use crate::desktop_files;
 use crate::ui::{Msg, Result};
 
 /// Класс окна (`WM_CLASS`): по нему док и строка меню узнают Проводник
-/// (`StartupWMClass` в ярлыке `shell-folder.desktop`).
-pub const WINDOW_CLASS: &str = "shell-folder";
-/// Ярлык Проводника (без `.desktop`) — его пишет `shell apply folders`.
-pub const DESKTOP_ID: &str = "shell-folder";
+/// (`StartupWMClass` в ярлыке `mimshel-folder.desktop`).
+pub const WINDOW_CLASS: &str = "mimshel-folder";
+/// Ярлык Проводника (без `.desktop`) — его пишет `mimshel apply folders`.
+pub const DESKTOP_ID: &str = "mimshel-folder";
 /// После события в папке — подождать тишины и тогда перечитать.
 const QUIET: Duration = Duration::from_millis(150);
 /// Как часто поток слежения проверяет, не закрыли ли окно.
@@ -112,8 +112,8 @@ impl FolderUi {
         drag_popup.pass_through(d)?;
         Ok(FolderUi {
             windows: Vec::new(),
-            places: shell_folder::places(),
-            special: shell_folder::special_folders(),
+            places: mimshel_folder::places(),
+            special: mimshel_folder::special_folders(),
             mime: Arc::new(MimeDb::load()),
             menu_popup: d.create_popup("folder-menu")?,
             menu: None,
@@ -132,7 +132,7 @@ impl FolderUi {
 
     /// Значки окна папки — заранее: первое окно открывается без задержки.
     pub fn preload(&self, icons: &mut Icons) {
-        shell_folder::view::preload(icons, &self.places);
+        mimshel_folder::view::preload(icons, &self.places);
     }
 
     /// Нарисовать окно папки невидимо (буквы всех размеров окна попадут в
@@ -140,7 +140,7 @@ impl FolderUi {
     pub fn warm_up(&self, fonts: &mut Fonts, icons: &mut Icons) {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         let mut view = FolderView::new(home, self.places.clone(), DEFAULT_SIZE);
-        let locale = shell_apps::Locale::from_env();
+        let locale = mimshel_apps::Locale::from_env();
         let mut items = scan(view.dir(), &self.mime, locale.as_ref());
         items.truncate(40);
         view.set_items(items);
@@ -154,7 +154,7 @@ impl FolderUi {
         view.set_special(self.special.clone());
         let win = d.create_app_window(WINDOW_CLASS, &view.title(), DEFAULT_SIZE, MIN_SIZE)?;
         win.show(d)?;
-        if std::env::var_os("SHELL_TIMING").is_some() {
+        if mimshel_core::names::flag("TIMING") {
             eprintln!("Окно папки: создано за {:?}", opened.elapsed());
         }
         let stop = Arc::new(AtomicBool::new(false));
@@ -208,7 +208,7 @@ impl FolderUi {
     pub fn message(&mut self, msg: FolderMsg) {
         match msg {
             FolderMsg::Places => {
-                self.places = shell_folder::places();
+                self.places = mimshel_folder::places();
                 for w in &mut self.windows {
                     if w.view.set_places(self.places.clone()) {
                         w.dirty = true;
@@ -221,7 +221,7 @@ impl FolderUi {
                 items,
                 free,
             } => {
-                if std::env::var_os("SHELL_TIMING").is_some()
+                if mimshel_core::names::flag("TIMING")
                     && let Some(w) = self.windows.iter().find(|w| w.win.id() == window)
                 {
                     eprintln!(
@@ -392,8 +392,8 @@ impl FolderUi {
             Action::Drop { x, y } => self.drag_drop(d, window, x, y)?,
             Action::Rename(path) => self.rename_start = Some((window, path)),
             Action::Trash(paths) => trash(&paths),
-            Action::Copy(paths) => shell_x11::copy_files(paths, false),
-            Action::Cut(paths) => shell_x11::copy_files(paths, true),
+            Action::Copy(paths) => mimshel_x11::copy_files(paths, false),
+            Action::Cut(paths) => mimshel_x11::copy_files(paths, true),
             Action::Paste => desktop_files::paste(w.view.dir().to_path_buf()),
             Action::NewFolder => {
                 let dir = w.view.dir().to_path_buf();
@@ -618,12 +618,12 @@ impl FolderUi {
             Command::Open => {
                 let action = w
                     .view
-                    .key(shell_x11::KeyPress::plain(shell_x11::Key::Return));
+                    .key(mimshel_x11::KeyPress::plain(mimshel_x11::Key::Return));
                 self.act(d, fonts, window, action)?;
             }
             Command::OpenWindow => {
                 for item in items {
-                    if item.kind == shell_desktop::files::Kind::Folder {
+                    if item.kind == mimshel_desktop::files::Kind::Folder {
                         self.open(d, item.path)?;
                     } else {
                         desktop_files::open(&item);
@@ -635,8 +635,8 @@ impl FolderUi {
                     self.rename_start = Some((window, path.clone()));
                 }
             }
-            Command::Copy => shell_x11::copy_files(paths, false),
-            Command::Cut => shell_x11::copy_files(paths, true),
+            Command::Copy => mimshel_x11::copy_files(paths, false),
+            Command::Cut => mimshel_x11::copy_files(paths, true),
             Command::Trash => trash(&paths),
             Command::NewFolder => self.created(window, desktop_files::new_folder(&dir)),
             Command::NewTextFile => self.created(window, desktop_files::new_text_file(&dir)),
@@ -715,7 +715,7 @@ impl FolderUi {
             };
             match w.view.items().iter().position(|i| i.path == path) {
                 Some(i) => {
-                    let is_dir = w.view.items()[i].kind == shell_desktop::files::Kind::Folder;
+                    let is_dir = w.view.items()[i].kind == mimshel_desktop::files::Kind::Folder;
                     w.view.set_renaming(Some(path.clone()));
                     w.dirty = true;
                     let rename = RenameBox::new(path, is_dir);
@@ -780,7 +780,7 @@ impl FolderUi {
                 let frame = w.view.render(fonts, icons);
                 let drawn = t.elapsed();
                 w.win.present(d, &frame)?;
-                if std::env::var_os("SHELL_TIMING").is_some() {
+                if mimshel_core::names::flag("TIMING") {
                     eprintln!(
                         "Окно папки: кадр {drawn:?}, вывод {:?}, от открытия {:?}",
                         t.elapsed() - drawn,
@@ -808,8 +808,8 @@ pub fn snapshot(dir: &Path, file: &str) -> Result<()> {
     let config = crate::ui::load_config();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
-    let mut view = FolderView::new(dir.to_path_buf(), shell_folder::places(), DEFAULT_SIZE);
-    let locale = shell_apps::Locale::from_env();
+    let mut view = FolderView::new(dir.to_path_buf(), mimshel_folder::places(), DEFAULT_SIZE);
+    let locale = mimshel_apps::Locale::from_env();
     view.set_items(scan(dir, &MimeDb::load(), locale.as_ref()));
     let start = std::time::Instant::now();
     view.render(&mut fonts, &mut icons);
@@ -827,7 +827,7 @@ pub fn open_elsewhere(path: &Path) {
     desktop_files::spawn(&["thunar", &path.display().to_string()], None);
 }
 
-/// Папки из командной строки (`shell folder %U` в ярлыке): пути и адреса
+/// Папки из командной строки (`mimshel folder %U` в ярлыке): пути и адреса
 /// `file://`; у файла — его папка. Ничего не дали — домашняя.
 pub fn folder_args(args: &[String]) -> Vec<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
@@ -836,7 +836,7 @@ pub fn folder_args(args: &[String]) -> Vec<PathBuf> {
         .iter()
         .filter_map(|a| {
             let path = match a.strip_prefix("file://") {
-                Some(rest) => PathBuf::from(shell_x11::percent_decode(rest)),
+                Some(rest) => PathBuf::from(mimshel_x11::percent_decode(rest)),
                 None if a.contains("://") => return None,
                 None => cwd.join(a),
             };
@@ -890,7 +890,7 @@ fn pairs_into(
         if moving && src.parent() == Some(into) {
             continue;
         }
-        let dest = shell_desktop::files::free_name_reserved(into, &name, &reserved);
+        let dest = mimshel_desktop::files::free_name_reserved(into, &name, &reserved);
         reserved.insert(dest.clone());
         pairs.push((src, dest));
     }
@@ -939,7 +939,7 @@ fn watch(
     tx: Sender<Msg>,
 ) {
     std::thread::spawn(move || {
-        let locale = shell_apps::Locale::from_env();
+        let locale = mimshel_apps::Locale::from_env();
         let send = |tx: &Sender<Msg>| {
             let items = scan_with(&dir, &mime, locale.as_ref(), hidden);
             let msg = FolderMsg::Files {

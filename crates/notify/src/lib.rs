@@ -3,12 +3,12 @@
 //! текста и кнопки действий; крестик при наведении. Здесь — что показывать,
 //! когда убрать, раскладка и рисование в картинку; окно и время — у службы.
 
-use shell_render::Canvas;
+use mimshel_render::Canvas;
 use std::time::{Duration, Instant};
 
-pub use shell_dbus::notify::{CloseReason, Notification};
-use shell_text::{Fonts, Style};
-use shell_widgets::shape::{circle, paint, rounded};
+pub use mimshel_dbus::notify::{CloseReason, Notification};
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::shape::{circle, paint, rounded};
 use tiny_skia::{
     FillRule, FilterQuality, LineCap, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform,
 };

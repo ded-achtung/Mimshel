@@ -1,4 +1,4 @@
-//! Настройки оболочки: свой файл `~/.config/shell/config.toml`
+//! Настройки оболочки: свой файл `~/.config/mimshel/config.toml`
 //! ([`Config::from_toml`]); нет файла — он создаётся из значений по
 //! умолчанию. Здесь только разбор и составление текста, файлы читает
 //! программа.
@@ -33,7 +33,7 @@ pub struct Config {
     /// `None` — «auto»: по DPI системы (Xfce: Внешний вид → Шрифты → DPI).
     pub scale: Option<f32>,
     /// Программам GTK — готовые PNG вместо SVG (тема `ТЕМА-png`, рисует
-    /// `shell apply icons`): окна открываются на 10–40 % быстрее.
+    /// `mimshel apply icons`): окна открываются на 10–40 % быстрее.
     pub png_icons: bool,
     /// Команда терминала для программ с `Terminal=true`; программа идёт после неё.
     pub terminal: Vec<String>,
@@ -48,7 +48,7 @@ pub struct Config {
     /// Увеличение под мышью в процентах (`None` — выключено).
     pub dock_zoom: Option<u32>,
     pub dock_hide: DockHide,
-    /// Какие части делает shell, а какие — прежние программы (`[parts]`,
+    /// Какие части делает Mimshel, а какие — прежние программы (`[parts]`,
     /// см. [`PARTS`]): док (иначе Plank), строка меню (иначе панель Xfce),
     /// уведомления (иначе xfce4-notifyd), окна «Поиск» и «Программы» (иначе rofi).
     pub dock: bool,
@@ -78,7 +78,7 @@ pub struct Config {
     pub rename_apps: Vec<(String, String)>,
 }
 
-/// Части, которые может делать shell: (имя, прежняя программа, что это).
+/// Части, которые может делать Mimshel: (имя, прежняя программа, что это).
 pub const PARTS: &[(&str, &str, &str)] = &[
     ("dock", "plank", "док"),
     ("menubar", "xfce", "строка меню (прежняя — панель Xfce)"),
@@ -97,7 +97,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             font: "Inter".into(),
-            icon_theme: "Colloid-shell".into(),
+            icon_theme: "Colloid-mimshel".into(),
             gtk_theme: "Colloid-Dark".into(),
             cursor_theme: "Colloid-cursors".into(),
             wallpaper: "space".into(),
@@ -125,7 +125,7 @@ impl Default for Config {
             search_panel: false,
             apps_panel: false,
             menubar_height: 28,
-            menu_icon: "shell-logo".into(),
+            menu_icon: "mimshel-logo".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
             notify: false,
             desktop: false,
@@ -203,7 +203,7 @@ impl DockHide {
 }
 
 impl Config {
-    /// Делает ли часть shell (`None` — нет такой части).
+    /// Делает ли часть Mimshel (`None` — нет такой части).
     pub fn part(&self, name: &str) -> Option<bool> {
         Some(match name {
             "dock" => self.dock,
@@ -230,7 +230,7 @@ impl Config {
         }
     }
 
-    /// Нужна ли служба shell вообще.
+    /// Нужна ли служба Mimshel вообще.
     pub fn shell_needed(&self) -> bool {
         PARTS.iter().any(|(name, ..)| self.part(name) == Some(true))
     }
@@ -366,10 +366,12 @@ impl Config {
             c.rename_apps = renames;
         }
         for (name, old, _) in PARTS {
+            // «mimshel» — наша часть; прежнее «shell» тоже.
+            let ours = |v: &str| v == crate::names::APP || v == crate::names::OLD;
             if let Some(v) = get("parts", name).and_then(|v| v.as_str())
-                && (v == "shell" || v == *old)
+                && (ours(v) || v == *old)
             {
-                c.set_part(name, v == "shell");
+                c.set_part(name, ours(v));
             }
         }
         c
@@ -388,24 +390,24 @@ impl Config {
         let part = |name: &str| {
             let old = PARTS.iter().find(|p| p.0 == name).map_or("", |p| p.1);
             s(if self.part(name) == Some(true) {
-                "shell"
+                crate::names::APP
             } else {
                 old
             })
         };
         format!(
             "\
-# Настройки оболочки shell. Менять удобнее командой, она сразу применяет:
-#   shell set dock.icon_size 56
-# После правки руками: shell apply
+# Настройки оболочки Mimshel. Менять удобнее командой, она сразу применяет:
+#   mimshel set dock.icon_size 56
+# После правки руками: mimshel apply
 
 [parts]
-# Что делает shell, а что — прежние программы:
-# dock — \"shell\" или \"plank\"; menubar — \"shell\" или \"xfce\" (панель Xfce);
-# notify — \"shell\" или \"xfce\" (xfce4-notifyd);
-# search_panel (окно «Поиск») и apps_panel (окно «Программы») — \"shell\" или \"rofi\".
-# desktop (рабочий стол: обои, меню по правому щелчку) — \"shell\" или \"xfce\" (xfdesktop).
-# folders (окна папок, Проводник) — \"shell\" или \"thunar\".
+# Что делает Mimshel, а что — прежние программы:
+# dock — \"mimshel\" или \"plank\"; menubar — \"mimshel\" или \"xfce\" (панель Xfce);
+# notify — \"mimshel\" или \"xfce\" (xfce4-notifyd);
+# search_panel (окно «Поиск») и apps_panel (окно «Программы») — \"mimshel\" или \"rofi\".
+# desktop (рабочий стол: обои, меню по правому щелчку) — \"mimshel\" или \"xfce\" (xfdesktop).
+# folders (окна папок, Проводник) — \"mimshel\" или \"thunar\".
 dock = {p_dock}
 menubar = {p_menubar}
 notify = {p_notify}
@@ -416,21 +418,21 @@ apps_panel = {p_apps}
 
 [look]
 # Шрифт, тема значков, тема окон, курсор и обои (space, waves, aurora —
-# свои, нарисованные программой, или путь к картинке). Применить: shell apply look wallpaper
+# свои, нарисованные программой, или путь к картинке). Применить: mimshel apply look wallpaper
 font = {font}
 icon_theme = {theme}
 gtk_theme = {gtk_theme}
 cursor_theme = {cursor_theme}
 wallpaper = {wallpaper}
 # Масштаб для крупных экранов: \"auto\" — по DPI системы, или число от 1 до 3
-# (1.5 — всё в полтора раза крупнее). Меняется командой shell set look.scale 1.5
+# (1.5 — всё в полтора раза крупнее). Меняется командой mimshel set look.scale 1.5
 scale = {scale}
 # Программам GTK — готовые PNG значков (быстрее открываются окна; ~26 МБ).
-# false — как раньше, SVG. Применить: shell apply icons
+# false — как раньше, SVG. Применить: mimshel apply icons
 png_icons = {png_icons}
 
 [menubar]
-# Высота в точках, значок главного меню (shell-logo — наша планета; имя в теме или путь к файлу),
+# Высота в точках, значок главного меню (mimshel-logo — наша планета; имя в теме или путь к файлу),
 # формат часов как у команды date: %a — день недели, %-d — число, %b — месяц.
 height = {height}
 menu_icon = {menu_icon}
@@ -455,7 +457,7 @@ icon_size = {lp_icon}
 
 [lock]
 # Подсказка в поле пароля; через сколько минут бездействия блокировать экран
-# и через сколько гасить его (после блокировки). Применить: shell apply lock
+# и через сколько гасить его (после блокировки). Применить: mimshel apply lock
 placeholder = {placeholder}
 idle_minutes = {idle}
 screen_off_minutes = {screen_off}
@@ -621,6 +623,19 @@ pub fn migrate_names(text: &str) -> Option<String> {
         {
             new = Some(line.replacen(key.trim(), to, 1));
         }
+        // Подписи раздела частей — под новым названием проекта.
+        if section == "parts" && trimmed.starts_with('#') && trimmed.contains("\"shell\" или") {
+            let line = new.as_deref().unwrap_or(line);
+            new = Some(line.replace("\"shell\" или", "\"mimshel\" или"));
+        }
+        // Прежние значения — у той же строки (ключ мог переименоваться выше).
+        let current = new.clone().unwrap_or_else(|| line.to_string());
+        if let Some((key, _)) = current.trim().split_once('=')
+            && !current.trim().starts_with('#')
+            && let Some(l) = migrate_value(&section, key.trim(), &current)
+        {
+            new = Some(l);
+        }
         match new {
             Some(l) => {
                 changed = true;
@@ -630,6 +645,35 @@ pub fn migrate_names(text: &str) -> Option<String> {
         }
     }
     changed.then_some(out)
+}
+
+/// Прежние значения после переименования проекта (`shell` → Mimshel):
+/// (раздел, ключ, прежнее, новое). Меняется только эта строка файла.
+const VALUES_RENAMED: &[(&str, &str, &str, &str)] = &[
+    ("look", "icon_theme", "Colloid-shell", "Colloid-mimshel"),
+    ("menubar", "menu_icon", "shell-logo", "mimshel-logo"),
+    ("dock", "apps", "shell-folder", "mimshel-folder"),
+];
+
+/// Переименовать прежние значения в строке `key = …` раздела `section`.
+fn migrate_value(section: &str, key: &str, line: &str) -> Option<String> {
+    // Части: `dock = "shell"` → `dock = "mimshel"`.
+    if section == "parts" {
+        let (k, v) = line.split_once('=')?;
+        let old = format!("\"{}\"", crate::names::OLD);
+        return (v.trim_start().starts_with(&old)).then(|| {
+            format!(
+                "{k}={}",
+                v.replacen(&old, &format!("\"{}\"", crate::names::APP), 1)
+            )
+        });
+    }
+    let (_, _, from, to) = VALUES_RENAMED
+        .iter()
+        .find(|(s, k, ..)| *s == section && *k == key)?;
+    let from = format!("\"{from}\"");
+    line.contains(&from)
+        .then(|| line.replace(&from, &format!("\"{to}\"")))
 }
 
 /// Есть ли в файле раздел `[lock]` (в файлах, созданных до него, нет).
@@ -668,23 +712,26 @@ pub fn add_lock_settings(text: &str, base: &Config) -> Option<String> {
     set_value(&out, "apps", "rename", Value::InlineTable(table))
 }
 
-/// Настройки, которые меняет `shell set`: (раздел.ключ, что это).
+/// Настройки, которые меняет `mimshel set`: (раздел.ключ, что это).
 pub const SETTINGS: &[(&str, &str)] = &[
-    ("parts.dock", "\"shell\" или \"plank\""),
-    ("parts.menubar", "\"shell\" или \"xfce\""),
-    ("parts.notify", "\"shell\" или \"xfce\""),
-    ("parts.search_panel", "окно «Поиск»: \"shell\" или \"rofi\""),
+    ("parts.dock", "\"mimshel\" или \"plank\""),
+    ("parts.menubar", "\"mimshel\" или \"xfce\""),
+    ("parts.notify", "\"mimshel\" или \"xfce\""),
+    (
+        "parts.search_panel",
+        "окно «Поиск»: \"mimshel\" или \"rofi\"",
+    ),
     (
         "parts.apps_panel",
-        "окно «Программы»: \"shell\" или \"rofi\"",
+        "окно «Программы»: \"mimshel\" или \"rofi\"",
     ),
     (
         "parts.desktop",
-        "рабочий стол: \"shell\" или \"xfce\" (xfdesktop)",
+        "рабочий стол: \"mimshel\" или \"xfce\" (xfdesktop)",
     ),
     (
         "parts.folders",
-        "окна папок (Проводник): \"shell\" или \"thunar\"",
+        "окна папок (Проводник): \"mimshel\" или \"thunar\"",
     ),
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),
@@ -708,7 +755,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("menubar.height", "высота строки меню, 16–128"),
     (
         "menubar.menu_icon",
-        "значок главного меню: shell-logo (планета) или имя из темы",
+        "значок главного меню: mimshel-logo (планета) или имя из темы",
     ),
     ("menubar.clock_format", "формат часов, как у date"),
     ("dock.apps", "программы через запятую"),
@@ -741,7 +788,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Значение для файла из того, что набрали в `shell set` (`раздел.ключ`).
+/// Значение для файла из того, что набрали в `mimshel set` (`раздел.ключ`).
 pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
     let input = input.trim();
     if let Some((min, max)) = number_range(key)
@@ -766,7 +813,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 .iter()
                 .find(|p| p.0 == name)
                 .ok_or_else(|| format!("нет части {name}"))?;
-            words(&["shell", old])
+            words(&[crate::names::APP, crate::names::OLD, old])
         }
         "look.font"
         | "look.icon_theme"
@@ -984,8 +1031,18 @@ mod tests {
         let c = Config::from_toml(&new);
         assert!(c.search_panel && !c.apps_panel && c.dock);
         assert_eq!((c.apps_columns, c.apps_rows), (6, 5));
-        // Новый файл не меняется; «launchpad» в значениях не трогаем.
+        // Части — уже под новым названием проекта; дальше файл не меняется,
+        // «launchpad» в значениях не трогаем.
+        assert!(new.contains("dock = \"mimshel\"") && new.contains("search_panel = \"mimshel\""));
+        assert!(new.contains("apps_panel = \"rofi\""), "{new}");
         assert_eq!(migrate_names(&new), None);
+        let old_values = "[look]\nicon_theme = \"Colloid-shell\"\n[menubar]\nmenu_icon = \"shell-logo\"\n\
+                          [dock]\napps = [\"shell-folder\", \"firefox\"]\n";
+        let new_values = migrate_names(old_values).unwrap();
+        let c = Config::from_toml(&new_values);
+        assert_eq!(c.icon_theme, "Colloid-mimshel");
+        assert_eq!(c.menu_icon, "mimshel-logo");
+        assert_eq!(c.dock_apps, ["mimshel-folder", "firefox"]);
         assert_eq!(
             migrate_names("[dock]\napps = [\"macos-launchpad\"]\n"),
             None

@@ -63,7 +63,7 @@ impl Display {
             .and_then(|c| c.reply().ok())
             .map(|r| String::from_utf8_lossy(&r.name).into_owned())
             .unwrap_or_default();
-        shell_core::keyboard::layouts_from_symbols(&name)
+        mimshel_core::keyboard::layouts_from_symbols(&name)
     }
 
     /// Номер нынешней раскладки (с 0).

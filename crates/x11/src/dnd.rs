@@ -414,7 +414,7 @@ impl Display {
                 window,
                 a.XdndSelection,
                 a.TEXT_URI_LIST,
-                a.SHELL_XDND,
+                a.MIMSHEL_XDND,
                 time,
             );
             let _ = self.conn.flush();

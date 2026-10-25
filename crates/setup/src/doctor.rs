@@ -1,11 +1,11 @@
-//! Проверка, что всё на месте (`shell doctor`): пакеты, тема, панель или своя
+//! Проверка, что всё на месте (`mimshel doctor`): пакеты, тема, панель или своя
 //! строка меню, уведомления, раскладки, меню яблока, блокировка, док, сама
-//! служба shell. У каждой проверки есть часть, и [`fix_parts`] говорит, что
+//! служба Mimshel. У каждой проверки есть часть, и [`fix_parts`] говорит, что
 //! применить, чтобы починить.
 
 use std::path::Path;
 
-use shell_core::config::Config;
+use mimshel_core::config::Config;
 
 use crate::paths::{APPLE_MENU, APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
 use crate::sys::{DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF};
@@ -44,12 +44,12 @@ const PANEL_PLUGINS: &[&str] = &[
     "clock",
 ];
 const SESSION: &str = "/sessions/Failsafe";
-/// Наблюдатели службы (см. `apps/shell/src/status.rs`).
+/// Наблюдатели службы (см. `apps/mimshel/src/status.rs`).
 const WATCHERS: &str = r"^(pactl subscribe|udevadm monitor --kernel --subsystem-match=power_supply|xfconf-query -c xfce4-notifyd -m)";
 
 pub struct Check {
     /// Часть оформления: env, install, look, wallpaper, panel, notify, menu,
-    /// lock, power, dock, shell; config — свой файл настроек, его правят руками.
+    /// lock, power, dock, mimshel; config — свой файл настроек, его правят руками.
     pub part: &'static str,
     pub what: String,
     pub ok: bool,
@@ -57,7 +57,7 @@ pub struct Check {
     pub hint: String,
 }
 
-/// Все проверки. `cfg` — настройки shell, `config` — их файл.
+/// Все проверки. `cfg` — настройки Mimshel, `config` — их файл.
 pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     let mut out = Vec::new();
     let mut add = |part: &'static str, what: &str, ok: bool, hint: &str| {
@@ -122,20 +122,15 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "поставьте курсор в ~/.local/share/icons",
     );
     let (sw, sh) = crate::lock::screen_size();
-    let wallpaper = shell_wallpaper::Style::parse(&cfg.wallpaper).map_or_else(
+    let wallpaper = mimshel_wallpaper::Style::parse(&cfg.wallpaper).map_or_else(
         || std::path::PathBuf::from(&cfg.wallpaper),
-        |st| {
-            home().join(format!(
-                ".local/share/shell/wallpapers/{}-{sw}x{sh}.png",
-                st.name()
-            ))
-        },
+        |st| crate::parts::wallpaper_path(st, sw as u32, sh as u32),
     );
     add(
         "install",
         &format!("обои {}", cfg.wallpaper),
         wallpaper.exists(),
-        "shell apply wallpaper",
+        "mimshel apply wallpaper",
     );
     add(
         "install",
@@ -150,13 +145,19 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "look",
         &format!("тема программ: {}", cfg.gtk_theme),
         xs("/Net/ThemeName").as_deref() == Some(&cfg.gtk_theme),
-        "shell apply look",
+        "mimshel apply look",
     );
+    // С готовыми PNG программам GTK ставится тема «…-png» (см. png_icons).
+    let icon_theme = if cfg.icon_theme == crate::parts::OVERLAY_THEME && cfg.png_icons {
+        crate::png_icons::theme_name(&cfg.icon_theme)
+    } else {
+        cfg.icon_theme.clone()
+    };
     add(
         "look",
-        &format!("значки: {}", cfg.icon_theme),
-        xs("/Net/IconThemeName").as_deref() == Some(&cfg.icon_theme),
-        "shell apply icons",
+        &format!("значки: {icon_theme}"),
+        xs("/Net/IconThemeName").as_deref() == Some(&icon_theme),
+        "mimshel apply icons",
     );
     if cfg.icon_theme == crate::parts::OVERLAY_THEME {
         add(
@@ -167,26 +168,26 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
                 .join(crate::parts::OVERLAY_THEME)
                 .join("places/scalable/start-here.svg")
                 .exists(),
-            "shell apply icons",
+            "mimshel apply icons",
         );
     }
     add(
         "look",
         &format!("курсор: {}", cfg.cursor_theme),
         xs("/Gtk/CursorThemeName").as_deref() == Some(&cfg.cursor_theme),
-        "shell apply look",
+        "mimshel apply look",
     );
     add(
         "look",
         "шрифт",
         xs("/Gtk/FontName").as_deref() == Some(&*format!("{} 10", cfg.font)),
-        "shell apply look",
+        "mimshel apply look",
     );
     add(
         "look",
         &format!("тема окон: {}", cfg.gtk_theme),
         xget("xfwm4", "/general/theme").as_deref() == Some(&cfg.gtk_theme),
-        "shell apply look",
+        "mimshel apply look",
     );
     add(
         "look",
@@ -207,7 +208,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "look",
         "модуль меню не включён «на лету» (роняет программы)",
         xs("/Gtk/Modules").is_none(),
-        "shell apply look",
+        "mimshel apply look",
     );
     let gtk4 = home().join(".config/gtk-4.0/gtk.css");
     add(
@@ -217,7 +218,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             && gtk4.exists()
             && std::fs::read_link(&gtk4)
                 .is_ok_and(|t| t.to_string_lossy().contains(&cfg.gtk_theme)),
-        "shell apply look",
+        "mimshel apply look",
     );
 
     // Обои на каждом мониторе, где они заданы.
@@ -246,16 +247,16 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     if cfg.menubar {
         add(
             "panel",
-            "строка меню — shell: панель Xfce не запускается при входе",
-            (panel_session_slot(PANEL_OFF) || panel_session_slot(OLD_PANEL_OFF))
+            "строка меню — Mimshel: панель Xfce не запускается при входе",
+            (panel_session_slot(PANEL_OFF) || OLD_PANEL_OFF.iter().any(|c| panel_session_slot(c)))
                 && !panel_session_slot(&["xfce4-panel"]),
-            "shell apply menubar",
+            "mimshel apply menubar",
         );
         add(
             "panel",
             "панель Xfce остановлена",
             !running("xfce4-panel"),
-            "shell apply menubar",
+            "mimshel apply menubar",
         );
     } else {
         let ids = xget_list("xfce4-panel", "/panels/panel-1/plugin-ids");
@@ -279,8 +280,8 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         add(
             "panel",
             "панель Xfce запускается при входе",
-            !(panel_session_slot(PANEL_OFF) || panel_session_slot(OLD_PANEL_OFF)),
-            "shell apply menubar",
+            !(panel_session_slot(PANEL_OFF) || OLD_PANEL_OFF.iter().any(|c| panel_session_slot(c))),
+            "mimshel apply menubar",
         );
     }
 
@@ -289,7 +290,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "panel",
             "знак меню (планета) на месте",
             crate::parts::logo_path().exists(),
-            "shell apply menubar",
+            "mimshel apply menubar",
         );
     }
     let masked = output_any(&["systemctl", "--user", "is-enabled", "xfce4-notifyd.service"]).trim()
@@ -297,57 +298,57 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     if cfg.notify {
         add(
             "notify",
-            "уведомления показывает shell",
-            bus_owner("org.freedesktop.Notifications") == "shell",
-            "shell apply notify",
+            "уведомления показывает Mimshel",
+            ours(&bus_owner("org.freedesktop.Notifications")),
+            "mimshel apply notify",
         );
         add(
             "notify",
             "xfce4-notifyd не запускается (служба замаскирована)",
             masked,
-            "shell apply notify",
+            "mimshel apply notify",
         );
     } else {
         add(
             "notify",
             "xfce4-notifyd не замаскирован",
             !masked,
-            "shell apply notify",
+            "mimshel apply notify",
         );
     }
     if cfg.desktop {
         add(
             "desktop",
-            "рабочий стол рисует shell: xfdesktop не запущен",
+            "рабочий стол рисует Mimshel: xfdesktop не запущен",
             !running("xfdesktop"),
-            "shell apply desktop",
+            "mimshel apply desktop",
         );
         add(
             "desktop",
             "xfdesktop не запускается при входе",
             panel_session_slot(DESKTOP_OFF) && !panel_session_slot(&["xfdesktop"]),
-            "shell apply desktop",
+            "mimshel apply desktop",
         );
     } else {
         add(
             "desktop",
             "рабочий стол — xfdesktop запущен",
             running("xfdesktop"),
-            "shell apply desktop",
+            "mimshel apply desktop",
         );
     }
     add(
         "panel",
         "все раскладки клавиатуры загружены",
         keyboard_ok(),
-        "setxkbmap — см. урок 9 в ~/shell/CLAUDE.md",
+        "setxkbmap — см. урок 9 в CLAUDE.md проекта",
     );
     if Path::new("/etc/xdg/autostart/nm-applet.desktop").exists() {
         add(
             "panel",
             "nm-applet — значок современным способом (--indicator)",
             read(&paths.autostart.join("nm-applet.desktop")).contains("--indicator"),
-            "shell apply menubar",
+            "mimshel apply menubar",
         );
     }
 
@@ -357,15 +358,15 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "menu",
         "файл главного меню",
         paths.main_menu().exists(),
-        "shell apply launchers",
+        "mimshel apply launchers",
     );
     for (id, label, _) in APPLE_MENU {
         add(
             "menu",
-            &format!("пункт «{label}» → shell action {id}"),
-            read(&menu_dir.join(format!("shell-{id}.desktop")))
+            &format!("пункт «{label}» → mimshel action {id}"),
+            read(&menu_dir.join(format!("{}-{id}.desktop", mimshel_core::names::APP)))
                 .contains(&format!("Exec={} action {id}\n", paths.shell_bin.display())),
-            "shell apply launchers",
+            "mimshel apply launchers",
         );
     }
     let apps_desktop = paths
@@ -396,7 +397,11 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "menu",
         &format!(
             "значок «Программы» → {}",
-            if cfg.apps_panel { "shell" } else { "rofi" }
+            if cfg.apps_panel {
+                mimshel_core::names::APP
+            } else {
+                "rofi"
+            }
         ),
         read(&apps_desktop).contains(&format!("Exec={apps_cmd}\n")),
         "",
@@ -405,10 +410,10 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     // Блокировка экрана и питание.
     add(
         "lock",
-        "команда блокировки → shell lock",
+        "команда блокировки → mimshel lock",
         xget("xfce4-session", "/general/LockCommand").as_deref()
             == Some(&*format!("{} lock", paths.shell_bin.display())),
-        "shell apply lock",
+        "mimshel apply lock",
     );
     let xss = pgrep("^xss-lock(\\s|$)");
     add(
@@ -427,19 +432,21 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     // заработает со следующего входа.
     add(
         "lock",
-        "xss-lock вызывает shell lock",
+        "xss-lock вызывает mimshel lock",
         xss.first().is_some_and(|p| {
-            std::fs::read(format!("/proc/{p}/cmdline"))
-                .is_ok_and(|c| String::from_utf8_lossy(&c).contains("shell\0lock"))
+            std::fs::read(format!("/proc/{p}/cmdline")).is_ok_and(|c| {
+                let c = String::from_utf8_lossy(&c);
+                c.contains("mimshel\0lock") || c.contains("shell\0lock")
+            })
         }),
         "выйдите из системы и войдите снова",
     );
     add(
         "lock",
-        "автозапуск xss-lock → shell lock",
+        "автозапуск xss-lock → mimshel lock",
         read(&paths.autostart.join(crate::parts::LOCK_AUTOSTART))
             .contains(&format!("-- {} lock --nofork", paths.shell_bin.display())),
-        "shell apply lock",
+        "mimshel apply lock",
     );
     add(
         "lock",
@@ -451,16 +458,16 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "lock",
         "заставку Xfce не запустит D-Bus (иначе блокирует она, своим окном)",
         read(&crate::lock::screensaver_service()).contains("Exec=/bin/false"),
-        "shell apply lock",
+        "mimshel apply lock",
     );
     let (w, h) = crate::lock::screen_size();
     add(
         "lock",
         &format!("фон блокировки {w}x{h}"),
-        home()
-            .join(format!(".cache/shell/lock/bg-{w}x{h}.png"))
+        mimshel_core::names::dir_in(&home().join(".cache"))
+            .join(format!("lock/bg-{w}x{h}.png"))
             .exists(),
-        "shell apply lock",
+        "mimshel apply lock",
     );
     if succeeds(&["systemd-detect-virt", "-q"]) {
         for key in ["inactivity-on-ac", "inactivity-on-battery"] {
@@ -474,36 +481,43 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
                 )
                 .as_deref()
                     == Some(crate::parts::SLEEP_NEVER),
-                "shell apply power",
+                "mimshel apply power",
             );
         }
     }
 
-    // Служба shell.
+    // Служба Mimshel.
     if cfg.shell_needed() {
         add(
-            "shell",
-            "программа shell установлена",
+            "mimshel",
+            "программа mimshel установлена",
             paths.shell_bin.exists(),
-            "cd ~/shell && cargo build --release && install -m 755 target/release/shell ~/.local/bin/",
+            "cd ~/shell && cargo build --release && install -m 755 target/release/mimshel ~/.local/bin/",
         );
         add(
-            "shell",
-            "автозапуск службы shell",
-            paths.autostart.join("shell-daemon.desktop").exists(),
+            "mimshel",
+            "автозапуск службы Mimshel",
+            paths
+                .autostart
+                .join(crate::parts::DAEMON_AUTOSTART)
+                .exists(),
             "",
         );
-        let guard = pgrep(r"^(\S*/)?shell daemon$");
-        add("shell", "служба shell запущена", !guard.is_empty(), "");
+        let guard = [
+            pgrep(r"^(\S*/)?mimshel daemon$"),
+            pgrep(r"^(\S*/)?shell daemon$"),
+        ]
+        .concat();
+        add("mimshel", "служба Mimshel запущена", !guard.is_empty(), "");
         add(
-            "shell",
-            "служба shell в сеансе рабочего стола (не по SSH)",
+            "mimshel",
+            "служба Mimshel в сеансе рабочего стола (не по SSH)",
             guard.first().is_some_and(|&p| in_desktop_session(p)),
-            "shell apply service из терминала рабочего стола или перезайдите в сеанс",
+            "mimshel apply service из терминала рабочего стола или перезайдите в сеанс",
         );
         if let Some(path) = config {
             let error = match std::fs::read_to_string(path) {
-                Ok(text) => shell_core::config::toml_error(&text),
+                Ok(text) => mimshel_core::config::toml_error(&text),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => Some(e.to_string()),
             };
@@ -521,21 +535,25 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
                 ("com.canonical.AppMenu.Registrar", "глобальное меню"),
             ] {
                 add(
-                    "shell",
-                    &format!("{what} принимает shell"),
-                    bus_owner(name) == "shell",
-                    "shell apply service",
+                    "mimshel",
+                    &format!("{what} принимает Mimshel"),
+                    ours(&bus_owner(name)),
+                    "mimshel apply service",
                 );
             }
         }
         // Наблюдатели (звук, батарея, «Не беспокоить») — только у живой службы.
-        let child = pgrep(r"^(\S*/)?shell daemon --child$");
+        let child = [
+            pgrep(r"^(\S*/)?mimshel daemon --child$"),
+            pgrep(r"^(\S*/)?shell daemon --child$"),
+        ]
+        .concat();
         let orphans = pgrep(WATCHERS)
             .into_iter()
             .filter(|&w| parent(w).is_none_or(|p| !child.contains(&p)))
             .count();
         add(
-            "shell",
+            "mimshel",
             "нет брошенных наблюдателей (pactl, udevadm, xfconf-query)",
             orphans == 0,
             &format!("лишних процессов: {orphans}"),
@@ -546,15 +564,15 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     if cfg.dock {
         add(
             "dock",
-            "док — shell, Plank не запущен",
+            "док — Mimshel, Plank не запущен",
             !running("plank"),
-            "shell apply dock",
+            "mimshel apply dock",
         );
         add(
             "dock",
             "автозапуск Plank выключен",
             !paths.autostart.join("plank.desktop").exists(),
-            "shell apply dock",
+            "mimshel apply dock",
         );
     } else {
         add("dock", "Plank запущен", running("plank"), "");
@@ -566,7 +584,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         );
         let theme = output(&["dconf", "read", "/net/launchpad/plank/docks/dock1/theme"])
             .unwrap_or_default();
-        // Та же тема, что ставит `shell apply dock`.
+        // Та же тема, что ставит `mimshel apply dock`.
         let want = if home()
             .join(".local/share/plank/themes")
             .join(&cfg.gtk_theme)
@@ -580,7 +598,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "dock",
             "тема дока",
             theme.trim().trim_matches('\'') == want,
-            "shell apply dock",
+            "mimshel apply dock",
         );
         let items: Vec<_> = std::fs::read_dir(home().join(".config/plank/dock1/launchers"))
             .into_iter()
@@ -621,7 +639,7 @@ pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
         }
         let part = match c.part {
             "panel" => "menubar",
-            "shell" => "service",
+            "mimshel" => "service",
             p => p,
         };
         if !parts.contains(&part) {
@@ -629,6 +647,11 @@ pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
         }
     }
     (!parts.is_empty()).then_some(parts)
+}
+
+/// Наша ли программа держит имя на шине (новое имя процесса или прежнее).
+fn ours(comm: &str) -> bool {
+    comm == mimshel_core::names::APP || comm == mimshel_core::names::OLD
 }
 
 /// Есть ли в списке запуска сеанса строка с такой командой.
@@ -658,7 +681,7 @@ mod tests {
         assert_eq!(fix_parts(&[check("look", true)]), None);
         assert_eq!(
             fix_parts(&[
-                check("shell", false),
+                check("mimshel", false),
                 check("dock", false),
                 check("menu", false),
                 check("look", true),

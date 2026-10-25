@@ -7,7 +7,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use shell_core::config::{self, Config};
+use mimshel_core::config::{self, Config};
 
 pub struct Store {
     pub path: PathBuf,
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn process_edit_helper() {
-        let Some(dir) = std::env::var_os("SHELL_TEST_EDIT_DIR") else {
+        let Some(dir) = mimshel_core::names::env("TEST_EDIT_DIR") else {
             return;
         };
         let dir = PathBuf::from(dir);
@@ -302,7 +302,7 @@ mod tests {
             .map(|_| {
                 Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", "config_store::tests::process_edit_helper"])
-                    .env("SHELL_TEST_EDIT_DIR", &f.0)
+                    .env("MIMSHEL_TEST_EDIT_DIR", &f.0)
                     .stdout(Stdio::null())
                     .spawn()
                     .unwrap()

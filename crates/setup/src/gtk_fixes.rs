@@ -10,8 +10,11 @@
 
 use std::path::{Path, PathBuf};
 
-const BEGIN: &str = "/* shell: начало — пишет shell apply look, не правьте */";
-const END: &str = "/* shell: конец */";
+const BEGIN: &str = "/* mimshel: начало — пишет mimshel apply look, не правьте */";
+const END: &str = "/* mimshel: конец */";
+/// Пометки до переименования проекта — такой кусок тоже наш.
+const OLD_BEGIN: &str = "/* shell: начало — пишет shell apply look, не правьте */";
+const OLD_END: &str = "/* shell: конец */";
 const CSS: &str = "\
 .thunar .standard-view.frame widget.view.rubberband,
 .thunar .standard-view.frame widget.view .rubberband,
@@ -51,7 +54,7 @@ pub fn cleanup() -> std::io::Result<()> {
 
 /// Есть ли в файле наш кусок (для отката с `--dry-run`).
 pub fn present() -> bool {
-    std::fs::read_to_string(file()).is_ok_and(|t| t.contains(BEGIN))
+    std::fs::read_to_string(file()).is_ok_and(|t| t.contains(BEGIN) || t.contains(OLD_BEGIN))
 }
 
 fn apply_in(path: &Path) -> bool {
@@ -82,16 +85,21 @@ fn with_block(text: &str) -> String {
     format!("{rest}{sep}{BEGIN}\n{CSS}\n{END}\n")
 }
 
+/// Текст без своего куска (и без прежнего — с пометками `shell`).
 fn without_block(text: &str) -> String {
-    let (Some(start), Some(end)) = (text.find(BEGIN), text.find(END)) else {
-        return text.to_string();
-    };
-    if end < start {
-        return text.to_string();
+    let mut text = text.to_string();
+    for (begin, end_mark) in [(BEGIN, END), (OLD_BEGIN, OLD_END)] {
+        let (Some(start), Some(end)) = (text.find(begin), text.find(end_mark)) else {
+            continue;
+        };
+        if end < start {
+            continue;
+        }
+        let after = &text[end + end_mark.len()..];
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        text = format!("{}{after}", &text[..start]);
     }
-    let after = &text[end + END.len()..];
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    format!("{}{after}", &text[..start])
+    text
 }
 
 #[cfg(test)]
@@ -102,7 +110,11 @@ mod tests {
     fn block_added_once_and_user_rules_kept() {
         let user = "window { color: red; }";
         let once = with_block(user);
-        assert!(once.starts_with("window { color: red; }\n/* shell"));
+        assert!(once.starts_with("window { color: red; }\n/* mimshel"));
+        // Прежний кусок (до переименования) заменяется новым, не дублируется.
+        let old = format!("a {{}}\n{OLD_BEGIN}\nстарое\n{OLD_END}\n");
+        let new = with_block(&old);
+        assert!(!new.contains(OLD_BEGIN) && new.contains(BEGIN) && new.starts_with("a {}\n"));
         assert_eq!(with_block(&once), once, "второй раз — без изменений");
         assert_eq!(without_block(&once), "window { color: red; }\n");
         assert_eq!(without_block(&with_block("")), "");

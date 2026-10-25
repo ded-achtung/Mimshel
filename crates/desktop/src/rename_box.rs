@@ -4,11 +4,11 @@
 
 use std::path::PathBuf;
 
-use shell_core::input::{Key, KeyPress};
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
-use shell_widgets::field::{Edit, TextField};
-use shell_widgets::shape::{paint, rounded};
+use mimshel_core::input::{Key, KeyPress};
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::field::{Edit, TextField};
+use mimshel_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, Rect, Transform};
 
 const TEXT: Style = Style {

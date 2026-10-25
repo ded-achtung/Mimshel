@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use shell_dbus::notify::{self, CloseReason, NotifyEvent};
+use mimshel_dbus::notify::{self, CloseReason, NotifyEvent};
 use zbus::blocking::{Proxy, connection::Builder};
 use zbus::zvariant::{OwnedValue, StructureBuilder, Value};
 
@@ -14,7 +14,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
 fn isolated_notification_roundtrip_and_restart() -> Result<()> {
-    if std::env::var_os("SHELL_TEST_PRIVATE_BUS").is_none() {
+    if std::env::var_os("MIMSHEL_TEST_PRIVATE_BUS").is_none() {
         let status = Command::new("timeout")
             .args(["30s", "dbus-run-session", "--"])
             .arg(std::env::current_exe()?)
@@ -23,7 +23,7 @@ fn isolated_notification_roundtrip_and_restart() -> Result<()> {
                 "isolated_notification_roundtrip_and_restart",
                 "--nocapture",
             ])
-            .env("SHELL_TEST_PRIVATE_BUS", "1")
+            .env("MIMSHEL_TEST_PRIVATE_BUS", "1")
             .status()?;
         assert!(status.success(), "проверка отдельной D-Bus-шины: {status}");
         return Ok(());

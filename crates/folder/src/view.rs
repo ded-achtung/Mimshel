@@ -10,14 +10,14 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use shell_core::input::{Key, KeyPress, latin};
-use shell_desktop::files::{Item, Kind};
-use shell_desktop::icon_grid::label_lines;
-use shell_icons::Icons;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
-use shell_widgets::field::{Edit, TextField};
-use shell_widgets::shape::{paint, rounded};
+use mimshel_core::input::{Key, KeyPress, latin};
+use mimshel_desktop::files::{Item, Kind};
+use mimshel_desktop::icon_grid::label_lines;
+use mimshel_icons::Icons;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::field::{Edit, TextField};
+use mimshel_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Transform};
 
 use crate::places::{Place, Section};

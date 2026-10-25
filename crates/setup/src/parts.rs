@@ -1,7 +1,7 @@
-//! Включить части оболочки или вернуть прежние программы (`shell apply`):
+//! Включить части оболочки или вернуть прежние программы (`mimshel apply`):
 //! строка меню или панель Xfce, свой док или Plank, свои уведомления или
 //! xfce4-notifyd, окна «Поиск» и «Программы» свои или rofi, оформление, обои,
-//! экран блокировки, служба shell.
+//! экран блокировки, служба Mimshel.
 //!
 //! Порядок важен: сначала прежние программы останавливаются, потом
 //! перезапускается служба (она занимает имена на шине — трей, меню,
@@ -10,16 +10,18 @@
 
 use std::path::Path;
 
-use shell_core::config::{Config, DockHide};
+use mimshel_core::config::{Config, DockHide};
 
 use crate::paths::{APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
-use crate::sys::{DESKTOP_OFF, MANAGED_MARK, OLD_PANEL_OFF, PANEL_OFF, is_managed};
+use crate::sys::{
+    DESKTOP_OFF, MANAGED_MARK, OLD_DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF, is_managed,
+};
 use crate::sys::{
     home, keyboard_ok, kill, pgrep, read, remove, run, running, spawn, write_if_changed, xget_list,
     xkb_query, xreset, xset, xset_array,
 };
 
-/// Части, которые умеет применять `shell apply`.
+/// Части, которые умеет применять `mimshel apply`.
 pub const APPLY_PARTS: &[&str] = &[
     "menubar",
     "dock",
@@ -38,16 +40,21 @@ pub const APPLY_PARTS: &[&str] = &[
 const SESSION: &str = "/sessions/Failsafe";
 const NOTIFYD_UNIT: &str = "xfce4-notifyd.service";
 /// Автозапуск xss-lock (блокировка по бездействию и перед сном).
-pub const LOCK_AUTOSTART: &str = "shell-lock.desktop";
-/// Он же под прежним именем (от macos-look) — заменяется новым.
-const OLD_LOCK_AUTOSTART: &str = "macos-look-lock.desktop";
+pub const LOCK_AUTOSTART: &str = "mimshel-lock.desktop";
+/// Он же под прежними именами (до переименования, от macos-look) —
+/// заменяется новым.
+const OLD_LOCK_AUTOSTARTS: &[&str] = &["shell-lock.desktop", "macos-look-lock.desktop"];
+/// Автозапуск службы и он же под прежним именем.
+pub const DAEMON_AUTOSTART: &str = "mimshel.desktop";
+const OLD_DAEMON_AUTOSTART: &str = "shell-daemon.desktop";
 const PLANK_DCONF: &str = "/net/launchpad/plank/docks/dock1/";
 /// Значок окна «Программы» в доке и его ярлык (имя ярлыка — от прежнего
 /// Launchpad: под ним значок закреплён в доке у тех, кто ставил раньше).
 const APPS_ICON: &str = "pop-cosmic-launcher";
 pub const APPS_DESKTOP: &str = "macos-launchpad";
-/// Ярлык своего Проводника (он же класс его окон).
-const FOLDER_DESKTOP: &str = "shell-folder";
+/// Ярлык своего Проводника (он же класс его окон) и прежнее имя.
+const FOLDER_DESKTOP: &str = "mimshel-folder";
+const OLD_FOLDER_DESKTOP: &str = "shell-folder";
 
 /// Свойство модуля панели Xfce: (имя, тип, значение).
 type Prop<'a> = (&'a str, &'a str, &'a str);
@@ -61,7 +68,7 @@ struct Plan<'a> {
 }
 
 /// Применить части (пустой список — все). Ошибка — только если нужна служба,
-/// а программы shell нет: тогда ничего не трогаем, чтобы не остаться ни с чем.
+/// а программы Mimshel нет: тогда ничего не трогаем, чтобы не остаться ни с чем.
 pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     let mut plan = Plan {
         config,
@@ -129,7 +136,7 @@ impl Plan<'_> {
         tray_apps(&self.paths);
         install_logo();
         if self.config.menubar {
-            println!("▶ Строка меню (своя, shell)");
+            println!("▶ Строка меню (своя, Mimshel)");
             panel_at_login(false);
             quit_panel();
             // blueman рисует значок отдельной программой; без панели она могла
@@ -258,7 +265,7 @@ impl Plan<'_> {
     fn dock(&mut self) {
         let plank_autostart = self.paths.autostart.join("plank.desktop");
         if self.config.dock {
-            println!("▶ Док (свой, shell)");
+            println!("▶ Док (свой, Mimshel)");
             kill("plank");
             remove(&plank_autostart);
             return;
@@ -343,7 +350,7 @@ impl Plan<'_> {
     fn notify(&mut self) {
         let autostart = self.paths.autostart.join("xfce4-notifyd.desktop");
         if self.config.notify {
-            println!("▶ Уведомления (свои, shell)");
+            println!("▶ Уведомления (свои, Mimshel)");
             // xfce4-notifyd запускается при входе (автозапуск → systemd) и по
             // требованию через D-Bus — закрываем оба пути, иначе он успеет
             // занять имя раньше службы.
@@ -363,7 +370,7 @@ impl Plan<'_> {
             remove(&autostart);
         }
         run(&["systemctl", "--user", "unmask", NOTIFYD_UNIT]);
-        // Запустить, когда служба shell отпустит имя.
+        // Запустить, когда служба Mimshel отпустит имя.
         self.later(&["systemctl", "--user", "start", NOTIFYD_UNIT]);
     }
 
@@ -372,8 +379,8 @@ impl Plan<'_> {
     /// иначе он запустится при входе и закроет наш стол.
     fn desktop(&mut self) {
         if self.config.desktop {
-            println!("▶ Рабочий стол (свой, shell)");
-            if let Some(i) = session_slot(&["xfdesktop"]) {
+            println!("▶ Рабочий стол (свой, Mimshel)");
+            if let Some(i) = session_slot(&["xfdesktop"]).or_else(|| old_slot(OLD_DESKTOP_OFF)) {
                 xset_array(
                     "xfce4-session",
                     &format!("{SESSION}/Client{i}_Command"),
@@ -388,7 +395,7 @@ impl Plan<'_> {
             return;
         }
         println!("▶ Рабочий стол — xfdesktop");
-        if let Some(i) = session_slot(DESKTOP_OFF) {
+        if let Some(i) = session_slot(DESKTOP_OFF).or_else(|| old_slot(OLD_DESKTOP_OFF)) {
             xreset("xfce4-session", &format!("{SESSION}/Client{i}_Command"));
         }
         if !running("xfdesktop") {
@@ -396,13 +403,20 @@ impl Plan<'_> {
         }
     }
 
-    /// Окна папок: свой Проводник (ярлык `shell-folder.desktop` открывает
+    /// Окна папок: свой Проводник (ярлык `mimshel-folder.desktop` открывает
     /// папки через службу и стоит программой для папок) или Thunar.
     fn folders(&mut self) {
         let file = self
             .paths
             .applications
             .join(format!("{FOLDER_DESKTOP}.desktop"));
+        let old = self
+            .paths
+            .applications
+            .join(format!("{OLD_FOLDER_DESKTOP}.desktop"));
+        if is_managed(&read(&old)) {
+            remove(&old);
+        }
         if self.config.folders {
             println!("▶ Окна папок — свой Проводник");
             write(
@@ -438,32 +452,37 @@ impl Plan<'_> {
     }
 
     /// Автозапуск службы и перезапуск (она читает настройки при запуске);
-    /// если shell ничего не делает — остановить.
+    /// если Mimshel ничего не делает — остановить.
     fn service(&mut self) {
-        let autostart = self.paths.autostart.join("shell-daemon.desktop");
+        let autostart = self.paths.autostart.join(DAEMON_AUTOSTART);
+        let old = self.paths.autostart.join(OLD_DAEMON_AUTOSTART);
+        if is_managed(&read(&old)) {
+            remove(&old);
+        }
+        compat_link(&self.paths.shell_bin);
         if !self.config.shell_needed() {
-            println!("▶ Служба shell не нужна — останавливаю");
+            println!("▶ Служба Mimshel не нужна — останавливаю");
             remove(&autostart);
-            kill("shell daemon");
+            crate::sys::kill_daemon();
             return;
         }
-        println!("▶ Служба shell");
+        println!("▶ Служба Mimshel");
         let bin = self.paths.shell_bin.display().to_string();
         write(
             &autostart,
             &desktop_entry(
-                "shell: строка меню, док, «Поиск» и «Программы»",
+                "Mimshel: строка меню, док, стол, «Поиск» и «Программы»",
                 &format!("{bin} daemon"),
                 "",
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
             ),
         );
         // Новая служба не займёт сокет, пока старая не вышла.
-        kill("shell daemon");
+        crate::sys::kill_daemon();
         spawn(&[&bin, "daemon"]);
     }
 
-    /// Экран блокировки: `shell lock` по команде Xfce (меню, перед сном) и
+    /// Экран блокировки: `mimshel lock` по команде Xfce (меню, перед сном) и
     /// по бездействию — через xss-lock, которому сигнал даёт заставка X.
     fn lock(&mut self) {
         println!("▶ Экран блокировки");
@@ -516,9 +535,11 @@ impl Plan<'_> {
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
             ),
         );
-        let old = self.paths.autostart.join(OLD_LOCK_AUTOSTART);
-        if is_managed(&read(&old)) {
-            remove(&old);
+        for name in OLD_LOCK_AUTOSTARTS {
+            let old = self.paths.autostart.join(name);
+            if is_managed(&read(&old)) {
+                remove(&old);
+            }
         }
         // Штатная заставка Xfce не нужна: она рисовала старое окно пароля.
         write(
@@ -556,7 +577,7 @@ impl Plan<'_> {
     fn launchers(&mut self) {
         self.apple_menu();
         let c = self.config;
-        let engine = |shell: bool| if shell { "shell" } else { "rofi" };
+        let engine = |ours: bool| if ours { "Mimshel" } else { "rofi" };
         println!(
             "▶ Поиск ({}) и Программы ({})",
             engine(c.search_panel),
@@ -590,7 +611,7 @@ impl Plan<'_> {
             let command = shortcut_command(&self.paths, s, shell);
             let prop = format!("/commands/custom/{}", s.keys);
             xset("xfce4-keyboard-shortcuts", &prop, "string", &command);
-            // «Часики» у курсора ждут окна от самой команды; окно shell
+            // «Часики» у курсора ждут окна от самой команды; окно Mimshel
             // открывает служба, и они крутились бы зря.
             xset(
                 "xfce4-keyboard-shortcuts",
@@ -605,17 +626,21 @@ impl Plan<'_> {
 /// Надстройка над Colloid: наши правки значков поверх набора, обновления
 /// Colloid их не затирают. Сейчас — знак главного меню вместо яблока Apple
 /// (`start-here` в Colloid — яблоко).
-pub const OVERLAY_THEME: &str = "Colloid-shell";
+pub const OVERLAY_THEME: &str = "Colloid-mimshel";
+/// Надстройка под прежним именем (до переименования проекта) — её и её
+/// готовые PNG рисовал `shell apply icons`; при новом `apply icons` удаляются.
+const OLD_OVERLAY_THEMES: &[&str] = &["Colloid-shell", "Colloid-shell-png"];
 const OVERLAY_BASE: &str = "Colloid-Dark";
-const LOGO_SYMBOLIC_SVG: &str = include_str!("../data/shell-logo-symbolic.svg");
+const LOGO_SYMBOLIC_SVG: &str = include_str!("../data/mimshel-logo-symbolic.svg");
 /// Значки, которые надстройка берёт из других установленных наборов: (тема,
 /// начало имени). Значок сети nm-applet из Colloid неудобен — как в WhiteSur.
 const BORROWED: &[(&str, &str)] = &[("WhiteSur-dark", "nm-")];
 
 /// Свой знак меню (планета с кольцом вместо яблока) — в общую тему значков
 /// hicolor: его находят и своя строка меню, и панель Xfce.
-pub const LOGO_NAME: &str = "shell-logo";
-const LOGO_SVG: &str = include_str!("../data/shell-logo.svg");
+pub const LOGO_NAME: &str = "mimshel-logo";
+const OLD_LOGO_NAME: &str = "shell-logo";
+const LOGO_SVG: &str = include_str!("../data/mimshel-logo.svg");
 
 pub fn logo_path() -> std::path::PathBuf {
     home().join(format!(
@@ -625,6 +650,27 @@ pub fn logo_path() -> std::path::PathBuf {
 
 fn install_logo() {
     write(&logo_path(), LOGO_SVG);
+    // Прежний знак (до переименования проекта) — наш, больше не нужен.
+    remove(&logo_path().with_file_name(format!("{OLD_LOGO_NAME}.svg")));
+}
+
+/// Прежняя команда `~/.local/bin/shell` — ссылкой на новую: ею ещё вызывают
+/// сочетания клавиш, команда блокировки и автозапуск, поставленные до
+/// переименования (пока `apply` их не перепишет), и записки людей.
+fn compat_link(bin: &Path) {
+    let old = bin.with_file_name(mimshel_core::names::OLD);
+    if std::fs::read_link(&old).is_ok_and(|t| t == bin.file_name().unwrap_or_default()) {
+        return;
+    }
+    // Там прежняя программа (наша) или ничего — заменить ссылкой.
+    if old.exists() || old.is_symlink() {
+        let _ = std::fs::remove_file(&old);
+    }
+    if let Some(name) = bin.file_name()
+        && let Err(e) = std::os::unix::fs::symlink(name, &old)
+    {
+        println!("  ⚠ не создать {} → {}: {e}", old.display(), bin.display());
+    }
 }
 
 /// Скопировать в надстройку `overlay` значки темы `src`, имена которых
@@ -715,18 +761,16 @@ fn parse_monitors(text: &str) -> Vec<(i32, i32, u32, u32)> {
 }
 
 /// Где хранятся свои обои `style`, нарисованные под `w`×`h` пикселей.
-pub fn wallpaper_path(style: shell_wallpaper::Style, w: u32, h: u32) -> std::path::PathBuf {
-    home().join(format!(
-        ".local/share/shell/wallpapers/{}-{w}x{h}.png",
-        style.name()
-    ))
+pub fn wallpaper_path(style: mimshel_wallpaper::Style, w: u32, h: u32) -> std::path::PathBuf {
+    mimshel_core::names::dir_in(&home().join(".local/share"))
+        .join(format!("wallpapers/{}-{w}x{h}.png", style.name()))
 }
 
 /// Файл обоев: свои (`space`, `waves`, `aurora`) рисуются под экран `w`×`h`
-/// один раз и хранятся в `~/.local/share/shell/wallpapers`; иначе — путь к
+/// один раз и хранятся в `~/.local/share/mimshel/wallpapers`; иначе — путь к
 /// картинке как есть. Нарисовать не вышло или файла нет — `None`.
 pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf> {
-    let Some(style) = shell_wallpaper::Style::parse(value) else {
+    let Some(style) = mimshel_wallpaper::Style::parse(value) else {
         let path = std::path::PathBuf::from(value);
         return path.is_file().then_some(path);
     };
@@ -735,7 +779,7 @@ pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf>
     if out.exists() {
         return Some(out);
     }
-    let png = shell_wallpaper::draw(style, w, h)?.encode_png().ok()?;
+    let png = mimshel_wallpaper::draw(style, w, h)?.encode_png().ok()?;
     std::fs::create_dir_all(out.parent()?).ok()?;
     let tmp = out.with_extension("png.tmp");
     std::fs::write(&tmp, png).ok()?;
@@ -841,6 +885,12 @@ impl Plan<'_> {
         let theme = &self.config.icon_theme;
         println!("▶ Значки: {theme}");
         if theme == OVERLAY_THEME {
+            for old in OLD_OVERLAY_THEMES {
+                let dir = self.paths.icons.join(old);
+                if dir.join("index.theme").exists() {
+                    let _ = std::fs::remove_dir_all(&dir);
+                }
+            }
             let base = self.paths.icons.join(OVERLAY_BASE);
             if !base.join("index.theme").exists() {
                 println!(
@@ -892,7 +942,7 @@ impl Plan<'_> {
             // Программам GTK — готовые PNG: SVG они грузят в ~10 раз дольше
             // (урок 24). Сама служба рисует SVG сама и берёт обычную тему.
             let start = std::time::Instant::now();
-            let apps: Vec<String> = shell_apps::load_all(&shell_apps::Settings::from_env())
+            let apps: Vec<String> = mimshel_apps::load_all(&mimshel_apps::Settings::from_env())
                 .into_iter()
                 .filter_map(|a| a.icon)
                 .collect();
@@ -924,7 +974,7 @@ impl Plan<'_> {
         xset("xsettings", "/Net/IconThemeName", "string", theme);
     }
 
-    /// Меню яблока: ярлыки `shell action …` и файл меню freedesktop с их
+    /// Меню яблока: ярлыки `mimshel action …` и файл меню freedesktop с их
     /// порядком и разделителями (его читают и своя строка меню, и панель Xfce).
     fn apple_menu(&self) {
         let dir = self.paths.main_menu_items();
@@ -935,7 +985,7 @@ impl Plan<'_> {
             if *separator {
                 layout.push("    <Separator/>".to_string());
             }
-            let file = format!("shell-{id}.desktop");
+            let file = format!("{}-{id}.desktop", mimshel_core::names::APP);
             write(
                 &dir.join(&file),
                 &desktop_entry(label, &format!("{bin} action {id}"), "", ""),
@@ -999,14 +1049,19 @@ fn session_slot(command: &[&str]) -> Option<usize> {
         .find(|i| xget_list("xfce4-session", &format!("{SESSION}/Client{i}_Command")) == command)
 }
 
+/// Строка списка запуска сеанса с одной из прежних пометок.
+fn old_slot(list: &[&[&str]]) -> Option<usize> {
+    list.iter().find_map(|command| session_slot(command))
+}
+
 /// Запускать ли панель Xfce при входе: её строку в списке сеанса меняем на
 /// пустую команду или сбрасываем к системной (там xfce4-panel).
 fn panel_at_login(on: bool) {
     if on {
-        if let Some(i) = session_slot(PANEL_OFF).or_else(|| session_slot(OLD_PANEL_OFF)) {
+        if let Some(i) = session_slot(PANEL_OFF).or_else(|| old_slot(OLD_PANEL_OFF)) {
             xreset("xfce4-session", &format!("{SESSION}/Client{i}_Command"));
         }
-    } else if let Some(i) = session_slot(&["xfce4-panel"]).or_else(|| session_slot(OLD_PANEL_OFF)) {
+    } else if let Some(i) = session_slot(&["xfce4-panel"]).or_else(|| old_slot(OLD_PANEL_OFF)) {
         xset_array(
             "xfce4-session",
             &format!("{SESSION}/Client{i}_Command"),

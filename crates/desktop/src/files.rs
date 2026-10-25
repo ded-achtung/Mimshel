@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use shell_apps::Locale;
-use shell_apps::entry::DesktopEntry;
+use mimshel_apps::Locale;
+use mimshel_apps::entry::DesktopEntry;
 
 /// Что за значок.
 #[derive(Debug, Clone, PartialEq)]

@@ -1,6 +1,25 @@
 # Проект: Mimshel — графическая оболочка рабочего стола на Rust
 
-**Название принято 25.10.2026:** Mimshel (Мимшел), от Мимаса, кратера Гершель и *shell*. Текущая команда и внутренние имена по-прежнему `shell`; не менять их автоматически без отдельного плана совместимости. `v0.0.1-alpha` остаётся историческим тегом на прежнем коммите.
+**Название принято 25.10.2026:** Mimshel (Мимшел), от Мимаса, кратера Гершель и *shell*. `v0.0.1-alpha` остаётся
+историческим тегом на прежнем коммите. **Переименование сделано 25.10.2026 (просьба пользователя «внести везде»)**:
+- команда `mimshel` (`~/.local/bin/mimshel`); `~/.local/bin/shell` — ссылка на неё (`apply service` и `install.sh` ставят) —
+  её ещё вызывают сочетания, команда блокировки и автозапуск до первого `apply`;
+- пакеты кода `mimshel-*` (`mimshel_core::…`), программа — `apps/mimshel`; репозиторий `ded-achtung/Mimshel`;
+- всё имя в одном месте — `crates/core/src/names.rs` (`APP`, `OLD`, `CLASS`, `dir_in`, `env`/`flag`);
+- папки `~/.config|.local/state|.local/share|.cache/mimshel` — прежние `…/shell` переименовываются сами при первом
+  обращении (`names::dir_in`), install.sh переносит `~/.local/share/shell` до сборки;
+- переменные `MIMSHEL_TIMING`, `MIMSHEL_CONFIG`… (прежние `SHELL_…` тоже читаются); сокет `mimshel.sock`;
+- ярлыки `mimshel.desktop` (служба), `mimshel-lock.desktop`, `mimshel-folder.desktop`, пункты меню `mimshel-ИМЯ`;
+  пометки `X-Mimshel=true`, `mimshel-no-panel`, `mimshel-no-desktop`, `/* mimshel: … */` в gtk.css, заглушка
+  заставки `# mimshel: …` — прежние (`X-Shell`, `shell-no-*`, `shell-*.desktop`, `/* shell: … */`) узнаются,
+  заменяются при `apply` и убираются откатом;
+- класс окон `…Mimshel` (прежний `Shell` строка меню тоже узнаёт), Проводник — `mimshel-folder`;
+- настройки: `parts.* = "mimshel"` (принимается и `"shell"`), `look.icon_theme = "Colloid-mimshel"`,
+  `menu_icon = "mimshel-logo"` — прежние значения и подписи `[parts]` переносит `config::migrate_names`;
+  `apply icons` удаляет прежние темы `Colloid-shell(-png)`, `apply menubar` — знак `shell-logo`;
+- службу останавливают под обоими именами (`sys::kill_daemon`), `doctor` ищет оба.
+Не переименованы (внешние имена): `macos-launchpad.desktop`, `/net/launchpad/plank`, файл копии `shell-config.toml`
+в старых копиях, xsettings `Gtk/ShellShowsMenubar` (это имя GTK).
 
 Отвечай и пиши комментарии/коммиты **по-русски**. Пользователь — не программист-эксперт,
 объясняй простыми словами, без жаргона.
@@ -33,12 +52,12 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 - **Не GTK.** GTK 5 уберёт X11 (последняя версия сейчас GTK 4.24; GTK 6 не существует).
   Свои виджеты, как ArtCraft.
 - **Свой экран блокировки — решение пользователя (23.10.2026)**, раньше было «не пишем, только
-  i3lock-color». `shell lock-screen` (`apps/shell/src/lock_ui.rs`, писал Hermes Agent, исправления
+  i3lock-color». `mimshel lock-screen` (`apps/mimshel/src/lock_ui.rs`, писал Hermes Agent, исправления
   безопасности — Claude): окно на весь экран с **непрозрачным фоном окна на уровне сервера** (иначе до
   первого кадра оно прозрачно — урок 20), захват клавиатуры и мыши (успех — только `SUCCESS`, урок 21),
   пароль — PAM `system-local-login`, стирается после проверки. Окно поднимается наверх при появлении
   или перестановке любого окна (`Display::watch_stacking`) и раз в 0,4 с; новый размер экрана — окно на
-  весь экран, фон заново. Потерян захват — окно остаётся, захват повторяется. Сторож `shell lock`
+  весь экран, фон заново. Потерян захват — окно остаётся, захват повторяется. Сторож `mimshel lock`
   перезапускает экран при любом выходе ≠ 0 (урок 1 в силе: падение = окно исчезло). Проверено вживую:
   уведомление и Spotlight во время блокировки не видны, `kill -ABRT`, смена разрешения, неверный и
   верный пароль, xflock4. Не сделано: закрытие «билета сна» xss-lock (нужен `unsafe` или nix) —
@@ -65,7 +84,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 - платформа: `x11`, `render`, `text`, `icons`, `apps` (индекс .desktop), `dbus`
 - модули оболочки: `launcher` (окна «Поиск» и «Программы»), `dock`, `menubar`, `notify`,
   `control` (Пункт управления), `lock` (сторож i3lock-color)
-- `apps/shell` — сама программа (один долгоживущий процесс-демон)
+- `apps/mimshel` — сама программа (один долгоживущий процесс-демон)
 
 Проверки по снимкам: каждый модуль умеет нарисоваться в PNG без экрана → сравнение с образцом.
 
@@ -75,13 +94,13 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 раскладываем по папкам по тому, где часть на экране.
 | Что | На экране | В коде | Команда | Настройки |
 |---|---|---|---|---|
-| бывший Spotlight | окно «Поиск» | `crates/launcher/src/search_panel/`, `SearchPanel`, `Panel::Search` | `shell search` | `parts.search_panel` |
-| бывший Launchpad | окно «Программы» | `crates/launcher/src/apps_panel/`, `AppsPanel`, `Panel::Apps` | `shell apps` | `parts.apps_panel`, `[apps_panel]` |
-| алгоритм поиска | — | `core::search` | `shell test-search ТЕКСТ` | — |
-| список программ | — | `crates/apps` | `shell test-apps` | `[apps]` (terminal, hide, rename) |
-| свой Проводник | окна папок, «Проводник» | `crates/folder` (`FolderView`), `apps/shell/src/folder_ui.rs` | `shell folder ПАПКА` | `parts.folders` |
+| бывший Spotlight | окно «Поиск» | `crates/launcher/src/search_panel/`, `SearchPanel`, `Panel::Search` | `mimshel search` | `parts.search_panel` |
+| бывший Launchpad | окно «Программы» | `crates/launcher/src/apps_panel/`, `AppsPanel`, `Panel::Apps` | `mimshel apps` | `parts.apps_panel`, `[apps_panel]` |
+| алгоритм поиска | — | `core::search` | `mimshel test-search ТЕКСТ` | — |
+| список программ | — | `crates/apps` | `mimshel test-apps` | `[apps]` (terminal, hide, rename) |
+| свой Проводник | окна папок, «Проводник» | `crates/folder` (`FolderView`), `apps/mimshel/src/folder_ui.rs` | `mimshel folder ПАПКА` | `parts.folders` |
 Общее для обоих окон — `launcher/src/common.rs` (рисование) и `field.rs` (поле ввода).
-Прежние имена работают: команды `shell spotlight|launchpad`, `shell set parts.spotlight …`
+Прежние имена работают: команды `mimshel spotlight|launchpad`, `mimshel set parts.spotlight …`
 (`config::current_key`; ими пользуется macos-look), старый файл настроек служба переписывает сама
 (`config::migrate_names`). Остаются по-старому: ярлык `macos-launchpad.desktop` (под ним значок
 закреплён в доке), разделы `spotlight`/`launchpad` в `config.ini` macos-look, `/net/launchpad/plank`
@@ -97,11 +116,11 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    «Очистить Корзину…» через Thunar (D-Bus `org.xfce.Trash`, он сам спрашивает подтверждение),
    полна ли — по `~/.local/share/Trash/files` раз в 2 с; «облачко» при удалении значка)
 3. Строка меню вместо панели Xfce (яблоко, глобальное меню, трей, раскладка, часы) — **идёт**:
-   - 3а **сделано** (22.10.2026): `crates/menubar` + `apps/shell/src/menubar_ui.rs` — полоса сверху с
+   - 3а **сделано** (22.10.2026): `crates/menubar` + `apps/mimshel/src/menubar_ui.rs` — полоса сверху с
      резервом места, меню яблока (пункты читаются из `apple.menu` и ярлыков macos-look), жирное
      название активной программы (рабочий стол — «Проводник», как Finder), раскладка (щелчок —
      следующая, подпись меняется сама по событиям XKB), часы по `[panel] clock_format`.
-     Включается `[menubar] engine = shell` или `SHELL_MENUBAR=1` для проверки.
+     Включается `[menubar] engine = shell` или `MIMSHEL_MENUBAR=1` для проверки.
      **Включено (23.10.2026, по просьбе пользователя):** `macos-look set menubar.engine shell` —
      панель Xfce остановлена и не запускается при входе (её строка в списке сеанса
      `/sessions/Failsafe/ClientN_Command` заменена на `true macos-look-no-panel`), раскладки
@@ -112,7 +131,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    - 3б **сделано** (22.10.2026): громкость (`pactl`; окошко с ползунком и устройствами вывода,
      колёсико ±5 %, средняя кнопка — без звука), батарея (`upower`; проценты, меню с состоянием),
      колокольчик («Не беспокоить» — xfconf `xfce4-notifyd /do-not-disturb`). Изменения ловятся
-     наблюдателями (`pactl subscribe`, `xfconf-query -m`) — `apps/shell/src/status.rs`. Батарея
+     наблюдателями (`pactl subscribe`, `xfconf-query -m`) — `apps/mimshel/src/status.rs`. Батарея
      (23.10.2026) — из `/sys/class/power_supply`, без upower: перечитывается сразу по событиям ядра
      (`udevadm monitor --kernel --subsystem-match=power_supply` — зарядка подключена/отключена,
      смена состояния); в VirtualBox таких событий нет — раз в секунду сверяются `online` блока питания и
@@ -126,7 +145,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      nm-applet) — меню; правый — меню; подменю показываются внутри меню с отступом.
      nm-applet переведён на `--indicator` копией ярлыка `~/.config/autostart/nm-applet.desktop`
      (удалить её — вернуть как было); blueman переходит сам. Проверка трея без службы:
-     `cargo run -p shell-dbus --example tray`.
+     `cargo run -p mimshel-dbus --example tray`.
    - 3г **сделано** (23.10.2026): глобальное меню — `crates/dbus/src/appmenu.rs`. Два способа:
      GTK (`org.gtk.Menus` + `org.gtk.Actions`; адреса — в свойствах окна `_GTK_UNIQUE_BUS_NAME`,
      `_GTK_MENUBAR_OBJECT_PATH`, `_GTK_APPLICATION/WINDOW_OBJECT_PATH`, `_UNITY_OBJECT_PATH`) и
@@ -134,7 +153,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      Названия меню — после жирного имени программы; щелчок перечитывает меню и открывает его;
      при открытом меню — переход мышью по названиям и ←/→; лишние, что не влезли, не показываются.
      Щелчок по имени программы — «Свернуть», «Закрыть окно». Проверка без службы:
-     `cargo run -p shell-dbus --example appmenu -- 0xОКНО ШИНА ПУТЬ_МЕНЮ app win unity`.
+     `cargo run -p mimshel-dbus --example appmenu -- 0xОКНО ШИНА ПУТЬ_МЕНЮ app win unity`.
      **Строки меню в окнах прячет appmenu-gtk-module, только пока на шине есть регистратор**
      (`gtk-shell-shows-menubar` модуль сам ставит в `False`, если регистратора нет; xsettings
      `Gtk/ShellShowsMenubar` не помогает). Регистратор vala-panel запускается по запросу и
@@ -142,12 +161,12 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      просит имя с заменой, иначе встаёт в очередь). Служба остановилась — программы сами
      возвращают меню в окна. Терминал: включена его строка меню (`xfconf xfce4-terminal
      /misc-menubar-default true`, было `false`) — иначе отдавать наверх было нечего.
-     Помощник `cargo run -p shell-x11 --example xsettings -- Menubar` — что рассылает xsettings.
+     Помощник `cargo run -p mimshel-x11 --example xsettings -- Menubar` — что рассылает xsettings.
    - **Трей — решение пользователя:** только современный StatusNotifierItem (D-Bus); старое
      встраивание (XEmbed) не делаем. nm-applet перевести на `--indicator`, blueman — на SNI.
 4. Пункт управления и уведомления — **идёт**:
    - 4а **сделано** (23.10.2026): своя служба `org.freedesktop.Notifications` (`crates/dbus/src/notify.rs`)
-     и баннеры как в Sonoma (`crates/notify`, `apps/shell/src/notify_ui.rs`): справа сверху, до 3,
+     и баннеры как в Sonoma (`crates/notify`, `apps/mimshel/src/notify_ui.rs`): справа сверху, до 3,
      обычные исчезают через 5 с (не пока мышь над ними), срочные — по щелчку; кнопки действий,
      крестик при наведении, правая кнопка — убрать. «Не беспокоить» — без баннеров, в историю.
      Включено `macos-look set notify.engine shell`: автозапуск xfce4-notifyd скрыт копией ярлыка,
@@ -167,21 +186,21 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 5. **Переписать macos-look на Rust целиком** (решение пользователя 22.10.2026) — **сделано
    (24.10.2026)**: macos-look удалён из ВМ (команда, `~/.config/macos-look`, `~/.local/share/macos-look`,
    обои Apple), привязки убраны из кода — shell не читает его конфиг и не вызывает его. Свои данные —
-   `~/.local/share/shell` (`apple.menu` и `menu/shell-ИМЯ.desktop` — главное меню, `backups/` — копии;
+   `~/.local/share/mimshel` (`apple.menu` и `menu/shell-ИМЯ.desktop` — главное меню, `backups/` — копии;
    прежняя папка копий переезжает сама, с «original»). Пометки: `X-Shell=true`, `shell-no-panel`,
    автозапуск `shell-lock.desktop`; прежние (`X-Macos-Look=true`, `macos-look-no-panel`) shell узнаёт
    (`sys::is_managed`) и заменяет при `apply`. Запасной вариант окон «Поиск»/«Программы» —
    `rofi -show drun` без тем. Копии ярлыков с пометкой macos-look (скрытие/переименование программ в
    меню Xfce) остались — откат их убирает. Исходники `~/macos-look` — архив (не на GitHub).
    История шагов:
-   - 5а **сделано** (22.10.2026): свой конфиг `~/.config/shell/config.toml` (`crates/core/src/config.rs`,
+   - 5а **сделано** (22.10.2026): свой конфиг `~/.config/mimshel/config.toml` (`crates/core/src/config.rs`,
      `toml_edit` — правка `[dock] apps` сохраняет пояснения в файле). Нет файла — служба создаёт его из
      настроек macos-look. **Пока macos-look не переписан, какие части включены (`dock`/`menubar`/
      `notify` engine), служба берёт из его `config.ini`**: включает и выключает их он. После правки
-     файла — `macos-look apply menu` (перезапуск службы). `SHELL_CONFIG` — другой файл для проверок.
+     файла — `macos-look apply menu` (перезапуск службы). `MIMSHEL_CONFIG` — другой файл для проверок.
      Ошибка в файле — служба пишет её в журнал и берёт последние рабочие настройки
-     (`~/.local/state/shell/config.good.toml`), а не значения по умолчанию.
-   - 5б **сделано** (22.10.2026): `shell doctor [--fix]` (`crates/setup` — сюда переезжает macos-look):
+     (`~/.local/state/mimshel/config.good.toml`), а не значения по умолчанию.
+   - 5б **сделано** (22.10.2026): `mimshel doctor [--fix]` (`crates/setup` — сюда переезжает macos-look):
      все проверки `macos-look doctor` и свои — служба в сеансе рабочего стола (урок 17), трей и
      глобальное меню у shell, нет брошенных наблюдателей, файл настроек без ошибок. Окружение
      сеанса для команд берётся само (можно запускать по SSH). `--fix` пока вызывает
@@ -189,48 +208,48 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    - 5в **сделано** (22.10.2026): включение частей — `crates/setup/src/parts.rs`. Какие части делает
      shell — раздел `[parts]` своего файла (dock/menubar/notify/spotlight/launchpad = "shell" или
      прежняя программа: plank, xfce, xfce, rofi, rofi); старый файл без раздела служба дополняет
-     из macos-look. `shell set раздел.ключ значение` — проверяет, пишет (пояснения в файле остаются)
-     и применяет; `shell apply [menubar dock notify launchers service]`; `shell config` — что
-     можно менять. Переключатели `shell set` пишет и в `config.ini` macos-look, а
-     `macos-look set dock.engine …` (и menubar, notify, spotlight, launchpad) передаёт в `shell set`
+     из macos-look. `mimshel set раздел.ключ значение` — проверяет, пишет (пояснения в файле остаются)
+     и применяет; `mimshel apply [menubar dock notify launchers service]`; `mimshel config` — что
+     можно менять. Переключатели `mimshel set` пишет и в `config.ini` macos-look, а
+     `macos-look set dock.engine …` (и menubar, notify, spotlight, launchpad) передаёт в `mimshel set`
      — иначе `macos-look apply` вернул бы прежнее. Проверено туда и обратно: Plank, панель Xfce
      (раскладки целы), xfce4-notifyd, rofi. `doctor --fix` чинит эти части сам, остальное — macos-look.
      **Для окна настроек (шаг 7):** `apply` перезапускает службу — из самой службы так нельзя,
      понадобится перечитывание настроек на лету.
-   - 5г **сделано** (22.10.2026): сторож блокировки `shell lock` (`crates/setup/src/lock.rs`) — запускает
-     i3lock-color и перезапускает при любом выходе без пароля (журнал `~/.local/state/shell/lock.log`);
+   - 5г **сделано** (22.10.2026): сторож блокировки `mimshel lock` (`crates/setup/src/lock.rs`) — запускает
+     i3lock-color и перезапускает при любом выходе без пароля (журнал `~/.local/state/mimshel/lock.log`);
      команда i3lock совпадает с macos-look до символа (`crates/setup/testdata/`, округление «к чётному»,
-     как в Python). Пункты меню яблока — `shell action …` (`actions.rs`, окна — zenity). `shell apply
-     lock` ставит `LockCommand` и автозапуск xss-lock на `shell lock`, `apply launchers` пишет ярлыки
+     как в Python). Пункты меню яблока — `mimshel action …` (`actions.rs`, окна — zenity). `mimshel apply
+     lock` ставит `LockCommand` и автозапуск xss-lock на `mimshel lock`, `apply launchers` пишет ярлыки
      меню яблока, `apply power` — без автосна в ВМ. `macos-look lock/action` передают в shell.
-     Проверено: блокировка через `shell lock`, xflock4 и меню яблока; `kill -ABRT` i3lock — сторож
+     Проверено: блокировка через `mimshel lock`, xflock4 и меню яблока; `kill -ABRT` i3lock — сторож
      сразу запускает снова; пароль снимает. Работающий xss-lock вызывает новую команду после перезахода.
      **Фон блокировки рисует программа** (`crates/lock`, без ImageMagick): обои (JPEG/PNG/SVG по
      содержимому — `shell_icons::render_file`), затемнение 12 %, «матовое стекло» под полем, аватар
-     `~/.face`, имя. Отличие от фона macos-look — 0,6 %. Кеш `~/.cache/shell/lock/bg-ШxВ.png` + `.key`
-     (обои, аватар, имя, подсказка, размер экрана); рисуется при `shell apply lock` (~1 с, шрифты) и
+     `~/.face`, имя. Отличие от фона macos-look — 0,6 %. Кеш `~/.cache/mimshel/lock/bg-ШxВ.png` + `.key`
+     (обои, аватар, имя, подсказка, размер экрана); рисуется при `mimshel apply lock` (~1 с, шрифты) и
      при блокировке, если ключ сменился; сбой рисования не мешает блокировке (запасной фон).
-   - 5д **сделано частично** (22.10.2026): `shell backup [ПОМЕТКА]`, `shell backups`, `shell restore
+   - 5д **сделано частично** (22.10.2026): `mimshel backup [ПОМЕТКА]`, `mimshel backups`, `mimshel restore
      [--dry-run] [ИМЯ]` (`crates/setup/src/backup.rs`) — та же папка копий, что у macos-look
      (`~/.local/share/macos-look/backups`, первая — «original», как было до всего), в копии ещё и
-     `~/.config/shell/config.toml`. `--dry-run` печатает шаги отката и ничего не меняет — совпадают
+     `~/.config/mimshel/config.toml`. `--dry-run` печатает шаги отката и ничего не меняет — совпадают
      с macos-look. **Настоящий откат на рабочем столе ещё не проверен** (нужно согласие пользователя:
      он вернёт голый Xfce, затем всё применить заново).
    - дальше: оформление (тема, курсор, обои), `install` и сборки.
 6. **Свои иконки и оформление вместо маковских** (после переноса настроек) — чтобы не было
    проблем с авторскими правами: значки Apple, тема WhiteSur и обои Sonoma заменить своими. **Идёт:**
-   - знак главного меню — своя **планета с кольцом и надкусом** (`crates/setup/data/shell-logo.svg`,
-     одноцветная одной фигурой — `shell-logo-symbolic.svg`, обводит `tools/trace_logo.py`);
-     `menu_icon = "shell-logo"`, ставит `shell apply menubar` в тему hicolor.
+   - знак главного меню — своя **планета с кольцом и надкусом** (`crates/setup/data/mimshel-logo.svg`,
+     одноцветная одной фигурой — `mimshel-logo-symbolic.svg`, обводит `tools/trace_logo.py`);
+     `menu_icon = "mimshel-logo"`, ставит `mimshel apply menubar` в тему hicolor.
    - значки — набор **Colloid** (GPL-3.0, выбор пользователя 23.10.2026; поставлен его `install.sh` в
-     `~/.local/share/icons`, исходник `~/.local/share/shell/src/Colloid-icon-theme`), `look.icon_theme =
-     "Colloid-shell"` — наша надстройка (`shell apply icons`): вместо яблока в `start-here` — планета,
+     `~/.local/share/icons`, исходник `~/.local/share/mimshel/src/Colloid-icon-theme`), `look.icon_theme =
+     "Colloid-mimshel"` — наша надстройка (`mimshel apply icons`): вместо яблока в `start-here` — планета,
      значки сети `nm-*` — из WhiteSur-dark (просьба пользователя: Colloid-овский неудобен). Часть значков
      Colloid похожа на macOS (Safari, «Музыка», App Store, ⌘) — пользователь решил пока оставить.
    - тема окон и программ — **Colloid-Dark** (`~/.themes`, собрана `install.sh -c dark --tweaks normal`:
      обычные кнопки окна вместо «светофора»; нужен `sassc`, поставлен через pacman), курсор —
      **Colloid-cursors** (из `cursors/` набора значков). `[look] gtk_theme`, `cursor_theme`;
-     `shell apply look` ставит xsettings, xfwm4, курсор для X11 (`icons/default/index.theme`) и ссылки
+     `mimshel apply look` ставит xsettings, xfwm4, курсор для X11 (`icons/default/index.theme`) и ссылки
      GTK4 в `~/.config/gtk-4.0` (чужие обычные файлы там не трогает); в `~/.config/gtk-3.0/gtk.css` — свой
      кусок между пометками (`crates/setup/src/gtk_fixes.rs`): Colloid скругляет область файлов Проводника,
      скругление и тень наведения (`.view:hover`, `box-shadow` с огромным размахом) доставались рамке выделения,
@@ -238,19 +257,19 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
      Остальное в файле не трогается, `restore` убирает только свой кусок. **Видно только после `thunar -q`**: Проводник —
      служба (`thunar --daemon`), закрытие окон её не останавливает (`apply look` об этом напоминает).
    - **готовые PNG значков для программ GTK** (`look.png_icons = true`, `crates/setup/src/png_icons.rs`):
-     `shell apply icons` рисует resvg-ом тему `Colloid-shell-png` (наследует `Colloid-shell`): одноцветные
+     `mimshel apply icons` рисует resvg-ом тему `Colloid-mimshel-png` (наследует `Colloid-mimshel`): одноцветные
      — `имя.symbolic.png` (форма в прозрачности, цвета состояний — нули; значки с `class="success|warning|
      error"` остаются SVG) в 16/24/32, папки/типы файлов/устройства — 16…128, значки установленных
      программ — 16…64, действия и состояния — 16/24. ~36,5 тыс. файлов, 26 МБ (на диске ~150 из-за
      блоков), 26–42 с один раз; дальше рисуются только изменившиеся. xsettings получает `-png`, служба
      берёт обычную тему (рисует SVG сама). `false` — тема SVG, папка удаляется. Выигрыш — урок 24.
    - обои — **свои, рисует программа** (`crates/wallpaper`: `space` «Космос» — выбор пользователя,
-     `waves`, `aurora`; или путь к картинке в `[look] wallpaper`). `shell apply wallpaper` рисует под экран
-     в `~/.local/share/shell/wallpapers/ИМЯ-ШxВ.png` (~2–3 с, один раз) и ставит на все мониторы;
+     `waves`, `aurora`; или путь к картинке в `[look] wallpaper`). `mimshel apply wallpaper` рисует под экран
+     в `~/.local/share/mimshel/wallpapers/ИМЯ-ШxВ.png` (~2–3 с, один раз) и ставит на все мониторы;
      фон блокировки — из них же. `macos-look apply look/wallpaper` передают это в shell.
 7. **Окно настроек** — ползунки и переключатели вместо правки файла (как «Системные настройки»).
 8. **Свой рабочий стол вместо xfdesktop** — **сделано (24.10.2026)**, `parts.desktop = "shell"` (иначе
-   `xfce`): `apps/shell/src/desktop_ui.rs` + `crates/x11/src/desktop.rs` — окно типа
+   `xfce`): `apps/mimshel/src/desktop_ui.rs` + `crates/x11/src/desktop.rs` — окно типа
    `_NET_WM_WINDOW_TYPE_DESKTOP` во весь экран, обои по мониторам (`parts::monitor_rects` из
    `xrandr --listmonitors`, свои обои под размер каждого) рисуются в потоке и ставятся **картинкой на
    стороне X-сервера фоном окна** (сервер перерисовывает сам, у службы нет 15 МБ картинки). Правый
@@ -258,20 +277,20 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    пользователя). **Значки файлов** из папки «Рабочий стол» (выбор пользователя 24.10.2026): колонками
    от правого верхнего угла (`crates/desktop/src/icon_grid.rs`), тип и значок — по shared-mime-info
    (`files.rs`: `globs2` → тип → `generic-icons`), ярлык `.desktop` — значком и названием программы;
-   папка отслеживается inotify (`apps/shell/src/desktop_files.rs`). Щелчок выделяет (перерисовываются
+   папка отслеживается inotify (`apps/mimshel/src/desktop_files.rs`). Щелчок выделяет (перерисовываются
    только клетки: `DesktopWindow::update`), двойной — открыть (`gio open`, не вышло — `xdg-open`;
    ярлык — `gio launch`). Меню на значке: «Открыть», «Переименовать», «В корзину»
    (`gio trash`); на пустом месте: «Новая папка», «Вставить», «Упорядочить» (буфер обмена —
-   `shell_x11::clipboard_files`, отдельное соединение; `shell test-clipboard`), «Открыть терминал
+   `shell_x11::clipboard_files`, отдельное соединение; `mimshel test-clipboard`), «Открыть терминал
    здесь» (`--working-directory`), «Изменить обои…». **С 24.10 (просьбы пользователя):** у значков свои
    клетки (`IconGrid`: столбец от правого края и строка), запомненные по имени файла в
-   `~/.local/state/shell/desktop-icons` («столбец строка<Tab>имя»); без запомненной — первая свободная
+   `~/.local/state/mimshel/desktop-icons` («столбец строка<Tab>имя»); без запомненной — первая свободная
    колонками справа. «Новая папка» — в клетке под правым щелчком, и сразу **поле имени на столе**
    (`crates/desktop/src/rename_box.rs`, поле — общий `shell_widgets::field` с выделением имени без
    расширения; Enter — сохранить, Esc — отмена, щелчок мимо — сохранить); «Переименовать» — то же поле.
    Перетаскивание: сдвиг > 5 точек — тянется полупрозрачная картинка (`desktop-drag`), отпустили на
    папке — `mv` в неё, иначе — в клетку под серединой значка (занята — ближайшая свободная).
-   «Упорядочить» — забыть клетки. Журнал: `SHELL_DEBUG_DESKTOP=1`. Как только значок передвинули руками
+   «Упорядочить» — забыть клетки. Журнал: `MIMSHEL_DEBUG_DESKTOP=1`. Как только значок передвинули руками
    (или создали папку под щелчком), запоминаются места **всех** значков (`IconGrid::freeze`) — иначе
    незапомненные «затекали» в освободившиеся клетки (похоже, это и был случай «значок встал не туда»).
    **Рамка выделения** (нажать на пустом месте и тянуть, окно `desktop-band`) и **несколько выделенных**:
@@ -298,7 +317,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    поэтому с Ctrl в списке только копия. Над окном, что файлы не берёт (док), значок возвращается.
    Из Проводника на стол — перенос без Ctrl (он всегда предлагает копию, но разрешает и перенос).
    Проверено вживую туда и обратно, с Ctrl и на док. Нет пока: миниатюр картинок, «Отменить» (Ctrl+Z). `gio open` не находил программу для папок:
-   копии ярлыков от macos-look в `~/.local/share/applications` без `mimeinfo.cache` — `shell apply
+   копии ярлыков от macos-look в `~/.local/share/applications` без `mimeinfo.cache` — `mimshel apply
    launchers` теперь зовёт `update-desktop-database`.
    «Изменить обои…» — окно «Обои» (`crates/desktop/src/wallpaper_picker.rs`: плитки с миниатюрами,
    выбранные обведены, «Выбрать картинку…» — zenity в папке «Изображения»). Обои меняются **без
@@ -309,7 +328,7 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    от щелчка до стола; 6 смен — 0,36 с процессора, память службы 13→15 МБ. До исправления (поток на
    каждый щелчок + фон блокировки со всеми шрифтами каждый раз): до 4,5 с на смену, 24,6 с
    процессора, 50→80 МБ. В журнале службы на каждую смену — строка «Обои «…»: на столе через …». Строка меню
-   считает стол «Проводником» (класс `desktop.Shell`). `shell apply desktop` меняет строку xfdesktop
+   считает стол «Проводником» (класс `desktop.Shell`). `mimshel apply desktop` меняет строку xfdesktop
    в списке сеанса на `true shell-no-desktop` и закрывает его `xfdesktop --quit` (убитый — сеанс
    поднял бы снова). Значков файлов на столе нет. Один раз при проверке открылось окно «Картинка
    для обоев» без выбора этого пункта — повторить не удалось.
@@ -322,20 +341,20 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
    `user-dirs.dirs` + корзина + «Компьютер», кнопки ‹ › ↑, значки строками с прокруткой, папки первыми,
    выделение щелчком/Ctrl/Shift/рамкой, клавиши как в Finder: стрелки, Enter, Backspace/Alt+← назад,
    Alt+↑ вверх, F2, Delete, Ctrl+A/C/X/V, Ctrl+Shift+N, Ctrl+N, Ctrl+W, буквы — к файлу; строка состояния
-   «N объектов»/«Выбрано»), `apps/shell/src/folder_ui.rs` — окна (`shell_x11::AppWindow`: обычное окно с
+   «N объектов»/«Выбрано»), `apps/mimshel/src/folder_ui.rs` — окна (`shell_x11::AppWindow`: обычное окно с
    рамкой xfwm4, `WM_DELETE_WINDOW` → `Event::Close`), слежение inotify (поток на окно, `stop`),
    меню, переименование полем, перетаскивание: внутри окна — на папку или место слева, в другие окна, на
    стол и в программы — XDND (точку броска `dnd.rs` переводит в координаты окна — у стола они совпадали
    с экраном). Действия с файлами — общие со столом (`desktop_files`: `transfer_async`, `bring`).
-   `shell folder [ПАПКА|file://…]` → служба (сокет: `folder ПУТЬ`), без службы или при `thunar` — Thunar.
-   `shell set parts.folders shell` пишет ярлык `shell-folder.desktop` («Проводник», `StartupWMClass=
-   shell-folder`, `MimeType=inode/directory`), `xdg-mime default` для папок, меняет в доке `thunar` ↔
-   `shell-folder` (только эту запись) и прячет Thunar из «Программ»; обратно — `shell set parts.folders
-   thunar`. Стол открывает папки своим окном (`DesktopUi::open_item`). Замер: `SHELL_TIMING=1` — по шагам
+   `mimshel folder [ПАПКА|file://…]` → служба (сокет: `folder ПУТЬ`), без службы или при `thunar` — Thunar.
+   `mimshel set parts.folders shell` пишет ярлык `mimshel-folder.desktop` («Проводник», `StartupWMClass=
+   mimshel-folder`, `MimeType=inode/directory`), `xdg-mime default` для папок, меняет в доке `thunar` ↔
+   `mimshel-folder` (только эту запись) и прячет Thunar из «Программ»; обратно — `mimshel set parts.folders
+   thunar`. Стол открывает папки своим окном (`DesktopUi::open_item`). Замер: `MIMSHEL_TIMING=1` — по шагам
    и «Медленно: …» в главном цикле; в журнале всегда «Окно папки «…»: N файлов, показано за …».
    Окно рисуется сразу по приходу списка (`Msg::Folder` → `flush`), окна папок — первыми в перерисовке
    (иначе ждали ~0,2 с, пока док и строка меню разберут появление окна: `ClientList` ~0,15 с — можно
-   ускорить), после полного набора шрифтов — невидимый «разогрев» (`warm_up`). `shell snapshot folder
+   ускорить), после полного набора шрифтов — невидимый «разогрев» (`warm_up`). `mimshel snapshot folder
    ПАПКА файл.png`. **Вид как у Thunar (25.10.2026, просьба пользователя):** панель ‹ › ↑ ⌂, строка пути
    на всю ширину (щелчок или Ctrl+L — ввести путь, `~` — домой; нет папки — поле остаётся) и кнопка
    поиска (Ctrl+F — видны только файлы с набранным в имени, Esc — все); слева «Места» (домашняя, папки
@@ -353,8 +372,8 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 `clang` и `pam` — для сборки проверки пароля: `pam-sys` собирается через bindgen; i3lock-color с 23.10 не
 нужен — экран блокировки свой, заплатка `packaging/` осталась на случай отката),
 Colloid (значки, курсор, тема окон `-c dark --tweaks normal`), `cargo build --release --locked`,
-`shell backup pered-shell`, `shell set --no-apply …` (части и оформление), `shell apply`, `doctor`.
-Повторный запуск безопасен. `shell apply look` теперь ставит и шрифт, сглаживание, заголовок и кнопки
+`mimshel backup pered-shell`, `mimshel set --no-apply …` (части и оформление), `mimshel apply`, `doctor`.
+Повторный запуск безопасен. `mimshel apply look` теперь ставит и шрифт, сглаживание, заголовок и кнопки
 окна слева, тени, `ShellShowsMenubar`, строку меню терминала (раньше — macos-look). `doctor` без
 macos-look проверяет пакеты установщика и не требует WhiteSur, rofi, скрытых программ. **Не перенесено:**
 скрытие и переименование программ в Launchpad («Проводник», «Блокнот», скрытые xterm…).
@@ -364,29 +383,29 @@ macos-look проверяет пакеты установщика и не тре
 Пользователь ставит EndeavourOS с Xfce **на свой ноутбук рядом с Windows** (dual boot) и запускает
 `./install.sh`. На ноутбуке — **настоящее железо, а не ВМ**: нет VirtualBox, SSH и macos-look, всё
 ставит установщик; раздел «Окружение» ниже про ВМ. Там Claude работает прямо в сеансе (не по SSH).
-Первым делом на ноутбуке: `~/install-log.txt` (вывод установщика), `shell doctor`, перезаход в сеанс.
+Первым делом на ноутбуке: `~/install-log.txt` (вывод установщика), `mimshel doctor`, перезаход в сеанс.
 Дальше, по порядку:
 1. Проверить на железе: Wi-Fi, Bluetooth, батарею (время до разряда), сон и пробуждение, закрытие
    крышки, второй монитор, экран блокировки (свой — PAM).
 2. **Яркость**: ползунок в Пункте управления и клавиши яркости (в ВМ подсветки не было).
 3. ~~Крупный экран (HiDPI)~~ — **сделано (24.10.2026)**: `[look] scale` = `"auto"` (по `Xft.dpi` —
-   Xfce «Внешний вид → Шрифты → DPI», 144 → 1,5) или число 1–3 (`shell set look.scale 1.5`,
-   перезапускает службу; `SHELL_SCALE` — для проверки). Код считает в **точках**, `crates/render`
+   Xfce «Внешний вид → Шрифты → DPI», 144 → 1,5) или число 1–3 (`mimshel set look.scale 1.5`,
+   перезапускает службу; `MIMSHEL_SCALE` — для проверки). Код считает в **точках**, `crates/render`
    (`Canvas`) рисует сразу в пикселях (текст и значки чёткие); `shell_x11::Display` переводит размеры
    окон, резерв места и мышь (точки ↔ пиксели), `screen_pixels()` — настоящий размер. Значок
    выбирается по размеру в точках, рисуется в пикселях (у WhiteSur значок сети в 16/22/24 — три
    разных рисунка). Экран блокировки пока без масштаба (рисует в пикселях, `draw_pixels`).
-   Масштаб читается при запуске службы: сменили DPI — `shell apply service`.
+   Масштаб читается при запуске службы: сменили DPI — `mimshel apply service`.
 4. Долгий запуск после загрузки — **разобран (24.10.2026)**: в ВМ вся загрузка ~58 с; система готова
    на 16-й, вход на 19-й, но Xfce запускает автозапуск (и нашу службу) только после своих частей —
    на ~42-й (xfdesktop с обоями появляется на 34-й). Своя доля была ~13 с до панелей, из них 7 с —
    чтение всех 2437 шрифтов на холодном диске: теперь служба берёт сперва только основное семейство
    (`Fonts::quick`, пути — из `fc-list`), полный набор грузится в фоне и подменяет его
-   (`Msg::Fonts`). Смотреть `по шагам:` в `~/.local/state/shell/daemon.log`. Часы ВМ скачут на ±3 ч
+   (`Msg::Fonts`). Смотреть `по шагам:` в `~/.local/state/mimshel/daemon.log`. Часы ВМ скачут на ±3 ч
    (служба времени VirtualBox) — лечится в VirtualBox: «Система → Часы в UTC».
 5. Шаг 6: ~~свои названия~~ (сделано 24.10.2026 — см. «Названия»); свои окна вместо zenity и
    диспетчера задач.
-6. Шаг 5: настоящая проверка `shell restore`; перечитывание настроек на ходу (для шага 7).
+6. Шаг 5: настоящая проверка `mimshel restore`; перечитывание настроек на ходу (для шага 7).
 7. Шаг 7: окно настроек.
 Помощник Hermes Agent (стоит в ВМ): работает **только в своей ветке**; задачу ему можно дать
 `hermes -z "задание"` из папки проекта.
@@ -403,11 +422,11 @@ NoDisplay/Hidden, TryExec, OnlyShowIn), Icon Theme (поиск иконки по
 
 **Сделано:** `apps` (индекс, запуск, слежение), `core::search`, `text`, `icons`, `x11`,
 `launcher` (Spotlight и Launchpad: состояние + рисование в PNG; общее поле ввода `field`),
-`apps/shell`:
-- `shell daemon` — служба: грузит всё заранее, ждёт команд в `$XDG_RUNTIME_DIR/shell.sock`;
-- `shell spotlight`, `shell launchpad` — открыть/закрыть (через службу; без неё — сами, медленнее);
-- `shell snapshot spotlight|launchpad ТЕКСТ файл.png` — нарисовать окно в картинку (проверка вида);
-- `shell apps`, `shell search ТЕКСТ`, `shell watch` — проверки без окна.
+`apps/mimshel`:
+- `mimshel daemon` — служба: грузит всё заранее, ждёт команд в `$XDG_RUNTIME_DIR/mimshel.sock`;
+- `mimshel spotlight`, `mimshel launchpad` — открыть/закрыть (через службу; без неё — сами, медленнее);
+- `mimshel snapshot spotlight|launchpad ТЕКСТ файл.png` — нарисовать окно в картинку (проверка вида);
+- `mimshel apps`, `mimshel search ТЕКСТ`, `mimshel watch` — проверки без окна.
 Окно: override-redirect, 32-битный вид (прозрачность через композитор xfwm4), захват
 клавиатуры и мыши; раскладка us/ru — из битов группы XKB в событии.
 Launchpad: снимок экрана → уменьшить в 8 раз, размыть, затемнить, растянуть обратно (своё
@@ -415,29 +434,29 @@ Launchpad: снимок экрана → уменьшить в 8 раз, раз�
 ~60 мс, размытие ~40 мс, рисование ~10 мс, вывод ~60 мс (экран 2560×1440).
 **Общая память (MIT-SHM, 22.10.2026, `crates/x11/src/shm.rs`):** снимки экрана и окон, вывод картинок
 от 2 МБ — через файл в tmpfs, переданный серверу (`attach_fd`), без `unsafe`; при ошибке — по-старому,
-`SHELL_NO_SHM=1` — выключить. Мелкие картинки через общую память не быстрее (ждать ответа сервера).
+`MIMSHEL_NO_SHM=1` — выключить. Мелкие картинки через общую память не быстрее (ждать ответа сервера).
 Док выводит только занятые столбцы (и занятые прошлым кадром). На экране 1278×798: снимок 10→7 мс,
-вывод кадра дока ~2,1→1,2 мс. Замеры кадров дока: `SHELL_TIMING=1` (пишет в журнал сторожа).
+вывод кадра дока ~2,1→1,2 мс. Замеры кадров дока: `MIMSHEL_TIMING=1` (пишет в журнал сторожа).
 **Включено (21.10.2026, с согласия пользователя):** `macos-look set spotlight.engine shell` и
 `macos-look set launchpad.engine shell` — Super+Пробел/Super+A и значок Launchpad в доке →
-`~/.local/bin/shell spotlight|launchpad`, автозапуск `~/.config/autostart/shell-daemon.desktop`
+`~/.local/bin/mimshel spotlight|launchpad`, автозапуск `~/.config/autostart/shell-daemon.desktop`
 (ставит macos-look, `doctor` проверяет). Вернуть rofi: `macos-look set spotlight.engine rofi`
 (и `launchpad.engine rofi`).
 **Док (21.10.2026):** `macos-look set dock.engine shell` — Plank остановлен, его автозапуск убран,
-док рисует служба shell (`crates/dock` + `apps/shell/src/dock_ui.rs`).
+док рисует служба shell (`crates/dock` + `apps/mimshel/src/dock_ui.rs`).
 «Оставить в Dock» служба сама записывает в `[dock] apps` конфига (меняет только эту строку,
 запись через временный файл).
 Миниатюры: снимок окна — `Display::capture_window` (GetImage окна; с композитором xfwm4 верен и
-для закрытого другими окна, свёрнутое не нарисовано). Журнал `SHELL_DEBUG_DOCK=1` пишет и
+для закрытого другими окна, свёрнутое не нарисовано). Журнал `MIMSHEL_DEBUG_DOCK=1` пишет и
 открытие/закрытие миниатюр. Проверяя мышью через xdotool, помнить: при увеличении значки
 раздвигаются — целиться в середину значка по снимку, а не по раскладке без увеличения. Вернуть Plank:
 `macos-look set dock.engine plank`. Настройки дока — из `[dock]` конфига macos-look (apps,
-icon_size, zoom, zoom_percent, hide_mode); служба читает конфиг при запуске (`SHELL_CONFIG` —
+icon_size, zoom, zoom_percent, hide_mode); служба читает конфиг при запуске (`MIMSHEL_CONFIG` —
 другой файл для проверок), macos-look перезапускает её при apply. Окно ↔ программа: ярлык из
 окружения процесса (GIO_LAUNCHED_DESKTOP_FILE + _PID, наш запуск ставит оба через `sh -c`),
-StartupWMClass, имя ярлыка, имя команды (урок 6). Журнал событий дока: `SHELL_DEBUG_DOCK=1`.
+StartupWMClass, имя ярлыка, имя команды (урок 6). Журнал событий дока: `MIMSHEL_DEBUG_DOCK=1`.
 Помощники: `examples/windows` (окна, как их видит док), `examples/attrs 0x…` (маски событий окна).
-После пересборки: `install -m 755 target/release/shell ~/.local/bin/shell` и `shell apply service`
+После пересборки: `install -m 755 target/release/mimshel ~/.local/bin/mimshel` и `mimshel apply service`
 — перезапустит службу с окружением сеанса (старую останавливать не нужно).
 
 ## Замеры (22.10.2026, экран 1278×798, ВМ)
@@ -496,7 +515,7 @@ StartupWMClass, имя ярлыка, имя команды (урок 6). Жур�
 - Нажатия: `xdotool key super+space`, `xdotool type --delay 100 text` — **только латиница**
   (см. урок 9). Русский набор «как с клавиатуры»: `target/release/examples/xkb_group 1 57 28`
   (включить раскладку ru и нажать клавиши по кодам; `… 0` — вернуть us). Журнал клавиш
-  службы: запустить с `SHELL_DEBUG_KEYS=1`.
+  службы: запустить с `MIMSHEL_DEBUG_KEYS=1`.
 - Фоновый запуск, чтобы не держать терминал: `setsid -f cmd >/dev/null 2>&1 </dev/null`.
 - **Перезайти в графический сеанс** (проверить запуск при входе): `xfce4-session-logout --logout --fast`
   с окружением сеанса. LightDM с `autologin-user=ded` входит снова сам через ~10 с. Claude работает
@@ -541,15 +560,15 @@ Python-скрипт, который делал вид macOS из чужих пр
    `setxkbmap -rules evdev -model pc105 -layout us,ru -option '' -option grp:alt_shift_toggle`
    (как в /etc/X11/xorg.conf.d/00-keyboard.conf). Для проверок — `examples/xkb_group`.
 10. `pkill -f 'шаблон'` находит и саму команду оболочки, где этот шаблон написан, — и
-   убивает её. Останавливать по номеру: `kill $(pgrep -f '^target/release/shell daemon')`.
+   убивает её. Останавливать по номеру: `kill $(pgrep -f '^target/release/mimshel daemon')`.
 11. **Подписка на события чужого окна заменяет весь набор событий этого окна для нашего
    соединения.** Своё окно-док есть в `_NET_CLIENT_LIST` — подписка «на изменения окон
    программ» затёрла ему движение указателя. Свои окна при обходе списка пропускать.
 12. Служба теперь рисует и док: если она упадёт, дока не будет до перезахода (Plank был
-   отдельным процессом). Любая паника — баг. **Есть сторож** (22.10.2026, `apps/shell/src/guard.rs`):
-   `shell daemon` запускает `shell daemon --child` и перезапускает при падении (пауза 1…4 с,
+   отдельным процессом). Любая паника — баг. **Есть сторож** (22.10.2026, `apps/mimshel/src/guard.rs`):
+   `mimshel daemon` запускает `mimshel daemon --child` и перезапускает при падении (пауза 1…4 с,
    5 быстрых падений подряд — сдаётся); служба выходит, если сторожа не стало. Журнал обоих —
-   `~/.local/state/shell/daemon.log` (macos-look отправляет вывод службы в никуда).
+   `~/.local/state/mimshel/daemon.log` (macos-look отправляет вывод службы в никуда).
 15. **`xfce4-panel --quit` сбросил раскладки до одной `us`** (не каждый раз — во второй раз уцелели) (модуль раскладки панели при выходе;
    настройки при этом показывают `us,ru`). Проверка: `xkbcomp -xkb $DISPLAY - | grep xkb_symbols`
    (должно быть `us+ru:2`). Восстановление — команда из урока 9. Когда своя строка меню заменит
@@ -590,7 +609,7 @@ Python-скрипт, который делал вид macOS из чужих пр
    журнале — на часы ±часы). Файлы, собранные «в будущем», cargo считает новее правленых исходников и
    **не пересобирает** — в программу не попадают правки (ошибка «нет метода», которого в коде полно,
    или поставилась старая служба). Лечение: `find crates apps -name '*.rs' | xargs touch` и собрать.
-   Признак: `ls -la --time-style=full-iso target/release/shell` новее, чем `date`.
+   Признак: `ls -la --time-style=full-iso target/release/mimshel` новее, чем `date`.
 24. **gdk-pixbuf 2.44 (Arch) грузит картинки через glycin: каждая SVG — ~65–80 мс**, PNG ~7 мс (в
    процессе-загрузчике; `GLYCIN_DISABLE_SANDBOX`, своя настройка загрузчика, тема не помогают). Замер:
    `python3 -c` с `GdkPixbuf.Pixbuf.new_from_file_at_size`. **Но это не главная причина медленных
@@ -604,11 +623,11 @@ Python-скрипт, который делал вид macOS из чужих пр
 25. **Thunar работает службой (`thunar --daemon`)**: закрытые окна её не останавливают, новые правила
    темы (`~/.config/gtk-3.0/gtk.css`) он видит только после `thunar -q`. Перезапускать — с полным
    окружением сеанса (урок 14), иначе пропадает `GTK_MODULES` и меню возвращается в окна.
-26. **`shell apply service` мог оставить без службы**: старой давали 3 с на выход, новая видела «уже
+26. **`mimshel apply service` мог оставить без службы**: старой давали 3 с на выход, новая видела «уже
    запущена» и уходила, старая выходила следом. Теперь `sys::kill` после 3 с шлёт `-KILL`.
 13. **Проверять падение — `kill -ABRT`, не `-SEGV`**: Rust ловит SIGSEGV (для переполнения стека),
    и присланный `kill` сигнал программа переживает. И по уроку 10 — искать процесс по полному
-   пути (`pgrep -f '^/home/ded/.local/bin/shell daemon --child'`), иначе сигнал уйдёт своей команде.
+   пути (`pgrep -f '^/home/ded/.local/bin/mimshel daemon --child'`), иначе сигнал уйдёт своей команде.
 
 ## Правила работы
 - Git: маленькие осмысленные коммиты, сообщения по-русски.

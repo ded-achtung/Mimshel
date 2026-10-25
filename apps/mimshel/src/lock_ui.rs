@@ -1,7 +1,7 @@
-//! Экран блокировки (`shell lock-screen`): окно на весь экран, клавиатура и
+//! Экран блокировки (`mimshel lock-screen`): окно на весь экран, клавиатура и
 //! мышь захвачены, пароль проверяет PAM (та же цепочка `system-local-login`,
 //! что у входа в систему и была у i3lock). Процесс запускает сторож
-//! `shell lock` и перезапускает, если экран вышел без верного пароля
+//! `mimshel lock` и перезапускает, если экран вышел без верного пароля
 //! (урок 1 в CLAUDE.md) — поэтому любой сбой здесь возвращает код ≠ 0.
 //!
 //! Порядок старта важен: сначала экран закрывается тёмным окном и
@@ -13,13 +13,13 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use shell_core::config::Config;
-use shell_lock::{Frame, Layout, Phase};
-use shell_text::Fonts;
-use shell_x11::{Display, Event, Key, KeyPress, Popup};
+use mimshel_core::config::Config;
+use mimshel_lock::{Frame, Layout, Phase};
+use mimshel_text::Fonts;
+use mimshel_x11::{Display, Event, Key, KeyPress, Popup};
 use tiny_skia::Pixmap;
 
-use shell_setup::lock::log;
+use mimshel_setup::lock::log;
 
 /// Цепочка PAM: как у `i3lock` на Arch (его файл включает эту же).
 const PAM_SERVICE: &str = "system-local-login";
@@ -45,7 +45,7 @@ pub fn run() -> i32 {
     }
 }
 
-fn locked_run() -> shell_x11::Result<i32> {
+fn locked_run() -> mimshel_x11::Result<i32> {
     let config = crate::ui::load_config();
     let display = Arc::new(Display::connect()?);
     let (w, h) = display.screen_size();
@@ -171,7 +171,7 @@ impl<'a> LockUi<'a> {
     }
 
     /// Кадр из текущего состояния → в окно.
-    fn redraw(&mut self) -> shell_x11::Result<()> {
+    fn redraw(&mut self) -> mimshel_x11::Result<()> {
         let state = Frame {
             time: &self.time,
             date: &self.date,
@@ -179,7 +179,8 @@ impl<'a> LockUi<'a> {
             typed: self.password.len(),
             phase: self.phase,
         };
-        let Some(frame) = shell_lock::frame(&self.layout, &self.bg, &state, &mut self.fonts) else {
+        let Some(frame) = mimshel_lock::frame(&self.layout, &self.bg, &state, &mut self.fonts)
+        else {
             return Ok(());
         };
         self.popup.present(&self.display, &frame)?;
@@ -188,7 +189,7 @@ impl<'a> LockUi<'a> {
     }
 
     /// `Some(код)` — пора выходить (0 — верный пароль).
-    fn event(&mut self, ev: Event) -> shell_x11::Result<Option<i32>> {
+    fn event(&mut self, ev: Event) -> mimshel_x11::Result<Option<i32>> {
         let me = self.popup.id();
         let root = self.display.root();
         match ev {
@@ -216,7 +217,7 @@ impl<'a> LockUi<'a> {
     }
 
     /// Экран сменил размер: окно на весь новый экран, фон и раскладка заново.
-    fn resize(&mut self) -> shell_x11::Result<()> {
+    fn resize(&mut self) -> mimshel_x11::Result<()> {
         let (w, h) = self.display.screen_size();
         let layout = Layout::new(i64::from(w), i64::from(h));
         if layout.w == self.layout.w && layout.h == self.layout.h {
@@ -233,7 +234,7 @@ impl<'a> LockUi<'a> {
         self.redraw()
     }
 
-    fn key(&mut self, k: KeyPress) -> shell_x11::Result<Option<i32>> {
+    fn key(&mut self, k: KeyPress) -> mimshel_x11::Result<Option<i32>> {
         if k.logo {
             return Ok(None);
         }
@@ -289,7 +290,7 @@ impl<'a> LockUi<'a> {
 
     /// Проверить пароль. `Some(0)` — верный, экран закрывается; `None` —
     /// неверный, остаёмся и показываем «Неверный пароль».
-    fn verify(&mut self) -> shell_x11::Result<Option<i32>> {
+    fn verify(&mut self) -> mimshel_x11::Result<Option<i32>> {
         self.phase = Phase::Verifying;
         self.redraw()?;
         self.display.sync()?;
@@ -316,7 +317,7 @@ impl<'a> LockUi<'a> {
 
     /// Таймер: часы, возврат «Неверный пароль» в покой, проверка захвата.
     /// `Some(код)` — пора выходить.
-    fn tick(&mut self) -> shell_x11::Result<Option<i32>> {
+    fn tick(&mut self) -> mimshel_x11::Result<Option<i32>> {
         let mut redraw = false;
         let minute = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -422,8 +423,8 @@ fn volume(args: &[&str]) {
 /// Фон экрана блокировки под этот размер (обои, аватар, имя, поле).
 fn background(wallpaper: &str, layout: &Layout) -> Option<Pixmap> {
     let (w, h) = (u32::try_from(layout.w).ok()?, u32::try_from(layout.h).ok()?);
-    shell_setup::lock::background(wallpaper, layout.w, layout.h)
-        .and_then(|path| shell_icons::render_file(&path, w, h, shell_icons::Fit::Cover))
+    mimshel_setup::lock::background(wallpaper, layout.w, layout.h)
+        .and_then(|path| mimshel_icons::render_file(&path, w, h, mimshel_icons::Fit::Cover))
 }
 
 /// Ровный тёмный кадр — закрыть экран, пока грузится остальное.
@@ -434,10 +435,10 @@ fn dark_frame(w: u32, h: u32) -> Pixmap {
     pm
 }
 
-/// `shell snapshot lock ТЕКСТ ФАЙЛ.png` — нарисовать экран блокировки
+/// `mimshel snapshot lock ТЕКСТ ФАЙЛ.png` — нарисовать экран блокировки
 /// (ТЕКСТ — «набранный пароль»; пустой — подсказка в поле; «!» в начале —
 /// состояние «Неверный пароль»).
-pub fn snapshot(text: &str, file: &str) -> shell_x11::Result<()> {
+pub fn snapshot(text: &str, file: &str) -> mimshel_x11::Result<()> {
     let config = crate::ui::load_config();
     let display = Display::connect().ok();
     let (w, h) = display.map_or((1920, 1080), |d| {
@@ -457,7 +458,8 @@ pub fn snapshot(text: &str, file: &str) -> shell_x11::Result<()> {
         typed: typed.chars().count(),
         phase: if wrong { Phase::Wrong } else { Phase::Idle },
     };
-    let frame = shell_lock::frame(&layout, &bg, &state, &mut fonts).ok_or("экран не нарисован")?;
+    let frame =
+        mimshel_lock::frame(&layout, &bg, &state, &mut fonts).ok_or("экран не нарисован")?;
     frame.save_png(file)?;
     Ok(())
 }

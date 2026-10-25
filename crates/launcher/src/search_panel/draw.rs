@@ -1,9 +1,9 @@
 //! Как выглядит окно «Поиск». Размеры и цвета — из прежней rofi-темы
 //! macos-look, чтобы замена была незаметной.
 
-use shell_icons::Icons;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
+use mimshel_icons::Icons;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
 use tiny_skia::{FillRule, Stroke, Transform};
 
 use super::SearchPanel;
@@ -171,7 +171,7 @@ impl SearchPanel {
 mod tests {
     use super::*;
     use crate::search_panel::tests::panel;
-    use shell_core::input::{Key, KeyPress};
+    use mimshel_core::input::{Key, KeyPress};
 
     #[test]
     fn renders_at_its_size() {

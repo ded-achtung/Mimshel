@@ -167,7 +167,7 @@ impl Server {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("shell", "shell", env!("CARGO_PKG_VERSION"), "1.2")
+        ("Mimshel", "Mimshel", env!("CARGO_PKG_VERSION"), "1.2")
     }
 }
 

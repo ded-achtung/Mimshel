@@ -2,16 +2,16 @@
 //! (как тема WhiteSur-Dark для Plank), значки, точки под запущенными,
 //! разделитель и подпись над значком под указателем.
 
-use shell_render::Canvas;
+use mimshel_render::Canvas;
 use std::time::Instant;
 
-use shell_icons::Icons;
-use shell_text::{Fonts, Style};
+use mimshel_icons::Icons;
+use mimshel_text::{Fonts, Style};
 use tiny_skia::{FillRule, FilterQuality, PixmapPaint, Rect, Stroke, Transform};
 
 use crate::Dock;
 use crate::layout::{PAD_BOTTOM, SEPARATOR};
-use shell_widgets::shape::{circle, paint, rounded};
+use mimshel_widgets::shape::{circle, paint, rounded};
 
 const BAR: [u8; 4] = [0x19, 0x19, 0x19, 0xbe];
 const BAR_EDGE: [u8; 4] = [0xff, 0xff, 0xff, 0x26];

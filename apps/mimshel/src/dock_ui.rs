@@ -11,15 +11,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use shell_apps::App;
-use shell_core::config::{Config, DockHide, set_dock_apps};
-use shell_dock::{
+use mimshel_apps::App;
+use mimshel_core::config::{Config, DockHide, set_dock_apps};
+use mimshel_dock::{
     Action, Dock, Look, Menu, MenuCommand, MenuResult, POOF, Preview, PreviewCard, Rect, THUMB_H,
     THUMB_W, poof_image, should_hide, thumbnail,
 };
-use shell_icons::Icons;
-use shell_text::Fonts;
-use shell_x11::{Display, DockWindow, Event, Popup, Property};
+use mimshel_icons::Icons;
+use mimshel_text::Fonts;
+use mimshel_x11::{Display, DockWindow, Event, Popup, Property};
 
 use crate::ui::{Msg, Result};
 
@@ -172,7 +172,7 @@ impl DockUi {
     /// Обработать событие. Рисует потом [`DockUi::flush`].
     pub fn event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
         let now = Instant::now();
-        if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+        if mimshel_core::names::flag("DEBUG_DOCK") {
             eprintln!("док: {ev:?}");
         }
         // Пока открыто меню, мышь и клавиатура — его; окна программ и экран
@@ -389,7 +389,7 @@ impl DockUi {
         if want == current {
             return Ok(());
         }
-        if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+        if mimshel_core::names::flag("DEBUG_DOCK") {
             eprintln!("док: миниатюры {current:?} → {want:?}");
         }
         self.close_preview(d)?;
@@ -744,7 +744,7 @@ impl DockUi {
             if let Some(info) = d.window_info(w) {
                 let hint = info
                     .pid
-                    .and_then(shell_apps::process::launched_from)
+                    .and_then(mimshel_apps::process::launched_from)
                     .map(|p| p.to_string_lossy().into_owned());
                 infos.push((info, hint));
             }
@@ -820,7 +820,7 @@ impl DockUi {
         let t2 = Instant::now();
         self.window
             .set_input(d, &self.dock.input_rects(self.dock.hidden_at(now)))?;
-        if std::env::var_os("SHELL_TIMING").is_some() {
+        if mimshel_core::names::flag("TIMING") {
             d.sync()?;
             eprintln!(
                 "кадр {}x{}: рисование {:?}, вывод {:?}, до конца {:?}",

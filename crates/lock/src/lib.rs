@@ -3,15 +3,15 @@
 //! ([`frame`]) — часы, дата, подсказка, точки ● вместо пароля и кольцо
 //! состояния. Всё рисуется в картинку без окон и файлов — вид можно
 //! проверить в PNG. Пароль проверяет сам экран блокировки (PAM) в
-//! `apps/shell` (`shell lock-screen`); сторож `shell lock` перезапускает
+//! `apps/mimshel` (`mimshel lock-screen`); сторож `mimshel lock` перезапускает
 //! его, если тот вышел без верного пароля (урок 1 в CLAUDE.md).
 
 mod layout;
 
 pub use layout::{Layout, round};
 
-use shell_text::{Fonts, Style};
-use shell_widgets::shape::{circle, paint, rounded};
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::shape::{circle, paint, rounded};
 use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint, Stroke, Transform};
 
 /// Что нарисовать на фоне.

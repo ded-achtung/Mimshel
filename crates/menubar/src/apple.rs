@@ -1,13 +1,13 @@
-//! Главное меню (значок планеты). Пункты пишет `shell apply launchers`: файл
+//! Главное меню (значок планеты). Пункты пишет `mimshel apply launchers`: файл
 //! меню по стандарту freedesktop (`apple.menu`: папка ярлыков, порядок и
 //! разделители) и ярлыки `.desktop` с названием и командой. Тот же файл
 //! читает панель Xfce, если строка меню — она.
 
 use std::path::{Path, PathBuf};
 
-use shell_apps::Locale;
-use shell_apps::entry::DesktopEntry;
-use shell_apps::exec::{self, Context};
+use mimshel_apps::Locale;
+use mimshel_apps::entry::DesktopEntry;
+use mimshel_apps::exec::{self, Context};
 
 /// Пункт меню яблока.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +28,7 @@ pub fn apple_menu(menu_file: &Path) -> Vec<AppleItem> {
 }
 
 /// Разбор файла меню; `read` читает ярлык по пути. Понимаем только то, что
-/// пишет `shell apply launchers`: `<AppDir>`, `<Filename>` и `<Separator/>` в `<Layout>`.
+/// пишет `mimshel apply launchers`: `<AppDir>`, `<Filename>` и `<Separator/>` в `<Layout>`.
 pub fn parse_menu(xml: &str, read: impl Fn(&Path) -> Option<String>) -> Vec<AppleItem> {
     let tag = |line: &str, name: &str| {
         line.trim()

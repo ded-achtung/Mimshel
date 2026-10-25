@@ -5,7 +5,7 @@
 //! Как в полях macOS/GTK: стрелки, Home/End, Backspace/Delete,
 //! Ctrl+W и Ctrl/Alt+Backspace — стереть слово, Ctrl+U — стереть всё.
 
-use shell_core::input::{Key, KeyPress};
+use mimshel_core::input::{Key, KeyPress};
 
 /// Что произошло с полем после нажатия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

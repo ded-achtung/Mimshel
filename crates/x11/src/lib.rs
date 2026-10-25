@@ -23,8 +23,8 @@ pub use selection::SelectionRenderer;
 use std::sync::Mutex;
 use std::time::Duration;
 
-pub use shell_core::input::{Key, KeyPress};
-pub use shell_render::Image;
+pub use mimshel_core::input::{Key, KeyPress};
+pub use mimshel_render::Image;
 use tiny_skia::Pixmap;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event as XEvent;
@@ -133,7 +133,7 @@ x11rb::atom_manager! {
         XdndActionList,
         TARGETS,
         TEXT_URI_LIST: b"text/uri-list",
-        SHELL_XDND,
+        MIMSHEL_XDND,
         _NET_WM_STATE_SKIP_PAGER,
         _NET_WM_STRUT,
         _NET_WM_STRUT_PARTIAL,
@@ -251,7 +251,7 @@ pub struct Display {
     shm: shm::Shm,
     /// Перетаскивание из других программ (XDND).
     drop: dnd::DropCell,
-    /// Масштаб (`shell_render::scale` при подключении): размеры окон и
+    /// Масштаб (`mimshel_render::scale` при подключении): размеры окон и
     /// координаты мыши снаружи — в точках, серверу — в пикселях.
     scale: f32,
 }
@@ -291,7 +291,7 @@ impl Display {
             keymap,
             shm,
             drop: dnd::DropCell::default(),
-            scale: shell_render::scale(),
+            scale: mimshel_render::scale(),
         })
     }
 
@@ -318,9 +318,9 @@ impl Display {
             .map_or(self.screen_size, |g| (g.width, g.height))
     }
 
-    /// Длина в точках → в пикселях (как у холста `shell_render::Canvas`).
+    /// Длина в точках → в пикселях (как у холста `mimshel_render::Canvas`).
     pub fn px(&self, v: u32) -> u32 {
-        shell_render::to_px(v, self.scale)
+        mimshel_render::to_px(v, self.scale)
     }
 
     /// Координата в пикселях → в точках.
@@ -377,7 +377,7 @@ impl Display {
                 .override_redirect(1)
                 .event_mask(events),
         )?;
-        let class = format!("{name}\0Shell\0");
+        let class = format!("{name}\0{}\0", mimshel_core::names::CLASS);
         self.conn.change_property8(
             PropMode::REPLACE,
             window,
@@ -476,7 +476,7 @@ impl Display {
                 let state = u16::from(e.state);
                 let keymap = self.keymap.lock().unwrap_or_else(|p| p.into_inner());
                 let key = keymap.key(e.detail, state);
-                if std::env::var_os("SHELL_DEBUG_KEYS").is_some() {
+                if mimshel_core::names::flag("DEBUG_KEYS") {
                     let (sym, _) = keymap.keysym(e.detail, state);
                     eprintln!(
                         "клавиша: код {} состояние {state:#06x} раскладка {} символ {sym:#x} → {key:?}",
@@ -555,7 +555,7 @@ impl Display {
                 Event::Other
             }
             XEvent::SelectionNotify(e)
-                if e.property == self.atoms.SHELL_XDND
+                if e.property == self.atoms.MIMSHEL_XDND
                     || e.selection == self.atoms.XdndSelection =>
             {
                 self.dnd_selection(e.requestor, e.property)
@@ -571,7 +571,7 @@ impl Display {
                 Event::KeyboardLayouts
             }
             other => {
-                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+                if mimshel_core::names::flag("DEBUG_DOCK") {
                     eprintln!("X (не разобрано): {other:?}");
                 }
                 Event::Other

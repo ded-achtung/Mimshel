@@ -3,18 +3,18 @@
 
 mod draw;
 
-use shell_apps::App;
-use shell_core::input::{Key, KeyPress};
+use mimshel_apps::App;
+use mimshel_core::input::{Key, KeyPress};
 
 pub use draw::{BAR_H, LIST_PAD, MAX_ROWS, ROW_H, WIDTH};
 
 use crate::Action;
-use shell_widgets::field::{Edit, TextField};
+use mimshel_widgets::field::{Edit, TextField};
 
 pub struct SearchPanel {
     apps: Vec<App>,
     /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
-    prepared: Vec<shell_core::search::Prepared>,
+    prepared: Vec<mimshel_core::search::Prepared>,
     pub(crate) field: TextField,
     /// Номера подходящих программ в `apps`, лучшие первыми.
     results: Vec<usize>,

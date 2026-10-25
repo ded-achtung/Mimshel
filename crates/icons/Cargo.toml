@@ -1,12 +1,12 @@
 [package]
-name = "shell-icons"
+name = "mimshel-icons"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 resvg = "0.48.1"
-shell-render = { path = "../render" }
+mimshel-render = { path = "../render" }
 zune-jpeg = "0.5"
 tiny-skia = "0.12.0"
 

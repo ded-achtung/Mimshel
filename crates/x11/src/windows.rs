@@ -1,7 +1,7 @@
 //! Окна программ по стандартам EWMH/ICCCM: список, сведения, иконка,
 //! положение; переключиться на окно, свернуть его.
 
-use shell_core::windows::WindowInfo;
+use mimshel_core::windows::WindowInfo;
 use tiny_skia::{FilterQuality, IntSize, Pixmap, PixmapPaint, Transform};
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
@@ -194,7 +194,7 @@ impl Display {
     }
 
     /// Иконка окна (`_NET_WM_ICON`) размером `size`×`size` точек (картинка —
-    /// в пикселях, как у `shell_icons::Icons::get`) — для программ без
+    /// в пикселях, как у `mimshel_icons::Icons::get`) — для программ без
     /// ярлыка. Берётся наименьшая не меньше нужной, иначе самая большая.
     pub fn window_icon(&self, w: Window, size: u32) -> Option<Pixmap> {
         let size = self.px(size);

@@ -2,9 +2,9 @@
 //! сетка иконок с подписями, точки страниц. Размеры сетки — из настроек
 //! (как в rofi-теме macos-look: 7×4, иконки 72 px).
 
-use shell_icons::Icons;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
+use mimshel_icons::Icons;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
 use tiny_skia::{FillRule, IntSize, Pixmap, Transform};
 
 use super::AppsPanel;
@@ -320,7 +320,7 @@ mod tests {
     use super::*;
     use crate::apps_panel::Grid;
     use crate::search_panel::tests::app;
-    use shell_core::input::{Key, KeyPress};
+    use mimshel_core::input::{Key, KeyPress};
 
     #[test]
     fn blur_keeps_size_and_smooths() {
@@ -383,7 +383,7 @@ mod timing {
     use std::time::Instant;
 
     /// Замер частей размытия на экране 2560×1413:
-    /// `cargo test --release -p shell-launcher timing -- --ignored --nocapture`
+    /// `cargo test --release -p mimshel-launcher timing -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn backdrop_parts() {

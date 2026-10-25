@@ -1,0 +1,31 @@
+[package]
+name = "mimshel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mimshel-render = { path = "../../crates/render" }
+mimshel-core = { path = "../../crates/core" }
+mimshel-apps = { path = "../../crates/apps" }
+mimshel-text = { path = "../../crates/text" }
+mimshel-icons = { path = "../../crates/icons" }
+mimshel-x11 = { path = "../../crates/x11" }
+mimshel-launcher = { path = "../../crates/launcher" }
+mimshel-dbus = { path = "../../crates/dbus" }
+mimshel-dock = { path = "../../crates/dock" }
+mimshel-menubar = { path = "../../crates/menubar" }
+mimshel-notify = { path = "../../crates/notify" }
+mimshel-widgets = { path = "../../crates/widgets" }
+mimshel-setup = { path = "../../crates/setup" }
+mimshel-desktop = { path = "../../crates/desktop" }
+mimshel-folder = { path = "../../crates/folder" }
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+inotify = { version = "0.11.5", default-features = false }
+mimshel-wallpaper = { path = "../../crates/wallpaper" }
+tiny-skia = "0.12.0"
+pam = "0.8"
+mimshel-lock = { version = "0.1.0", path = "../../crates/lock" }
+
+[lints]
+workspace = true

@@ -1,12 +1,12 @@
 [package]
-name = "shell-lock"
+name = "mimshel-lock"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-shell-text = { path = "../text" }
-shell-widgets = { path = "../widgets" }
+mimshel-text = { path = "../text" }
+mimshel-widgets = { path = "../widgets" }
 tiny-skia = "0.12.0"
 
 [lints]

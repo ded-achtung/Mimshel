@@ -222,24 +222,31 @@ pub fn which(program: &str) -> Option<PathBuf> {
 }
 
 /// Текст файла, если он есть.
-/// Пометка в ярлыках и автозапусках, которые создал shell: такие он может
+/// Пометка в ярлыках и автозапусках, которые создал Mimshel: такие он может
 /// переписать и убрать при откате.
-pub const MANAGED_MARK: &str = "X-Shell=true";
-/// Прежняя пометка (её ставил macos-look и shell до переезда) — тоже наша.
-const OLD_MANAGED_MARK: &str = "X-Macos-Look=true";
+pub const MANAGED_MARK: &str = "X-Mimshel=true";
+/// Прежние пометки (до переименования — `shell`, ещё раньше — macos-look):
+/// такие файлы тоже наши.
+const OLD_MANAGED_MARKS: &[&str] = &["X-Shell=true", "X-Macos-Look=true"];
 
 /// Создан ли файл с таким текстом нами (новой или прежней пометкой).
 pub fn is_managed(text: &str) -> bool {
     text.lines()
-        .any(|l| l.trim() == MANAGED_MARK || l.trim() == OLD_MANAGED_MARK)
+        .map(str::trim)
+        .any(|l| l == MANAGED_MARK || OLD_MANAGED_MARKS.contains(&l))
 }
 
 /// Строка списка запуска сеанса вместо панели Xfce: пустая команда с
-/// пометкой, по которой панель возвращается. Прежняя — от macos-look.
-pub const PANEL_OFF: &[&str] = &["true", "shell-no-panel"];
-pub const OLD_PANEL_OFF: &[&str] = &["true", "macos-look-no-panel"];
-/// То же для рабочего стола Xfce (xfdesktop), когда стол рисует shell.
-pub const DESKTOP_OFF: &[&str] = &["true", "shell-no-desktop"];
+/// пометкой, по которой панель возвращается.
+pub const PANEL_OFF: &[&str] = &["true", "mimshel-no-panel"];
+/// Прежние пометки (от `shell` и macos-look) — узнаём и меняем на новую.
+pub const OLD_PANEL_OFF: &[&[&str]] = &[
+    &["true", "shell-no-panel"],
+    &["true", "macos-look-no-panel"],
+];
+/// То же для рабочего стола Xfce (xfdesktop), когда стол рисует Mimshel.
+pub const DESKTOP_OFF: &[&str] = &["true", "mimshel-no-desktop"];
+pub const OLD_DESKTOP_OFF: &[&[&str]] = &[&["true", "shell-no-desktop"]];
 
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
@@ -275,6 +282,14 @@ pub fn spawn(args: &[&str]) {
 }
 
 /// Остановить свои процессы с этим именем и дождаться, пока они выйдут (до 3 с).
+/// Остановить службу — и под новым именем (`mimshel daemon`), и под
+/// прежним (`shell daemon`: так её запускали до переименования).
+pub fn kill_daemon() {
+    for name in [mimshel_core::names::APP, mimshel_core::names::OLD] {
+        kill(&format!("{name} daemon"));
+    }
+}
+
 pub fn kill(name: &str) {
     let pattern = format!(r"^(\S*/)?{name}(\s|$)");
     let uid = uid().to_string();

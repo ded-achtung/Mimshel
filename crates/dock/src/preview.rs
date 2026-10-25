@@ -3,11 +3,11 @@
 //! карточке переключает на окно. Здесь раскладка, наведение и рисование;
 //! снимки окон делает служба.
 
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
 use tiny_skia::{FillRule, FilterQuality, IntSize, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
-use shell_widgets::shape::{paint, rounded};
+use mimshel_widgets::shape::{paint, rounded};
 
 /// Окно в миниатюрах.
 #[derive(Debug, Clone, PartialEq)]

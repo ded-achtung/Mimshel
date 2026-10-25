@@ -1,14 +1,14 @@
 [package]
-name = "shell-notify"
+name = "mimshel-notify"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-shell-render = { path = "../render" }
-shell-dbus = { path = "../dbus" }
-shell-text = { path = "../text" }
-shell-widgets = { path = "../widgets" }
+mimshel-render = { path = "../render" }
+mimshel-dbus = { path = "../dbus" }
+mimshel-text = { path = "../text" }
+mimshel-widgets = { path = "../widgets" }
 tiny-skia = "0.12.0"
 
 [lints]

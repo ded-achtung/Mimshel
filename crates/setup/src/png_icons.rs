@@ -1,7 +1,7 @@
 //! Готовые PNG для программ GTK. Библиотека картинок системы (gdk-pixbuf
 //! 2.44) грузит каждую SVG через отдельный процесс-загрузчик glycin: ~70 мс
 //! на значок, а PNG — в 10 раз быстрее (урок 24). Окно Thunar с ~40 значками
-//! открывалось секундами. Поэтому `shell apply icons` один раз рисует значки
+//! открывалось секундами. Поэтому `mimshel apply icons` один раз рисует значки
 //! темы своей программой (resvg, ~1 мс на значок) в тему `ТЕМА-png`, которая
 //! наследует саму тему: чего в ней нет, GTK возьмёт из SVG, как раньше.
 //!
@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use shell_icons::{Fit, Icons, render_file};
+use mimshel_icons::{Fit, Icons, render_file};
 
 /// Размеры одноцветных значков (меню, кнопки, боковые панели).
 const SYMBOLIC: &[u32] = &[16, 24, 32];
@@ -231,7 +231,7 @@ fn render(job: &Job) -> bool {
 fn write_index(out_dir: &Path, theme: &str, dirs: &BTreeSet<(&'static str, u32)>) {
     let list: Vec<String> = dirs.iter().map(|(c, s)| format!("{c}/{s}")).collect();
     let mut text = format!(
-        "[Icon Theme]\nName={}\nComment=Готовые PNG для программ GTK (рисует shell apply icons)\n\
+        "[Icon Theme]\nName={}\nComment=Готовые PNG для программ GTK (рисует mimshel apply icons)\n\
          Inherits={theme},hicolor\nDirectories={}\n",
         theme_name(theme),
         list.join(",")

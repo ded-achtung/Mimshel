@@ -4,9 +4,9 @@
 //! Здесь только состояние, наведение, клавиши и рисование в картинку; окно
 //! для меню — у службы.
 
-use shell_core::input::Key;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
+use mimshel_core::input::Key;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
 use tiny_skia::{FillRule, LineCap, LineJoin, PathBuilder, Stroke, Transform};
 
 use crate::shape::{paint, rounded};

@@ -5,9 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
-use shell_widgets::shape::{paint, rounded};
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, Pixmap, PixmapPaint, Transform};
 
 use crate::files::Item;

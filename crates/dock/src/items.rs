@@ -6,9 +6,9 @@
 
 use std::path::PathBuf;
 
-use shell_apps::App;
-use shell_core::config::dock_entry_matches;
-use shell_core::windows::WindowInfo;
+use mimshel_apps::App;
+use mimshel_core::config::dock_entry_matches;
+use mimshel_core::windows::WindowInfo;
 
 /// Ключ значка корзины (в конце дока, за разделителем).
 pub const TRASH: &str = "trash:";

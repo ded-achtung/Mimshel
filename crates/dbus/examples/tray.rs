@@ -1,10 +1,10 @@
 //! Проверочный помощник: занять трей и печатать значки, которые
-//! регистрируются (и меню каждого). `cargo run -p shell-dbus --example tray`.
-//! Служба shell со строкой меню не должна быть запущена — имя трея одно.
+//! регистрируются (и меню каждого). `cargo run -p mimshel-dbus --example tray`.
+//! Служба Mimshel со строкой меню не должна быть запущена — имя трея одно.
 
 use std::sync::mpsc;
 
-use shell_dbus::tray::{self, TrayCmd, TrayUpdate};
+use mimshel_dbus::tray::{self, TrayCmd, TrayUpdate};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel();

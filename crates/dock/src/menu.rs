@@ -1,7 +1,7 @@
 //! Меню значка по правому клику, как на Mac: окна программы (галочка —
 //! у активного), «Открыть» (или «Новое окно»), «Оставить в Dock» с галочкой,
 //! «Завершить»; у корзины — «Открыть» и «Очистить Корзину…». Само меню —
-//! общее ([`shell_widgets::Menu`]), здесь — что делают его пункты.
+//! общее ([`mimshel_widgets::Menu`]), здесь — что делают его пункты.
 
 /// Что выбрали в меню.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,6 @@ pub enum MenuCommand {
     EmptyTrash,
 }
 
-pub type Menu = shell_widgets::Menu<MenuCommand>;
-pub type MenuEntry = shell_widgets::MenuEntry<MenuCommand>;
-pub type MenuResult = shell_widgets::MenuResult<MenuCommand>;
+pub type Menu = mimshel_widgets::Menu<MenuCommand>;
+pub type MenuEntry = mimshel_widgets::MenuEntry<MenuCommand>;
+pub type MenuResult = mimshel_widgets::MenuResult<MenuCommand>;

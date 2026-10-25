@@ -1,5 +1,5 @@
-//! Сторож экрана блокировки (`shell lock`). Сам экран рисует и пароль
-//! проверяет отдельный процесс (`shell lock-screen`, PAM): на X11 падение
+//! Сторож экрана блокировки (`mimshel lock`). Сам экран рисует и пароль
+//! проверяет отдельный процесс (`mimshel lock-screen`, PAM): на X11 падение
 //! блокировщика снимает блокировку (урок 1), поэтому сторож перезапускает
 //! экран при любом выходе без верного пароля. Сторож ничего не рисует и
 //! почти ничего не делает — падать ему не с чего.
@@ -12,12 +12,13 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use shell_lock::Layout;
+use mimshel_lock::Layout;
 
 use crate::sys::{command, home, running, succeeds};
 
-/// Экран блокировки в списке процессов (команда `shell lock-screen`).
-const LOCK_SCREEN: &str = "shell lock-screen";
+/// Экран блокировки в списке процессов (команда `mimshel lock-screen`;
+/// до переименования — `shell lock-screen`).
+const LOCK_SCREEN: [&str; 2] = ["mimshel lock-screen", "shell lock-screen"];
 
 /// Размер экрана из xrandr.
 pub fn screen_size() -> (i64, i64) {
@@ -44,20 +45,27 @@ pub fn screensaver_service() -> PathBuf {
     home().join(".local/share/dbus-1/services/org.xfce.ScreenSaver.service")
 }
 
-/// Пометка в этом файле: его создал shell (и откат может его удалить).
-pub const SCREENSAVER_MARK: &str = "# shell: заставка Xfce не запускается";
+/// Пометка в этом файле: его создал Mimshel (и откат может его удалить).
+pub const SCREENSAVER_MARK: &str = "# mimshel: заставка Xfce не запускается";
+/// Та же пометка до переименования проекта.
+const OLD_SCREENSAVER_MARK: &str = "# shell: заставка Xfce не запускается";
+
+/// Создан ли файл-заглушка заставки нами (новой или прежней пометкой).
+pub fn is_screensaver_override(text: &str) -> bool {
+    text.contains(SCREENSAVER_MARK) || text.contains(OLD_SCREENSAVER_MARK)
+}
 
 /// Содержимое файла: имя то же, запуск — пустая команда.
 pub fn screensaver_service_text() -> String {
     format!(
-        "{SCREENSAVER_MARK} (shell apply lock)\n[D-BUS Service]\nName=org.xfce.ScreenSaver\nExec=/bin/false\n"
+        "{SCREENSAVER_MARK} (mimshel apply lock)\n[D-BUS Service]\nName=org.xfce.ScreenSaver\nExec=/bin/false\n"
     )
 }
 
 /// Версия рисования фона: поменялась — старые картинки перерисовываются.
 const BACKGROUND_VERSION: u32 = 2;
 
-/// Картинка фона под этот экран. Рисуется заранее (`shell apply lock`) или
+/// Картинка фона под этот экран. Рисуется заранее (`mimshel apply lock`) или
 /// при блокировке, если обои, аватар, имя или экран поменялись. `None` —
 /// нарисовать не удалось и готового нет: экран блокировки обойдётся тёмным
 /// фоном (блокировка важнее вида).
@@ -75,13 +83,14 @@ pub fn background(wallpaper: &str, w: i64, h: i64) -> Option<PathBuf> {
         Err(_) => log("фон блокировки: сбой при рисовании"),
     }
     // Годится кеш прошлой блокировки (прежние обои лучше, чем ничего).
-    let cached = home().join(format!(".cache/shell/lock/bg-{w}x{h}.png"));
+    let cached =
+        mimshel_core::names::dir_in(&home().join(".cache")).join(format!("lock/bg-{w}x{h}.png"));
     cached.exists().then_some(cached)
 }
 
 /// Нарисовать фон (если готового с тем же ключом нет) и вернуть путь к нему.
 pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, String> {
-    let dir = home().join(".cache/shell/lock");
+    let dir = mimshel_core::names::dir_in(&home().join(".cache")).join("lock");
     let out = dir.join(format!("bg-{w}x{h}.png"));
     let stamp = dir.join(format!("bg-{w}x{h}.key"));
     let face = home().join(".face");
@@ -111,8 +120,8 @@ pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, Stri
         u32::try_from(w).map_err(|_| "ширина экрана")?,
         u32::try_from(h).map_err(|_| "высота экрана")?,
     );
-    let fit = shell_icons::Fit::Cover;
-    let wall = shell_icons::render_file(wallpaper, pw, ph, fit);
+    let fit = mimshel_icons::Fit::Cover;
+    let wall = mimshel_icons::render_file(wallpaper, pw, ph, fit);
     if wall.is_none() {
         log(&format!(
             "обои {} не прочитаны — тёмный фон",
@@ -120,13 +129,13 @@ pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, Stri
         ));
     }
     let a = u32::try_from(l.avatar).map_err(|_| "размер аватара")?;
-    let face = shell_icons::render_file(&face, a, a, fit);
+    let face = mimshel_icons::render_file(&face, a, a, fit);
     // Только основное семейство: полный набор читает все шрифты системы (секунды).
     let mut fonts =
-        shell_text::Fonts::quick("Inter").unwrap_or_else(|| shell_text::Fonts::new("Inter"));
-    let pm = shell_lock::draw(
+        mimshel_text::Fonts::quick("Inter").unwrap_or_else(|| mimshel_text::Fonts::new("Inter"));
+    let pm = mimshel_lock::draw(
         &l,
-        shell_lock::Scene {
+        mimshel_lock::Scene {
             wallpaper: wall,
             face,
             user: &user,
@@ -144,12 +153,12 @@ pub fn draw_background(wallpaper: &Path, w: i64, h: i64) -> Result<PathBuf, Stri
 }
 
 /// Заблокировать экран и держать блокировку, пока не введён верный пароль.
-/// `exe` — наша программа (запускается как `shell lock-screen`).
+/// `exe` — наша программа (запускается как `mimshel lock-screen`).
 /// Возвращает код выхода экрана блокировки (0 — разблокировали паролем).
 pub fn supervise(exe: &Path) -> i32 {
     // Экран уже показан (например, блокировка по бездействию и команда из
     // меню одновременно) — второй не нужен.
-    if running(LOCK_SCREEN) {
+    if LOCK_SCREEN.iter().any(|name| running(name)) {
         return 0;
     }
     supervise_with(
@@ -196,10 +205,11 @@ fn supervise_with(
     }
 }
 
-/// Журнал блокировки: `~/.local/state/shell/lock.log`.
+/// Журнал блокировки: `~/.local/state/mimshel/lock.log`.
 pub fn log(msg: &str) {
-    let path = home().join(".local/state/shell/lock.log");
-    let _ = std::fs::create_dir_all(home().join(".local/state/shell"));
+    let dir = mimshel_core::names::dir_in(&home().join(".local/state"));
+    let path = dir.join("lock.log");
+    let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

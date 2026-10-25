@@ -1,7 +1,7 @@
 //! Установка и проверка системы (раньше — скрипт macos-look, с 24.10.2026
-//! полностью здесь): проверка (`shell doctor`), включение частей и оформление
-//! (`shell apply`), сторож блокировки (`shell lock`), пункты главного меню
-//! (`shell action`), копии настроек и откат (`shell backup`, `shell restore`).
+//! полностью здесь): проверка (`mimshel doctor`), включение частей и оформление
+//! (`mimshel apply`), сторож блокировки (`mimshel lock`), пункты главного меню
+//! (`mimshel action`), копии настроек и откат (`mimshel backup`, `mimshel restore`).
 
 pub mod actions;
 pub mod backup;

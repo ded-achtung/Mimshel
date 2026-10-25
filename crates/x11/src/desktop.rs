@@ -59,7 +59,7 @@ impl Display {
             window,
             AtomEnum::WM_CLASS,
             AtomEnum::STRING,
-            b"desktop\0Shell\0",
+            b"desktop\0Mimshel\0",
         )?;
         self.conn.change_property8(
             PropMode::REPLACE,

@@ -12,8 +12,8 @@ use std::time::Duration;
 use inotify::{Inotify, WatchMask};
 use std::collections::HashMap;
 
-use shell_desktop::files::{Item, Kind, MimeDb, free_name, scan};
-use shell_desktop::icon_grid::Slot;
+use mimshel_desktop::files::{Item, Kind, MimeDb, free_name, scan};
+use mimshel_desktop::icon_grid::Slot;
 
 use crate::desktop_ui::DesktopMsg;
 use crate::ui::Msg;
@@ -40,7 +40,7 @@ pub fn desktop_dir() -> PathBuf {
 pub fn watch(dir: PathBuf, tx: Sender<Msg>) {
     std::thread::spawn(move || {
         let mime = MimeDb::load();
-        let locale = shell_apps::Locale::from_env();
+        let locale = mimshel_apps::Locale::from_env();
         let send = |tx: &Sender<Msg>| {
             let items = scan(&dir, &mime, locale.as_ref());
             tx.send(Msg::Desktop(Box::new(DesktopMsg::Files(items))))
@@ -264,7 +264,7 @@ fn places_file() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_default();
-    state.join("shell/desktop-icons")
+    mimshel_core::names::dir_in(&state).join("desktop-icons")
 }
 
 pub fn load_places() -> HashMap<String, Slot> {
@@ -302,7 +302,7 @@ pub fn save_places(places: &HashMap<String, Slot>) {
 /// «имя 2».
 pub fn paste(dir: PathBuf) {
     std::thread::spawn(move || {
-        let Some((cut, files)) = shell_x11::clipboard_files() else {
+        let Some((cut, files)) = mimshel_x11::clipboard_files() else {
             return;
         };
         for src in files {

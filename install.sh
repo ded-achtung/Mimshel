@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-# Установка shell на EndeavourOS / Arch Linux с Xfce (сеанс X11).
+# Установка Mimshel на EndeavourOS / Arch Linux с Xfce (сеанс X11).
 #
-#   git clone https://github.com/ded-achtung/shell.git
-#   cd shell && ./install.sh
+#   git clone https://github.com/ded-achtung/Mimshel.git
+#   cd Mimshel && ./install.sh
 #
 # Если GitHub недоступен: архив со всем нужным собирает tools/make-offline.sh
 # (проект, значки и тема Colloid, библиотеки Rust) — распаковать и ./install.sh.
 #
-# Что делает: ставит пакеты, значки, тему окон и курсор Colloid, собирает shell
-# и включает её части (строка меню, док, рабочий стол, уведомления, поиск,
-# экран блокировки, обои).
-# Перед изменениями сохраняет копию настроек: вернуть как было — shell restore.
+# Что делает: ставит пакеты, значки, тему окон и курсор Colloid, собирает Mimshel
+# и включает его части (строка меню, док, рабочий стол, Проводник, уведомления,
+# поиск, экран блокировки, обои).
+# Перед изменениями сохраняет копию настроек: вернуть как было — mimshel restore.
 # Повторный запуск безопасен: уже сделанное пропускается.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HOME/.local/share/shell/src"
-BIN="$HOME/.local/bin/shell"
+DATA="$HOME/.local/share/mimshel"
+SRC="$DATA/src"
+BIN="$HOME/.local/bin/mimshel"
 
 step() { printf '\n▶ %s\n' "$*"; }
 ok() { printf '✔ %s\n' "$*"; }
@@ -29,7 +30,11 @@ fail() { printf '✘ %s\n' "$*" >&2; exit 1; }
 command -v pacman >/dev/null || fail "Нужен Arch Linux или EndeavourOS (нет pacman)."
 pgrep -u "$(id -u)" -x xfce4-session >/dev/null \
     || fail "Нужно войти в рабочий стол Xfce и запускать отсюда, из терминала Xfce."
-[ "${XDG_SESSION_TYPE:-x11}" = x11 ] || fail "Нужен сеанс X11 (сейчас: $XDG_SESSION_TYPE). shell не работает в Wayland."
+[ "${XDG_SESSION_TYPE:-x11}" = x11 ] || fail "Нужен сеанс X11 (сейчас: $XDG_SESSION_TYPE). Mimshel не работает в Wayland."
+# Папка данных до переименования проекта (~/.local/share/shell) — под новым именем.
+if [ ! -e "$DATA" ] && [ -d "$HOME/.local/share/shell" ]; then
+    mv "$HOME/.local/share/shell" "$DATA"
+fi
 mkdir -p "$SRC" "$HOME/.local/bin"
 
 # --- Пакеты -----------------------------------------------------------------
@@ -87,7 +92,7 @@ else
 fi
 
 # --- Сама программа ---------------------------------------------------------
-step "Собираю shell (первый раз — несколько минут)"
+step "Собираю Mimshel (первый раз — несколько минут)"
 if [ -d "$ROOT/offline/vendor" ]; then
     # Библиотеки Rust из архива — без обращения к crates.io.
     (cd "$ROOT" && cargo build --release --locked --offline \
@@ -96,18 +101,20 @@ if [ -d "$ROOT/offline/vendor" ]; then
 else
     (cd "$ROOT" && cargo build --release --locked)
 fi
-install -m 755 "$ROOT/target/release/shell" "$BIN"
+install -m 755 "$ROOT/target/release/mimshel" "$BIN"
+# Прежняя команда shell — ссылкой на новую (старые сочетания клавиш, записки).
+ln -sfn mimshel "$HOME/.local/bin/shell"
 ok "Программа: $BIN"
 
 # --- Настройки и включение --------------------------------------------------
 step "Копия нынешних настроек (вернуть как было: $BIN restore)"
-"$BIN" backup pered-shell
+"$BIN" backup pered-mimshel
 
-step "Включаю части shell"
-for part in dock menubar notify desktop search_panel apps_panel; do
-    "$BIN" set --no-apply "parts.$part" shell
+step "Включаю части Mimshel"
+for part in dock menubar notify desktop folders search_panel apps_panel; do
+    "$BIN" set --no-apply "parts.$part" mimshel
 done
-"$BIN" set --no-apply look.icon_theme Colloid-shell
+"$BIN" set --no-apply look.icon_theme Colloid-mimshel
 "$BIN" set --no-apply look.gtk_theme Colloid-Dark
 "$BIN" set --no-apply look.cursor_theme Colloid-cursors
 "$BIN" set --no-apply look.wallpaper space
@@ -119,8 +126,8 @@ step "Проверка"
 cat <<'EOF'
 
 ✔ Готово. Выйдите из системы и войдите снова: меню программ в строке меню,
-  блокировка по бездействию и служба shell включаются при входе.
+  блокировка по бездействию и служба Mimshel включаются при входе.
 
-  Проверить, что всё на месте:  ~/.local/bin/shell doctor
-  Вернуть как было:              ~/.local/bin/shell restore
+  Проверить, что всё на месте:  ~/.local/bin/mimshel doctor
+  Вернуть как было:              ~/.local/bin/mimshel restore
 EOF

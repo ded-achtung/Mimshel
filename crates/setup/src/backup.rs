@@ -1,17 +1,19 @@
-//! Резервные копии настроек и откат (`shell backup`, `shell backups`,
-//! `shell restore`). Копии — в `~/.local/share/shell/backups`; прежняя папка
+//! Резервные копии настроек и откат (`mimshel backup`, `mimshel backups`,
+//! `mimshel restore`). Копии — в `~/.local/share/mimshel/backups`; прежняя папка
 //! macos-look переезжает туда целиком, с самой первой копией «как было до
 //! всего».
 //!
 //! В копии: настройки Xfce (xfconf), настройки и значки Plank, свой файл
-//! настроек shell и отметки, были ли автозапуск Plank и тема GTK4. Откат
+//! настроек Mimshel и отметки, были ли автозапуск Plank и тема GTK4. Откат
 //! возвращает их, убирает только свои ссылки GTK4, ярлыки и автозапуски со своей пометкой и
 //! перезапускает части Xfce.
 
 use std::path::{Path, PathBuf};
 
 use crate::paths::{Paths, SHORTCUTS};
-use crate::sys::{home, is_managed, kill, output_any, read, run, running, spawn, xget, xreset};
+use crate::sys::{
+    home, is_managed, kill, kill_daemon, output_any, read, run, running, spawn, xget, xreset,
+};
 
 /// Папка копий. Прежняя (от macos-look) при первом обращении переезжает сюда.
 pub fn backup_dir() -> PathBuf {
@@ -53,7 +55,7 @@ pub fn make(label: &str) -> std::io::Result<PathBuf> {
     let plank = output_any(&["dconf", "dump", "/net/launchpad/plank/"]);
     std::fs::write(dest.join("plank.dconf"), plank)?;
     copy_tree(&home().join(".config/plank"), &dest.join("plank-config"))?;
-    let shell_config = home().join(".config/shell/config.toml");
+    let shell_config = mimshel_core::names::dir_in(&home().join(".config")).join("config.toml");
     if shell_config.exists() {
         std::fs::copy(&shell_config, dest.join("shell-config.toml"))?;
     }
@@ -135,7 +137,7 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
         crate::gtk_links::cleanup()?;
     }
     if crate::gtk_fixes::present() {
-        step("убрать поправки shell из ~/.config/gtk-3.0/gtk.css");
+        step("убрать поправки Mimshel из ~/.config/gtk-3.0/gtk.css");
         if !dry {
             crate::gtk_fixes::cleanup()?;
         }
@@ -147,19 +149,19 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
         }
     }
     if let Ok(text) = std::fs::read_to_string(src.join("shell-config.toml")) {
-        step("вернуть файл настроек shell");
+        step("вернуть файл настроек Mimshel");
         if !dry {
-            let path = home().join(".config/shell/config.toml");
+            let path = mimshel_core::names::dir_in(&home().join(".config")).join("config.toml");
             crate::sys::write_if_changed(&path, &text)?;
         }
     }
-    step("остановить xss-lock и службу shell, вернуть xfce4-notifyd и заставку Xfce");
+    step("остановить xss-lock и службу Mimshel, вернуть xfce4-notifyd и заставку Xfce");
     if !dry {
         kill("xss-lock");
-        kill("shell daemon");
+        kill_daemon();
         run(&["systemctl", "--user", "unmask", "xfce4-notifyd.service"]);
         let service = crate::lock::screensaver_service();
-        if read(&service).contains(crate::lock::SCREENSAVER_MARK) {
+        if crate::lock::is_screensaver_override(&read(&service)) {
             remove_file(&service)?;
             run(&[
                 "dbus-send",
@@ -172,7 +174,7 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
         }
         spawn(&["xfce4-screensaver"]);
     }
-    // Свои сочетания: shell, прежний macos-look или rofi, поставленный нами.
+    // Свои сочетания: Mimshel, прежний macos-look или rofi, поставленный нами.
     let ours = [
         paths.shell_bin.display().to_string(),
         home().join(".local/bin/macos-look").display().to_string(),
@@ -202,7 +204,7 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Свои ярлыки (с пометкой shell или прежней macos-look) в этих папках.
+/// Свои ярлыки (с пометкой Mimshel или прежней macos-look) в этих папках.
 fn managed(dirs: &[&Path]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = dirs
         .iter()

@@ -3,10 +3,10 @@
 //! выбранные обведены; последняя плитка — «Выбрать картинку…» (свой файл).
 //! Esc или щелчок мимо окна — закрыть.
 
-use shell_core::input::Key;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
-use shell_widgets::shape::{paint, rounded};
+use mimshel_core::input::Key;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, FilterQuality, Paint, Pattern, Pixmap, SpreadMode, Stroke, Transform};
 
 /// Миниатюра (в точках).

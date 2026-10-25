@@ -15,7 +15,7 @@ fn manifest_path() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home().join(".local/state"));
-    state.join("shell/gtk4-links")
+    mimshel_core::names::dir_in(&state).join("gtk4-links")
 }
 
 fn read_entries(manifest: &Path) -> BTreeMap<&'static str, PathBuf> {

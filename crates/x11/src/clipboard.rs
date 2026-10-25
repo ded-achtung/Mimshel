@@ -51,7 +51,7 @@ pub fn clipboard_files() -> Option<(bool, Vec<PathBuf>)> {
         )
     };
     let clipboard = atom("CLIPBOARD")?;
-    let into = atom("SHELL_CLIPBOARD")?;
+    let into = atom("MIMSHEL_CLIPBOARD")?;
     for target in ["x-special/gnome-copied-files", "text/uri-list"] {
         let target = atom(target)?;
         conn.convert_selection(window, clipboard, target, into, CURRENT_TIME)

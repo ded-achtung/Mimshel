@@ -9,23 +9,23 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{Sender, SyncSender};
 use std::time::{Duration, Instant};
 
-use shell_apps::App;
-use shell_core::config::Config;
-use shell_core::keyboard::layout_label;
-use shell_dbus::{
+use mimshel_apps::App;
+use mimshel_core::config::Config;
+use mimshel_core::keyboard::layout_label;
+use mimshel_dbus::{
     AppMenu, AppMenuCmd, AppMenuUpdate, GtkPaths, MenuItem, Source, Tray, TrayCmd, TrayItem,
     TrayUpdate,
 };
-use shell_icons::Icons;
-use shell_menubar::status::{Battery, Sound};
-use shell_menubar::{
+use mimshel_icons::Icons;
+use mimshel_menubar::status::{Battery, Sound};
+use mimshel_menubar::{
     AppleItem, Bar, CalendarAction, CalendarPanel, ControlAction, ControlPanel, ControlState, Part,
     SoundAction, SoundPanel, apple_menu,
 };
-use shell_text::Fonts;
-use shell_widgets::{Menu, MenuEntry, MenuResult};
-use shell_x11::Key;
-use shell_x11::{Display, DockWindow, Event, Popup, Property};
+use mimshel_text::Fonts;
+use mimshel_widgets::{Menu, MenuEntry, MenuResult};
+use mimshel_x11::Key;
+use mimshel_x11::{Display, DockWindow, Event, Popup, Property};
 
 use crate::status::{self, Audio, ControlRequest};
 use crate::ui::{Msg, Result};
@@ -69,7 +69,7 @@ pub struct MenubarUi {
     dnd: bool,
     audio: Sender<Audio>,
     control: SyncSender<ControlRequest>,
-    network: shell_menubar::Network,
+    network: mimshel_menubar::Network,
     bluetooth: Option<bool>,
     /// Когда громкость меняли отсюда.
     volume_changed: Option<Instant>,
@@ -93,7 +93,7 @@ pub struct MenubarUi {
     /// Календарь по щелчку на часах.
     calendar: Option<CalendarPanel>,
     /// Названия месяцев и дней на языке системы (читаются один раз).
-    calendar_names: Option<shell_menubar::Names>,
+    calendar_names: Option<mimshel_menubar::Names>,
     popup: Popup,
     popup_x: i16,
     popup_dirty: bool,
@@ -117,7 +117,7 @@ impl MenubarUi {
             dnd: false,
             audio: status::audio_worker(tx.clone()),
             control: status::control_worker(tx.clone()),
-            network: shell_menubar::Network::default(),
+            network: mimshel_menubar::Network::default(),
             bluetooth: None,
             volume_changed: None,
             tray: None,
@@ -150,7 +150,7 @@ impl MenubarUi {
         status::watch_dnd(tx.clone());
         let tray_tx = tx.clone();
         let menu_tx = tx;
-        ui.appmenu = match shell_dbus::appmenu::start(move |u| {
+        ui.appmenu = match mimshel_dbus::appmenu::start(move |u| {
             let _ = menu_tx.send(Msg::AppMenu(u));
         }) {
             Ok(m) => Some(m),
@@ -160,7 +160,7 @@ impl MenubarUi {
             }
         };
         ui.load_app_menu(d, None);
-        ui.tray = match shell_dbus::tray::start(move |u| {
+        ui.tray = match mimshel_dbus::tray::start(move |u| {
             let _ = tray_tx.send(Msg::Tray(u));
         }) {
             Ok(tray) => Some(tray),
@@ -224,7 +224,7 @@ impl MenubarUi {
         self.dirty = true;
     }
 
-    pub fn set_control(&mut self, network: shell_menubar::Network, bluetooth: Option<bool>) {
+    pub fn set_control(&mut self, network: mimshel_menubar::Network, bluetooth: Option<bool>) {
         self.network = network;
         self.bluetooth = bluetooth;
         if let Some(panel) = &mut self.control_panel {
@@ -370,7 +370,7 @@ impl MenubarUi {
             Event::Expose { window } if window == popup => self.popup_dirty = true,
             Event::Button { x, button, .. } => {
                 let part = self.bar.part_at(fonts, f32::from(x));
-                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+                if mimshel_core::names::flag("DEBUG_DOCK") {
                     eprintln!(
                         "строка меню: кнопка {button} по {part:?}, раскладки {:?}, нынешняя {}",
                         self.layouts, self.group
@@ -598,7 +598,7 @@ impl MenubarUi {
     }
 
     fn open_apple(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
-        // Пункты перечитываем: `shell apply launchers` мог их поменять.
+        // Пункты перечитываем: `mimshel apply launchers` мог их поменять.
         self.apple = apple_menu(&apple_menu_file());
         let entries = self
             .apple
@@ -945,9 +945,9 @@ impl MenubarUi {
         }
         let hint = info
             .pid
-            .and_then(shell_apps::process::launched_from)
+            .and_then(mimshel_apps::process::launched_from)
             .map(|p| p.to_string_lossy().into_owned());
-        match shell_dock::match_window(&info, hint.as_deref(), &self.apps) {
+        match mimshel_dock::match_window(&info, hint.as_deref(), &self.apps) {
             Some(i) => self.apps[i].name.clone(),
             None if !info.class.is_empty() => info.class.clone(),
             None => info.title.clone(),
@@ -1067,19 +1067,21 @@ fn entry(label: &str, command: Cmd, checked: bool, separator_before: bool) -> Me
     }
 }
 
-/// Файл главного меню (его пишет `shell apply launchers`).
+/// Файл главного меню (его пишет `mimshel apply launchers`).
 fn apple_menu_file() -> PathBuf {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .unwrap_or_default();
-    data.join("shell/apple.menu")
+    mimshel_core::names::dir_in(&data).join("apple.menu")
 }
 
 /// Окно рабочего стола: свой (класс `desktop.Shell`) или xfdesktop.
-fn is_desktop(info: &shell_core::windows::WindowInfo) -> bool {
+fn is_desktop(info: &mimshel_core::windows::WindowInfo) -> bool {
     info.class.eq_ignore_ascii_case("xfdesktop")
-        || (info.class == "Shell" && info.instance == "desktop")
+        || ((info.class == mimshel_core::names::CLASS
+            || info.class == mimshel_core::names::OLD_CLASS)
+            && info.instance == "desktop")
 }
 
 /// Запустить команду пункта меню отдельно от службы.
@@ -1135,8 +1137,8 @@ fn capitalize(s: &str) -> String {
 }
 
 /// Названия месяцев и дней недели на языке системы; не вышло — русские.
-fn calendar_names() -> shell_menubar::Names {
-    let mut names = shell_menubar::Names::default();
+fn calendar_names() -> mimshel_menubar::Names {
+    let mut names = mimshel_menubar::Names::default();
     let months: Vec<String> = date(
         &["-f", "-", "+%OB"],
         &(1..=12)
@@ -1170,17 +1172,17 @@ fn calendar_names() -> shell_menubar::Names {
 }
 
 /// Сегодня: дата и она же словами («Пятница, 23 октября»).
-fn today() -> (shell_menubar::Date, String) {
+fn today() -> (mimshel_menubar::Date, String) {
     let out = date(&["+%Y %m %d|%A, %-d %B"], "");
     let (nums, text) = out.trim().split_once('|').unwrap_or(("", ""));
     let n: Vec<u32> = nums.split(' ').filter_map(|v| v.parse().ok()).collect();
     let today = match n[..] {
-        [y, m, d] => shell_menubar::Date {
+        [y, m, d] => mimshel_menubar::Date {
             year: y as i32,
             month: m,
             day: d,
         },
-        _ => shell_menubar::Date {
+        _ => mimshel_menubar::Date {
             year: 1970,
             month: 1,
             day: 1,

@@ -15,10 +15,10 @@ pub use calendar::{CalendarAction, CalendarPanel, Date, Names};
 pub use control::{ControlAction, ControlPanel, ControlState, Network, Tile};
 pub use sound::{Row, SoundAction, SoundPanel};
 
-use shell_icons::Icons;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
-use shell_widgets::shape::{paint, rounded};
+use mimshel_icons::Icons;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::shape::{paint, rounded};
 use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Rect, Transform};
 
 /// Часть строки, по которой можно щёлкнуть.
@@ -280,7 +280,7 @@ fn control_icon(pm: &mut Canvas, x: f32, cy: f32) {
             pm.stroke_path(&r, &color, &stroke, Transform::identity(), None);
         }
         let kx = if knob_right { x + 12.0 } else { x + 4.0 };
-        if let Some(c) = shell_widgets::shape::circle(kx, y, 2.2) {
+        if let Some(c) = mimshel_widgets::shape::circle(kx, y, 2.2) {
             pm.fill_path(&c, &color, FillRule::Winding, Transform::identity(), None);
         }
     }

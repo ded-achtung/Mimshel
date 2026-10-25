@@ -1,6 +1,6 @@
 //! Общее для окон «Поиск» и «Программы»: кисть, лупа, прямоугольники, значки.
 
-use shell_render::Canvas;
+use mimshel_render::Canvas;
 use tiny_skia::{Color, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
 pub(crate) fn paint(c: [u8; 4]) -> Paint<'static> {

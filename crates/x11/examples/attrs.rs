@@ -1,5 +1,5 @@
 //! Проверочный помощник: какие события выбраны у окна и кто его родитель.
-//! `cargo run -p shell-x11 --example attrs -- 0x1200001`
+//! `cargo run -p mimshel-x11 --example attrs -- 0x1200001`
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt;

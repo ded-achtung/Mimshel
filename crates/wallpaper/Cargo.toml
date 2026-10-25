@@ -1,5 +1,5 @@
 [package]
-name = "shell-wallpaper"
+name = "mimshel-wallpaper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

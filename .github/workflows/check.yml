@@ -24,4 +24,4 @@ jobs:
       - name: Тесты без графического сеанса
         run: cargo test --workspace --locked
       - name: Окна на отдельном X-сервере
-        run: cargo test -p shell-x11 --test windows --locked -- --ignored
+        run: cargo test -p mimshel-x11 --test windows --locked -- --ignored

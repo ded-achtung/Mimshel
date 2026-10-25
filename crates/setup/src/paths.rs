@@ -1,4 +1,4 @@
-//! Где что лежит у shell и что открывают сочетания клавиш и меню планеты.
+//! Где что лежит у Mimshel и что открывают сочетания клавиш и меню планеты.
 
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ pub const APPLE_MENU: &[(&str, &str, bool)] = &[
     ("logout", "Завершить сеанс…", false),
 ];
 
-/// Папки и файлы shell.
+/// Папки и файлы Mimshel.
 pub struct Paths {
     /// Свои данные: меню планеты, копии настроек, обои.
     pub data: PathBuf,
@@ -32,12 +32,12 @@ impl Paths {
     pub fn new() -> Paths {
         let h = home();
         Paths {
-            data: h.join(".local/share/shell"),
+            data: mimshel_core::names::dir_in(&h.join(".local/share")),
             themes: h.join(".themes"),
             icons: h.join(".local/share/icons"),
             autostart: h.join(".config/autostart"),
             applications: h.join(".local/share/applications"),
-            shell_bin: h.join(".local/bin/shell"),
+            shell_bin: h.join(".local/bin").join(mimshel_core::names::APP),
         }
     }
 
@@ -62,9 +62,9 @@ impl Default for Paths {
 pub struct Shortcut {
     /// Клавиши, как их пишет xfconf.
     pub keys: &'static str,
-    /// Часть в `[parts]`: кто показывает окно — shell или rofi.
+    /// Часть в `[parts]`: кто показывает окно — Mimshel или rofi.
     pub part: &'static str,
-    /// Команда shell (`shell search`).
+    /// Команда Mimshel (`mimshel search`).
     pub command: &'static str,
 }
 

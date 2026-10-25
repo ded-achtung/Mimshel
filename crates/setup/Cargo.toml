@@ -1,16 +1,16 @@
 [package]
-name = "shell-setup"
+name = "mimshel-setup"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-shell-core = { path = "../core" }
-shell-lock = { path = "../lock" }
-shell-wallpaper = { path = "../wallpaper" }
-shell-icons = { path = "../icons" }
-shell-apps = { path = "../apps" }
-shell-text = { path = "../text" }
+mimshel-core = { path = "../core" }
+mimshel-lock = { path = "../lock" }
+mimshel-wallpaper = { path = "../wallpaper" }
+mimshel-icons = { path = "../icons" }
+mimshel-apps = { path = "../apps" }
+mimshel-text = { path = "../text" }
 tiny-skia = "0.12.0"
 
 [lints]

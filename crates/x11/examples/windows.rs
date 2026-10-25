@@ -1,8 +1,8 @@
 //! Проверочный помощник: окна программ, как их видит док.
-//! `cargo run -p shell-x11 --example windows`
+//! `cargo run -p mimshel-x11 --example windows`
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let d = shell_x11::Display::connect()?;
+    let d = mimshel_x11::Display::connect()?;
     let active = d.active_window();
     for w in d.client_list() {
         match d.window_info(w) {

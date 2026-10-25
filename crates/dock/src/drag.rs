@@ -6,7 +6,7 @@
 
 use crate::layout::SEPARATOR;
 use crate::{Action, Dock, TRASH};
-use shell_core::config::{dock_entry, dock_entry_matches};
+use mimshel_core::config::{dock_entry, dock_entry_matches};
 
 /// Значок, который тащат, и где сейчас указатель (координаты окна дока).
 #[derive(Debug, Clone, Copy, PartialEq)]

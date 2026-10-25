@@ -19,9 +19,9 @@ pub use preview::{Preview, PreviewCard, THUMB_H, THUMB_W, thumbnail};
 
 use std::time::{Duration, Instant};
 
-use shell_apps::App;
-use shell_core::config::{DockHide, dock_entry, dock_entry_matches};
-use shell_core::windows::WindowInfo;
+use mimshel_apps::App;
+use mimshel_core::config::{DockHide, dock_entry, dock_entry_matches};
+use mimshel_core::windows::WindowInfo;
 use tiny_skia::Pixmap;
 
 /// Сколько длится выезд/уезд дока (как HideTime в теме Plank).

@@ -1,15 +1,15 @@
 [package]
-name = "shell-desktop"
+name = "mimshel-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-shell-core = { path = "../core" }
-shell-apps = { path = "../apps" }
-shell-render = { path = "../render" }
-shell-text = { path = "../text" }
-shell-widgets = { path = "../widgets" }
+mimshel-core = { path = "../core" }
+mimshel-apps = { path = "../apps" }
+mimshel-render = { path = "../render" }
+mimshel-text = { path = "../text" }
+mimshel-widgets = { path = "../widgets" }
 tiny-skia = "0.12.0"
 
 [lints]

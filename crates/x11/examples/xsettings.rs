@@ -1,6 +1,6 @@
 //! Проверочный помощник: какие настройки xsettings рассылает служба
 //! настроек (xfsettingsd) и с какими значениями. Аргумент — часть имени
-//! (`cargo run -p shell-x11 --example xsettings -- Menubar`).
+//! (`cargo run -p mimshel-x11 --example xsettings -- Menubar`).
 
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
 

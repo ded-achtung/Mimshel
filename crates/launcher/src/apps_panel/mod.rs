@@ -8,15 +8,15 @@
 //! Подсветки при наведении мыши нет — как на Mac (и не нужно перерисовывать
 //! весь экран на каждое движение).
 
-use shell_apps::App;
-use shell_core::input::{Key, KeyPress};
+use mimshel_apps::App;
+use mimshel_core::input::{Key, KeyPress};
 
 mod draw;
 
 pub use draw::backdrop;
 
 use crate::Action;
-use shell_widgets::field::{Edit, TextField};
+use mimshel_widgets::field::{Edit, TextField};
 
 /// Размер сетки (из настроек).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +74,7 @@ impl Layout {
 pub struct AppsPanel {
     apps: Vec<App>,
     /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
-    prepared: Vec<shell_core::search::Prepared>,
+    prepared: Vec<mimshel_core::search::Prepared>,
     pub(crate) field: TextField,
     /// Что показано: номера программ в `apps` — все по алфавиту или найденные.
     shown: Vec<usize>,

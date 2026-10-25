@@ -56,7 +56,7 @@ impl Display {
                 .event_mask(events),
         )?;
         let a = &self.atoms;
-        let wm_class = format!("{class}\0Shell\0");
+        let wm_class = format!("{class}\0{}\0", mimshel_core::names::CLASS);
         self.conn.change_property8(
             PropMode::REPLACE,
             window,

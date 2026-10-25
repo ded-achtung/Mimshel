@@ -17,7 +17,7 @@ pub fn socket_path() -> io::Result<std::path::PathBuf> {
     runtime_socket(
         runtime.as_deref(),
         &std::path::PathBuf::from(format!("/run/user/{uid}")),
-        &std::path::PathBuf::from(format!("/tmp/shell-runtime-{uid}")),
+        &std::path::PathBuf::from(format!("/tmp/mimshel-runtime-{uid}")),
         uid,
     )
 }
@@ -51,7 +51,7 @@ fn runtime_socket(
             ),
         ));
     }
-    Ok(dir.join("shell.sock"))
+    Ok(dir.join(format!("{}.sock", mimshel_core::names::APP)))
 }
 
 const MAX_CLIENTS: usize = 32;
@@ -178,7 +178,7 @@ mod tests {
             first,
             runtime_socket(None, &standard, &fallback, uid).unwrap()
         );
-        assert_eq!(first, fallback.join("shell.sock"));
+        assert_eq!(first, fallback.join("mimshel.sock"));
         assert_eq!(std::fs::metadata(&fallback).unwrap().mode() & 0o777, 0o700);
         // Путь с XDG и без XDG совпадает, когда есть /run/user/UID.
         assert_eq!(

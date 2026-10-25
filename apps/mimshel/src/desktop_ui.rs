@@ -18,18 +18,18 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use shell_core::config::Config;
-use shell_core::input::latin;
-use shell_desktop::files::{Item, Kind};
-use shell_desktop::icon_grid::{self, Direction, IconGrid};
-use shell_desktop::rename_box::{RenameBox, RenameResult};
-use shell_desktop::{PickerResult, WallpaperPicker, wallpaper_picker};
-use shell_icons::Icons;
-use shell_render::Canvas;
-use shell_text::Fonts;
-use shell_widgets::shape::paint;
-use shell_widgets::{Menu, MenuEntry, MenuResult};
-use shell_x11::{
+use mimshel_core::config::Config;
+use mimshel_core::input::latin;
+use mimshel_desktop::files::{Item, Kind};
+use mimshel_desktop::icon_grid::{self, Direction, IconGrid};
+use mimshel_desktop::rename_box::{RenameBox, RenameResult};
+use mimshel_desktop::{PickerResult, WallpaperPicker, wallpaper_picker};
+use mimshel_icons::Icons;
+use mimshel_render::Canvas;
+use mimshel_text::Fonts;
+use mimshel_widgets::shape::paint;
+use mimshel_widgets::{Menu, MenuEntry, MenuResult};
+use mimshel_x11::{
     DesktopWindow, Display, DragTarget, Event, Key, KeyPress, Popup, SelectionRenderer,
 };
 use tiny_skia::{IntRect, Pixmap};
@@ -331,7 +331,7 @@ impl DesktopUi {
             Event::Configure { window } => window == d.root(),
             Event::Property {
                 window,
-                what: shell_x11::Property::WorkArea,
+                what: mimshel_x11::Property::WorkArea,
             } => window == d.root(),
             _ => false,
         }
@@ -348,7 +348,7 @@ impl DesktopUi {
         }
         if let Event::Property {
             window,
-            what: shell_x11::Property::WorkArea,
+            what: mimshel_x11::Property::WorkArea,
         } = ev
             && window == d.root()
         {
@@ -595,7 +595,7 @@ impl DesktopUi {
         let cx = x - press.grab.0 + icon_grid::CELL_W / 2.0;
         let cy = y - press.grab.1 + icon_grid::CELL_H / 2.0;
         let slot = self.grid.slot_at(cx, cy);
-        if std::env::var_os("SHELL_DEBUG_DESKTOP").is_some() {
+        if mimshel_core::names::flag("DEBUG_DESKTOP") {
             eprintln!(
                 "Стол: отпустили в ({x}, {y}), захват {:?}, клетка {slot:?}",
                 press.grab
@@ -656,7 +656,7 @@ impl DesktopUi {
                 // Перемещение на свой стол меняет только положение значка.
                 src.clone()
             } else {
-                shell_desktop::files::free_name_reserved(&into, &name, &reserved)
+                mimshel_desktop::files::free_name_reserved(&into, &name, &reserved)
             };
             reserved.insert(dest.clone());
             if folder.is_none() {
@@ -695,8 +695,8 @@ impl DesktopUi {
                         let changed = self.grid.select_all();
                         self.cells_dirty.extend(changed);
                     }
-                    'c' if !selected.is_empty() => shell_x11::copy_files(selected, false),
-                    'x' if !selected.is_empty() => shell_x11::copy_files(selected, true),
+                    'c' if !selected.is_empty() => mimshel_x11::copy_files(selected, false),
+                    'x' if !selected.is_empty() => mimshel_x11::copy_files(selected, true),
                     'v' => desktop_files::paste(self.dir.clone()),
                     _ => {}
                 }
@@ -936,7 +936,7 @@ impl DesktopUi {
                     .iter()
                     .map(|i| i.path.clone())
                     .collect();
-                shell_x11::copy_files(paths, command == DesktopCommand::Cut);
+                mimshel_x11::copy_files(paths, command == DesktopCommand::Cut);
             }
             DesktopCommand::Trash => {
                 self.grid.freeze();
@@ -988,8 +988,8 @@ impl DesktopUi {
         let tx = self.tx.clone();
         let scale = d.scale();
         std::thread::spawn(move || {
-            let tw = shell_render::to_px(wallpaper_picker::THUMB_W as u32, scale);
-            let th = shell_render::to_px(wallpaper_picker::THUMB_H as u32, scale);
+            let tw = mimshel_render::to_px(wallpaper_picker::THUMB_W as u32, scale);
+            let th = mimshel_render::to_px(wallpaper_picker::THUMB_H as u32, scale);
             for value in values {
                 if let Some(image) = thumb(&value, tw, th) {
                     let msg = DesktopMsg::Thumb(value, image);
@@ -1271,7 +1271,7 @@ impl DesktopUi {
             self.grid.draw(&mut pm, (0.0, 0.0), i, icon.as_ref(), fonts);
         }
         self.window.set_wallpaper(d, pm.pixmap())?;
-        if std::env::var_os("SHELL_TIMING").is_some() {
+        if mimshel_core::names::flag("TIMING") {
             eprintln!(
                 "Стол: {} значков, перерисован за {:?}",
                 self.grid.items().len(),

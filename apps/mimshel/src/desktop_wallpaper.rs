@@ -7,8 +7,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use shell_core::config::{set_value, setting_value};
-use shell_icons::Fit;
+use mimshel_core::config::{set_value, setting_value};
+use mimshel_icons::Fit;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use crate::desktop_ui::DesktopMsg;
@@ -40,8 +40,8 @@ pub(crate) fn painter(tx: Sender<Msg>) -> Sender<WallpaperOrder> {
                     Ok(o) => o,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         if let Some(value) = lock_for.take() {
-                            let (w, h) = shell_setup::lock::screen_size();
-                            shell_setup::lock::background(&value, w, h);
+                            let (w, h) = mimshel_setup::lock::screen_size();
+                            mimshel_setup::lock::background(&value, w, h);
                         }
                         continue;
                     }
@@ -82,20 +82,20 @@ pub(crate) fn save_wallpaper(value: &str) -> std::io::Result<()> {
 /// Миниатюра обоев `tw`×`th` пикселей: из уже нарисованных под экран обоев
 /// (так она такая же, как на столе), иначе свои рисуются сразу маленькими.
 pub(crate) fn thumb(value: &str, tw: u32, th: u32) -> Option<Pixmap> {
-    let (sw, sh) = shell_setup::lock::screen_size();
-    let drawn = match shell_wallpaper::Style::parse(value) {
+    let (sw, sh) = mimshel_setup::lock::screen_size();
+    let drawn = match mimshel_wallpaper::Style::parse(value) {
         Some(style) => {
             let (sw, sh) = (u32::try_from(sw).ok()?, u32::try_from(sh).ok()?);
-            let file = shell_setup::parts::wallpaper_path(style, sw, sh);
+            let file = mimshel_setup::parts::wallpaper_path(style, sw, sh);
             if file.exists() {
                 Some(file)
             } else {
-                return shell_wallpaper::draw(style, tw, th);
+                return mimshel_wallpaper::draw(style, tw, th);
             }
         }
         None => Some(PathBuf::from(value)),
     };
-    shell_icons::render_file(&drawn?, tw, th, Fit::Cover)
+    mimshel_icons::render_file(&drawn?, tw, th, Fit::Cover)
 }
 
 /// Окно выбора картинки (zenity) в отдельном потоке.
@@ -143,12 +143,12 @@ fn compose(value: &str, sw: u32, sh: u32, monitors: &[(i32, i32, u32, u32)]) -> 
     let mut out = Pixmap::new(sw.max(1), sh.max(1))?;
     out.fill(tiny_skia::Color::from_rgba8(0x1e, 0x1b, 0x3a, 0xff));
     for &(x, y, w, h) in monitors {
-        let Some(file) = shell_setup::parts::wallpaper_file(value, i64::from(w), i64::from(h))
+        let Some(file) = mimshel_setup::parts::wallpaper_file(value, i64::from(w), i64::from(h))
         else {
             eprintln!("Обои «{value}» не нарисованы и не найдены");
             continue;
         };
-        let Some(image) = shell_icons::render_file(&file, w, h, Fit::Cover) else {
+        let Some(image) = mimshel_icons::render_file(&file, w, h, Fit::Cover) else {
             eprintln!("Обои {} не прочитаны", file.display());
             continue;
         };

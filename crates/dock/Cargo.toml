@@ -1,16 +1,16 @@
 [package]
-name = "shell-dock"
+name = "mimshel-dock"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-shell-render = { path = "../render" }
-shell-core = { path = "../core" }
-shell-apps = { path = "../apps" }
-shell-text = { path = "../text" }
-shell-icons = { path = "../icons" }
-shell-widgets = { path = "../widgets" }
+mimshel-render = { path = "../render" }
+mimshel-core = { path = "../core" }
+mimshel-apps = { path = "../apps" }
+mimshel-text = { path = "../text" }
+mimshel-icons = { path = "../icons" }
+mimshel-widgets = { path = "../widgets" }
 tiny-skia = "0.12.0"
 
 [lints]

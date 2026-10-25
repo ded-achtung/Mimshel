@@ -4,7 +4,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use shell_x11::Display;
+use mimshel_x11::Display;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ConnectionExt, ImageFormat, ImageOrder, MapState, PropMode,
@@ -24,8 +24,8 @@ impl Drop for Server {
 #[test]
 #[ignore = "нужен Xvfb; CI запускает отдельно"]
 fn isolated_x11_popup_and_dock() -> Result<()> {
-    if std::env::var_os("SHELL_TEST_PRIVATE_X11").is_none() {
-        let xvfb = std::env::var_os("SHELL_TEST_XVFB").unwrap_or_else(|| "Xvfb".into());
+    if std::env::var_os("MIMSHEL_TEST_PRIVATE_X11").is_none() {
+        let xvfb = mimshel_core::names::env("TEST_XVFB").unwrap_or_else(|| "Xvfb".into());
         let mut server = Server(
             Command::new(xvfb)
                 .args([
@@ -65,11 +65,11 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
                     "--nocapture",
                 ])
                 .env("DISPLAY", format!(":{display}"))
-                .env("SHELL_TEST_PRIVATE_X11", "1");
+                .env("MIMSHEL_TEST_PRIVATE_X11", "1");
             if no_shm {
-                child.env("SHELL_NO_SHM", "1");
+                child.env("MIMSHEL_NO_SHM", "1");
             } else {
-                child.env_remove("SHELL_NO_SHM");
+                child.env_remove("MIMSHEL_NO_SHM");
             }
             assert!(child.status()?.success(), "X11, SHELL_NO_SHM={no_shm}");
         }

@@ -6,7 +6,7 @@ use cosmic_text::{
     Attrs, Buffer, Color, Ellipsize, EllipsizeHeightLimit, Family, FontSystem, Metrics, Shaping,
     SwashCache, Weight, Wrap,
 };
-use shell_render::Canvas;
+use mimshel_render::Canvas;
 use tiny_skia::Pixmap;
 
 /// Как выглядит строка.

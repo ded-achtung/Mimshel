@@ -1,11 +1,11 @@
 //! Проверочный помощник: напечатать глобальное меню окна.
-//! GTK: `cargo run -p shell-dbus --example appmenu -- 0xОКНО ШИНА МЕНЮ [app] [win] [unity]`
+//! GTK: `cargo run -p mimshel-dbus --example appmenu -- 0xОКНО ШИНА МЕНЮ [app] [win] [unity]`
 //! (значения — из `xprop -id 0xОКНО | grep _GTK_`); через регистратор: `… -- 0xОКНО`.
 
 use std::sync::mpsc;
 
-use shell_dbus::MenuItem;
-use shell_dbus::appmenu::{self, AppMenuCmd, AppMenuUpdate, GtkPaths, Source};
+use mimshel_dbus::MenuItem;
+use mimshel_dbus::appmenu::{self, AppMenuCmd, AppMenuUpdate, GtkPaths, Source};
 
 fn print(items: &[MenuItem], depth: usize) {
     for i in items {

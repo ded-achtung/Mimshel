@@ -1,6 +1,6 @@
 //! Когда прятать док — по режиму из настроек.
 
-use shell_core::config::DockHide;
+use mimshel_core::config::DockHide;
 
 /// Прямоугольник на экране.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

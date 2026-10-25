@@ -42,7 +42,7 @@ impl Shm {
             .and_then(|c| c.reply().ok())
             .is_some_and(|r| (r.major_version, r.minor_version) >= (1, 2));
         Shm {
-            enabled: AtomicBool::new(ok && std::env::var_os("SHELL_NO_SHM").is_none()),
+            enabled: AtomicBool::new(ok && !mimshel_core::names::flag("NO_SHM")),
             segment: std::sync::Mutex::new(None),
         }
     }

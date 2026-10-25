@@ -1,9 +1,9 @@
-//! Окна оболочки на экране — «Поиск» и «Программы»: служба (`shell daemon`)
+//! Окна оболочки на экране — «Поиск» и «Программы»: служба (`mimshel daemon`)
 //! или разовый запуск.
 //!
 //! Служба заранее загружает шрифты, иконки и список программ и ждёт команды
-//! через сокет `$XDG_RUNTIME_DIR/shell.sock`; поэтому окна открываются сразу.
-//! Без службы `shell search` / `shell apps` делают всё сами —
+//! через сокет `$XDG_RUNTIME_DIR/mimshel.sock`; поэтому окна открываются сразу.
+//! Без службы `mimshel search` / `mimshel apps` делают всё сами —
 //! медленнее, но работают. Открыто не больше одного окна: открытие одного
 //! закрывает другое.
 
@@ -14,13 +14,13 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
 
-use shell_apps::{App, Settings, Watcher};
-use shell_core::config::Config;
-use shell_icons::Icons;
-use shell_launcher::{Action, AppsPanel, Grid, SearchPanel, backdrop};
-use shell_render::Canvas;
-use shell_text::Fonts;
-use shell_x11::{Display, Event, Key, KeyPress, Popup};
+use mimshel_apps::{App, Settings, Watcher};
+use mimshel_core::config::Config;
+use mimshel_icons::Icons;
+use mimshel_launcher::{Action, AppsPanel, Grid, SearchPanel, backdrop};
+use mimshel_render::Canvas;
+use mimshel_text::Fonts;
+use mimshel_x11::{Display, Event, Key, KeyPress, Popup};
 
 use crate::desktop_ui::DesktopUi;
 use crate::dock_ui::DockUi;
@@ -29,7 +29,7 @@ use crate::menubar_ui::MenubarUi;
 use crate::notify_ui::NotifyUi;
 use tiny_skia::Pixmap;
 
-pub(crate) type Result<T> = shell_x11::Result<T>;
+pub(crate) type Result<T> = mimshel_x11::Result<T>;
 
 /// Иконки программ в списке «Поиска» — такого размера (см. его оформление).
 const ROW_ICON: u32 = 26;
@@ -80,16 +80,16 @@ pub(crate) enum Msg {
     /// Часы в строке меню (новая минута).
     Clock(String),
     /// Звук, батарея, «Не беспокоить» изменились.
-    Sound(Option<shell_menubar::status::Sound>),
-    Control(shell_menubar::Network, Option<bool>),
-    Battery(Option<shell_menubar::status::Battery>),
+    Sound(Option<mimshel_menubar::status::Sound>),
+    Control(mimshel_menubar::Network, Option<bool>),
+    Battery(Option<mimshel_menubar::status::Battery>),
     Dnd(bool),
     /// Значки трея или меню значка.
-    Tray(shell_dbus::TrayUpdate),
+    Tray(mimshel_dbus::TrayUpdate),
     /// Глобальное меню активного окна.
-    AppMenu(shell_dbus::AppMenuUpdate),
+    AppMenu(mimshel_dbus::AppMenuUpdate),
     /// Уведомление пришло или программа его закрыла.
-    Notify(shell_dbus::notify::NotifyEvent),
+    Notify(mimshel_dbus::notify::NotifyEvent),
     /// Щёлкнули по колокольчику — открыть или закрыть центр уведомлений.
     ToggleCenter,
     /// Полный набор шрифтов загружен (вместо быстрого, с одним семейством).
@@ -98,7 +98,7 @@ pub(crate) enum Msg {
     Desktop(Box<crate::desktop_ui::DesktopMsg>),
     /// Окнам папок — из их потоков (список файлов).
     Folder(Box<crate::folder_ui::FolderMsg>),
-    /// Открыть папку в окне (команда `shell folder`, двойной щелчок на столе).
+    /// Открыть папку в окне (команда `mimshel folder`, двойной щелчок на столе).
     OpenFolder(PathBuf),
     /// Перенос брошенных файлов закончен — сообщить источнику (XDND).
     DropFinished {
@@ -130,7 +130,7 @@ impl Msg {
     }
 }
 
-/// Настройки из своего файла (`SHELL_CONFIG` — другой файл, для проверок).
+/// Настройки из своего файла (`MIMSHEL_CONFIG` — другой файл, для проверок).
 /// Файла ещё нет — он создаётся из значений по умолчанию.
 pub fn load_config() -> Config {
     match config_path() {
@@ -140,28 +140,28 @@ pub fn load_config() -> Config {
 }
 
 pub fn config_store(path: PathBuf) -> crate::config_store::Store {
-    let good = if std::env::var_os("SHELL_CONFIG").is_some() {
+    let good = if mimshel_core::names::flag("CONFIG") {
         None
     } else {
         std::env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-            .map(|p| p.join("shell/config.good.toml"))
+            .map(|p| mimshel_core::names::dir_in(&p).join("config.good.toml"))
     };
     crate::config_store::Store { path, good }
 }
 
-/// Файл настроек: из `SHELL_CONFIG` или `~/.config/shell/config.toml`.
+/// Файл настроек: из `MIMSHEL_CONFIG` или `~/.config/mimshel/config.toml`.
 pub fn config_path() -> Option<PathBuf> {
-    std::env::var_os("SHELL_CONFIG")
+    mimshel_core::names::env("CONFIG")
         .map(PathBuf::from)
         .or_else(|| {
             let base = std::env::var_os("XDG_CONFIG_HOME")
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute())
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-            Some(base.join("shell/config.toml"))
+            Some(mimshel_core::names::dir_in(&base).join("config.toml"))
         })
 }
 
@@ -211,17 +211,17 @@ pub fn app_settings(config: &Config) -> Settings {
 }
 
 /// Масштаб для крупных экранов — до создания окон: из настроек, при «auto» —
-/// по DPI системы. `SHELL_SCALE` — задать для проверки, не трогая настройки.
+/// по DPI системы. `MIMSHEL_SCALE` — задать для проверки, не трогая настройки.
 fn set_scale(config: &Config) {
-    let forced = std::env::var("SHELL_SCALE")
-        .ok()
+    let forced = mimshel_core::names::env("SCALE")
+        .and_then(|v| v.into_string().ok())
         .and_then(|v| v.replace(',', ".").parse::<f32>().ok());
     let k = forced
         .or(config.scale)
-        .unwrap_or_else(|| shell_x11::xft_dpi().map_or(1.0, shell_x11::scale_for_dpi));
-    shell_render::set_scale(k);
-    if shell_render::scale() != 1.0 {
-        eprintln!("Масштаб: {}", shell_render::scale());
+        .unwrap_or_else(|| mimshel_x11::xft_dpi().map_or(1.0, mimshel_x11::scale_for_dpi));
+    mimshel_render::set_scale(k);
+    if mimshel_render::scale() != 1.0 {
+        eprintln!("Масштаб: {}", mimshel_render::scale());
     }
 }
 
@@ -262,7 +262,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         // нажатие от программы — и значок раскладки пропадал. Вернуть все;
         // строка меню сама заметит смену клавиатуры.
         std::thread::spawn(|| {
-            if shell_setup::parts::fix_virtual_keyboard() {
+            if mimshel_setup::parts::fix_virtual_keyboard() {
                 eprintln!("Раскладки виртуальной клавиатуры восстановлены");
             }
         });
@@ -295,7 +295,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     };
 
     let settings = app_settings(&config);
-    let all_apps = shell_apps::load_all(&settings);
+    let all_apps = mimshel_apps::load_all(&settings);
     let apps = visible(&all_apps);
     step("программы");
     let mut icons = Icons::new(&config.icon_theme);
@@ -303,8 +303,8 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         watch_apps(settings, tx.clone());
     }
     // Своя строка меню — только у службы и только если выбрана вместо панели
-    // Xfce (`SHELL_MENUBAR=1` — включить для проверки, не трогая настройки).
-    let menubar = if daemon && (config.menubar || std::env::var_os("SHELL_MENUBAR").is_some()) {
+    // Xfce (`MIMSHEL_MENUBAR=1` — включить для проверки, не трогая настройки).
+    let menubar = if daemon && (config.menubar || mimshel_core::names::flag("MENUBAR")) {
         Some(MenubarUi::new(
             &display,
             &config,
@@ -315,8 +315,8 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         None
     };
     step("строка меню");
-    // Свои уведомления — вместо xfce4-notifyd (`SHELL_NOTIFY=1` — для проверки).
-    let notify = if daemon && (config.notify || std::env::var_os("SHELL_NOTIFY").is_some()) {
+    // Свои уведомления — вместо xfce4-notifyd (`MIMSHEL_NOTIFY=1` — для проверки).
+    let notify = if daemon && (config.notify || mimshel_core::names::flag("NOTIFY")) {
         if menubar.is_none() {
             crate::status::watch_dnd(tx.clone());
         }
@@ -399,7 +399,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         }
     }
 
-    let timing = std::env::var_os("SHELL_TIMING").is_some();
+    let timing = mimshel_core::names::flag("TIMING");
     // Медленный шаг основного потока — в журнал (с SHELL_TIMING): пока он
     // идёт, всё остальное ждёт.
     let slow = |what: &str, t: Instant| {
@@ -589,7 +589,7 @@ impl Ui<'_> {
 
     /// Перерисовать строку меню и док, если в них что-то изменилось.
     fn flush(&mut self) -> Result<()> {
-        let timing = std::env::var_os("SHELL_TIMING").is_some();
+        let timing = mimshel_core::names::flag("TIMING");
         let t = Instant::now();
         // Окна папок — первыми: их ждут (только что открыли папку).
         if let Some(folders) = &mut self.folders {
@@ -687,7 +687,7 @@ impl Ui<'_> {
                 Ok(())
             }
             Msg::X(ev) => {
-                if std::env::var_os("SHELL_DEBUG_DOCK").is_some() {
+                if mimshel_core::names::flag("DEBUG_DOCK") {
                     eprintln!("X: {ev:?}");
                 }
                 self.event(ev)
@@ -892,7 +892,10 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
     };
     std::thread::spawn(move || {
         while watcher.wait().is_ok() {
-            if tx.send(Msg::Apps(shell_apps::load_all(&settings))).is_err() {
+            if tx
+                .send(Msg::Apps(mimshel_apps::load_all(&settings)))
+                .is_err()
+            {
                 break;
             }
         }
@@ -907,7 +910,7 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let start = Instant::now();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
-    let apps = shell_apps::load(&app_settings(&config));
+    let apps = mimshel_apps::load(&app_settings(&config));
     eprintln!("Загрузка: {:?}", start.elapsed());
     let keys = text.chars().map(|c| KeyPress::plain(Key::Char(c)));
     let start = Instant::now();
@@ -930,8 +933,8 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
             keys.for_each(|k| {
                 l.key(k);
             });
-            let k = shell_render::scale();
-            let px = |v| shell_render::to_px(v, k);
+            let k = mimshel_render::scale();
+            let px = |v| mimshel_render::to_px(v, k);
             let background = backdrop(shot.as_ref(), (px(size.0), px(size.1)));
             l.render(&background, k, &mut fonts, &mut icons)
         }

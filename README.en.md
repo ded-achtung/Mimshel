@@ -2,10 +2,10 @@
 
 [Русский](README.md) · **English**
 
-**Mimshel** is the project name, inspired by Saturn's moon Mimas, its Herschel crater, and the word *shell*. The command-line executable is still named `shell`; renaming it is a separate compatibility-sensitive change.
+**Mimshel** is the project name, inspired by Saturn's moon Mimas, its Herschel crater, and the word *shell*. The command is `mimshel` (the former `shell` remains as a link to it); settings and data folders, launchers and markers were renamed, and the program finds and moves the old ones itself.
 
 A macOS-style desktop shell for Linux/X11, written in Rust. Windows are managed
-by xfwm4; shell draws the dock, the menu bar, the Search and Apps windows and
+by xfwm4; Mimshel draws the dock, the menu bar, the Search and Apps windows and
 notifications. Rendering is done on the CPU with tiny-skia, text with
 cosmic-text, X11 through x11rb and D-Bus through zbus. Wayland is not supported.
 
@@ -18,16 +18,16 @@ cosmic-text, X11 through x11rb and D-Bus through zbus. Wayland is not supported.
   layout, clock with a calendar, volume, battery and Control Center. The legacy XEmbed tray is
   not implemented.
 - Notification banners and history (click the bell), Do Not Disturb.
-- TOML settings, `doctor` diagnostics, switching each part between shell and the
+- TOML settings, `doctor` diagnostics, switching each part between Mimshel and the
   original Xfce components.
-- A watchdog for the service, and shell's own lock screen (passwords checked by
+- A watchdog for the service, and Mimshel's own lock screen (passwords checked by
   PAM) under a watchdog that restarts it after any failure.
 - Settings backups and restoring the original Xfce setup (`backup`, `restore`).
 
 It needs EndeavourOS or Arch with Xfce in an X11 session. Everything else —
 packages, icons, the window theme, the cursor and the wallpaper — is installed by
-`install.sh`; after that the program configures itself (`shell apply`,
-`shell set`, `shell doctor`).
+`install.sh`; after that the program configures itself (`mimshel apply`,
+`mimshel set`, `mimshel doctor`).
 
 ## Installing
 
@@ -35,13 +35,13 @@ You need EndeavourOS or Arch Linux with the Xfce desktop (an X11 session). In an
 Xfce terminal:
 
 ```sh
-git clone https://github.com/ded-achtung/shell.git
-cd shell && ./install.sh
+git clone https://github.com/ded-achtung/Mimshel.git
+cd Mimshel && ./install.sh
 ```
 
 The installer asks for your sudo password. It installs the packages and the
-Colloid icons, window theme and cursor, builds shell into `~/.local/bin/shell` and
-turns all of its parts on, including its own lock screen. It saves a copy of your settings first: `~/.local/bin/shell restore`
+Colloid icons, window theme and cursor, builds Mimshel into `~/.local/bin/mimshel` and
+turns all of its parts on, including its own lock screen. It saves a copy of your settings first: `~/.local/bin/mimshel restore`
 brings them back. Log out and back in afterwards. Running it again is safe.
 
 ## Building and testing
@@ -57,7 +57,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 # Separately: windows on a virtual X server (needs Xvfb)
-cargo test -p shell-x11 --test windows --locked -- --ignored
+cargo test -p mimshel-x11 --test windows --locked -- --ignored
 ```
 
 The same checks run in GitHub Actions. The X11 test starts its own Xvfb and
@@ -70,7 +70,7 @@ A normal test run skips the Xvfb test (run it with the separate command above)
 and the Apps window background speed benchmark. The tests do not cover a real
 screen lock, Wi-Fi/Bluetooth hardware, or compatibility with every application.
 
-Running shell needs an X11 session with D-Bus; it uses `pactl`,
+Running Mimshel needs an X11 session with D-Bus; it uses `pactl`,
 `xfconf-query`, `nmcli`, `bluetoothctl` and GNU coreutils, including `timeout`.
 The battery is read straight from the kernel files in `/sys/class/power_supply`
 — `upower` is not needed. Locking on idle needs xss-lock; passwords are checked by
@@ -79,31 +79,31 @@ PAM. The font and icon theme are set in the config; the defaults are Inter and C
 ## Running and settings
 
 ```sh
-./target/release/shell apps
-./target/release/shell search terminal
-./target/release/shell daemon
+./target/release/mimshel apps
+./target/release/mimshel search terminal
+./target/release/mimshel daemon
 ```
 
 The last command starts the service in the current graphical session. From
-another terminal, `shell search` and `shell apps` open the Search and Apps windows.
-Commands go through `$XDG_RUNTIME_DIR/shell.sock`. If that variable is not set,
-`/run/user/UID/shell.sock` is used, and if that directory does not exist,
-`/tmp/shell-runtime-UID/shell.sock`. The directory must belong to the user and
+another terminal, `mimshel search` and `mimshel apps` open the Search and Apps windows.
+Commands go through `$XDG_RUNTIME_DIR/mimshel.sock`. If that variable is not set,
+`/run/user/UID/mimshel.sock` is used, and if that directory does not exist,
+`/tmp/mimshel-runtime-UID/mimshel.sock`. The directory must belong to the user and
 be closed to everyone else (0700); the fallback directory is created that way.
 Run the program with `--help` for the full list of commands.
 
-Settings live in `$XDG_CONFIG_HOME/shell/config.toml` or
-`~/.config/shell/config.toml`. If the file is missing, it is created with
-default values. `SHELL_CONFIG` points to a separate file for testing.
-`shell config` lists the available keys; `shell set KEY VALUE` saves a setting
-and applies it, restarting the service if needed. `shell doctor` checks the
-environment, and `shell doctor --fix` changes it to fix the problems it finds.
+Settings live in `$XDG_CONFIG_HOME/mimshel/config.toml` or
+`~/.config/mimshel/config.toml`. If the file is missing, it is created with
+default values. `MIMSHEL_CONFIG` points to a separate file for testing.
+`mimshel config` lists the available keys; `mimshel set KEY VALUE` saves a setting
+and applies it, restarting the service if needed. `mimshel doctor` checks the
+environment, and `mimshel doctor --fix` changes it to fix the problems it finds.
 
 The file is checked for syntax, key names, types and value ranges. Icon sizes:
 16–256, menu bar height: 16–128, dock magnification: 100–300 %, Apps window grid:
 1–32 rows and columns. A broken file never replaces the last good copy,
-`$XDG_STATE_HOME/shell/config.good.toml` (by default
-`~/.local/state/shell/config.good.toml`). The service falls back to that copy on
+`$XDG_STATE_HOME/mimshel/config.good.toml` (by default
+`~/.local/state/mimshel/config.good.toml`). The service falls back to that copy on
 a syntax, value or read error; a deleted main file is also restored from it. An
 existing file that is damaged or unreadable is never overwritten automatically.
 
@@ -111,7 +111,7 @@ Changes from the dock and from the command line are made under a shared
 cross-process lock, `config.toml.lock`: reading, editing, replacing the file and
 updating the backup copy happen one after another. Temporary files get unique
 names and are created with 0600 permissions. This protects concurrent changes
-made by shell itself; other text editors do not use this lock.
+made by Mimshel itself; other text editors do not use this lock.
 
 The lock watchdog keeps retrying after repeated lock screen failures for as long as
 the X server check confirms that the session is alive. The first retry happens
@@ -124,18 +124,18 @@ locked**: the screen can be reachable until the new locker grabs input.
 - `core` — model, search, settings parsing; no windows and no file I/O.
 - `x11`, `text`, `icons`, `apps`, `dbus` — platform functions.
 - `widgets` — shared menus and drawing helpers.
-- `launcher`, `dock`, `menubar`, `notify` — logic and drawing of the shell parts.
+- `launcher`, `dock`, `menubar`, `notify` — logic and drawing of the Mimshel parts.
 - `lock` — the lock screen background.
 - `setup` — diagnostics, applying settings, session actions, the lock watchdog,
   backups and restore.
-- `apps/shell` — commands, windows, background watchers and event handling.
+- `apps/mimshel` — commands, windows, background watchers and event handling.
 
 ## Approach
 
 We study how existing programs behave and the open standards (EWMH/ICCCM,
 Desktop Entry, Icon Theme, StatusNotifierItem, DBusMenu, Notifications), and
 write our own implementation. We do not copy other projects' code. Passwords are
-checked by PAM, the same system used at login; shell does not implement its own
+checked by PAM, the same system used at login; Mimshel does not implement its own
 password checking.
 
 ## License

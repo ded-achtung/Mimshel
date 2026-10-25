@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use shell_menubar::status::{
+use mimshel_menubar::status::{
     Battery, Sound, SysBattery, parse_default_state, parse_sinks, sys_battery,
 };
 
@@ -172,7 +172,7 @@ pub fn set_dnd(on: bool) {
 }
 
 /// Сеть: подключение (`nmcli device`) и есть ли Wi-Fi (`nmcli radio`).
-pub fn read_network() -> shell_menubar::Network {
+pub fn read_network() -> mimshel_menubar::Network {
     let devices =
         output("nmcli", &["-t", "-f", "TYPE,STATE,CONNECTION", "device"]).unwrap_or_default();
     let active = devices.lines().find_map(|l| {
@@ -188,7 +188,7 @@ pub fn read_network() -> shell_menubar::Network {
         _ => None,
     };
     let (wired, connection) = active.unwrap_or_default();
-    shell_menubar::Network {
+    mimshel_menubar::Network {
         connection,
         wired,
         wifi,

@@ -775,6 +775,205 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimshel"
+version = "0.1.0"
+dependencies = [
+ "inotify",
+ "mimshel-apps",
+ "mimshel-core",
+ "mimshel-dbus",
+ "mimshel-desktop",
+ "mimshel-dock",
+ "mimshel-folder",
+ "mimshel-icons",
+ "mimshel-launcher",
+ "mimshel-lock",
+ "mimshel-menubar",
+ "mimshel-notify",
+ "mimshel-render",
+ "mimshel-setup",
+ "mimshel-text",
+ "mimshel-wallpaper",
+ "mimshel-widgets",
+ "mimshel-x11",
+ "pam",
+ "tiny-skia",
+ "toml_edit",
+]
+
+[[package]]
+name = "mimshel-apps"
+version = "0.1.0"
+dependencies = [
+ "inotify",
+]
+
+[[package]]
+name = "mimshel-core"
+version = "0.1.0"
+dependencies = [
+ "toml_edit",
+]
+
+[[package]]
+name = "mimshel-dbus"
+version = "0.1.0"
+dependencies = [
+ "zbus",
+]
+
+[[package]]
+name = "mimshel-desktop"
+version = "0.1.0"
+dependencies = [
+ "mimshel-apps",
+ "mimshel-core",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-dock"
+version = "0.1.0"
+dependencies = [
+ "mimshel-apps",
+ "mimshel-core",
+ "mimshel-icons",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-folder"
+version = "0.1.0"
+dependencies = [
+ "mimshel-core",
+ "mimshel-desktop",
+ "mimshel-icons",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-icons"
+version = "0.1.0"
+dependencies = [
+ "mimshel-render",
+ "resvg",
+ "tiny-skia",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "mimshel-launcher"
+version = "0.1.0"
+dependencies = [
+ "mimshel-apps",
+ "mimshel-core",
+ "mimshel-icons",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-lock"
+version = "0.1.0"
+dependencies = [
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-menubar"
+version = "0.1.0"
+dependencies = [
+ "mimshel-apps",
+ "mimshel-core",
+ "mimshel-icons",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-notify"
+version = "0.1.0"
+dependencies = [
+ "mimshel-dbus",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-render"
+version = "0.1.0"
+dependencies = [
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-setup"
+version = "0.1.0"
+dependencies = [
+ "mimshel-apps",
+ "mimshel-core",
+ "mimshel-icons",
+ "mimshel-lock",
+ "mimshel-text",
+ "mimshel-wallpaper",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-text"
+version = "0.1.0"
+dependencies = [
+ "cosmic-text",
+ "mimshel-render",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-wallpaper"
+version = "0.1.0"
+dependencies = [
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-widgets"
+version = "0.1.0"
+dependencies = [
+ "mimshel-core",
+ "mimshel-render",
+ "mimshel-text",
+ "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-x11"
+version = "0.1.0"
+dependencies = [
+ "mimshel-core",
+ "mimshel-render",
+ "tiny-skia",
+ "x11rb",
+ "xkeysym",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1148,205 +1347,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
-]
-
-[[package]]
-name = "shell"
-version = "0.1.0"
-dependencies = [
- "inotify",
- "pam",
- "shell-apps",
- "shell-core",
- "shell-dbus",
- "shell-desktop",
- "shell-dock",
- "shell-folder",
- "shell-icons",
- "shell-launcher",
- "shell-lock",
- "shell-menubar",
- "shell-notify",
- "shell-render",
- "shell-setup",
- "shell-text",
- "shell-wallpaper",
- "shell-widgets",
- "shell-x11",
- "tiny-skia",
- "toml_edit",
-]
-
-[[package]]
-name = "shell-apps"
-version = "0.1.0"
-dependencies = [
- "inotify",
-]
-
-[[package]]
-name = "shell-core"
-version = "0.1.0"
-dependencies = [
- "toml_edit",
-]
-
-[[package]]
-name = "shell-dbus"
-version = "0.1.0"
-dependencies = [
- "zbus",
-]
-
-[[package]]
-name = "shell-desktop"
-version = "0.1.0"
-dependencies = [
- "shell-apps",
- "shell-core",
- "shell-render",
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-dock"
-version = "0.1.0"
-dependencies = [
- "shell-apps",
- "shell-core",
- "shell-icons",
- "shell-render",
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-folder"
-version = "0.1.0"
-dependencies = [
- "shell-core",
- "shell-desktop",
- "shell-icons",
- "shell-render",
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-icons"
-version = "0.1.0"
-dependencies = [
- "resvg",
- "shell-render",
- "tiny-skia",
- "zune-jpeg",
-]
-
-[[package]]
-name = "shell-launcher"
-version = "0.1.0"
-dependencies = [
- "shell-apps",
- "shell-core",
- "shell-icons",
- "shell-render",
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-lock"
-version = "0.1.0"
-dependencies = [
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-menubar"
-version = "0.1.0"
-dependencies = [
- "shell-apps",
- "shell-core",
- "shell-icons",
- "shell-render",
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-notify"
-version = "0.1.0"
-dependencies = [
- "shell-dbus",
- "shell-render",
- "shell-text",
- "shell-widgets",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-render"
-version = "0.1.0"
-dependencies = [
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-setup"
-version = "0.1.0"
-dependencies = [
- "shell-apps",
- "shell-core",
- "shell-icons",
- "shell-lock",
- "shell-text",
- "shell-wallpaper",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-text"
-version = "0.1.0"
-dependencies = [
- "cosmic-text",
- "shell-render",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-wallpaper"
-version = "0.1.0"
-dependencies = [
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-widgets"
-version = "0.1.0"
-dependencies = [
- "shell-core",
- "shell-render",
- "shell-text",
- "tiny-skia",
-]
-
-[[package]]
-name = "shell-x11"
-version = "0.1.0"
-dependencies = [
- "shell-core",
- "shell-render",
- "tiny-skia",
- "x11rb",
- "xkeysym",
 ]
 
 [[package]]

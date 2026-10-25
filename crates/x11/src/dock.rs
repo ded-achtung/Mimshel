@@ -2,7 +2,7 @@
 //! поверх окон, без рамки, на всех рабочих столах, не даёт ему фокус), с
 //! прозрачностью и областью кликов — только там, где док нарисован.
 
-use shell_render::Image;
+use mimshel_render::Image;
 use x11rb::connection::Connection;
 use x11rb::protocol::shape::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
@@ -48,7 +48,7 @@ impl Display {
                 .event_mask(events),
         )?;
         let a = &self.atoms;
-        let class = format!("{name}\0Shell\0");
+        let class = format!("{name}\0{}\0", mimshel_core::names::CLASS);
         self.conn.change_property8(
             PropMode::REPLACE,
             window,

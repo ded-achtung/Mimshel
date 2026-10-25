@@ -19,39 +19,39 @@ mod ui;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use shell_core::search::{Query, best};
+use mimshel_core::search::{Query, best};
 
 const HELP: &str = "\
 Использование:
-  shell search          открыть или закрыть окно «Поиск» (через службу, без неё — сам)
-  shell apps            открыть или закрыть окно «Программы» (так же)
-  shell daemon          служба: строка меню, док, уведомления, окна «Поиск» и «Программы»;
+  mimshel search          открыть или закрыть окно «Поиск» (через службу, без неё — сам)
+  mimshel apps            открыть или закрыть окно «Программы» (так же)
+  mimshel daemon          служба: строка меню, док, уведомления, окна «Поиск» и «Программы»;
                         упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
-  shell snapshot search|apps ТЕКСТ ФАЙЛ.png
+  mimshel snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
-  shell folder [ПАПКА…] открыть папку в окне (по умолчанию — домашнюю; через службу,
+  mimshel folder [ПАПКА…] открыть папку в окне (по умолчанию — домашнюю; через службу,
                         без неё или при parts.folders = thunar — в Thunar)
-  shell test-apps       список программ, которые увидит окно «Программы»
-  shell test-search ТЕКСТ
+  mimshel test-apps       список программ, которые увидит окно «Программы»
+  mimshel test-search ТЕКСТ
                         что найдёт окно «Поиск» по этому тексту
-  shell test-clipboard  какие файлы в буфере обмена (для «Вставить» на столе)
-  shell watch           следить за ярлыками и печатать, что появилось и пропало
-  shell doctor [--fix]  проверить, что всё на месте; --fix — починить
-  shell config          где файл настроек и что в нём можно менять
-  shell set [--no-apply] КЛЮЧ ЗНАЧЕНИЕ
-                        поменять настройку и применить (например: shell set dock.icon_size 56,
-                        shell set parts.dock plank — вернуть Plank)
-  shell apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
+  mimshel test-clipboard  какие файлы в буфере обмена (для «Вставить» на столе)
+  mimshel watch           следить за ярлыками и печатать, что появилось и пропало
+  mimshel doctor [--fix]  проверить, что всё на месте; --fix — починить
+  mimshel config          где файл настроек и что в нём можно менять
+  mimshel set [--no-apply] КЛЮЧ ЗНАЧЕНИЕ
+                        поменять настройку и применить (например: mimshel set dock.icon_size 56,
+                        mimshel set parts.dock plank — вернуть Plank)
+  mimshel apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
                         (launchers — сочетания клавиш окон «Поиск» и «Программы»)
                         (без частей — все)
-  shell lock            заблокировать экран (свой экран блокировки; упадёт без пароля —
+  mimshel lock            заблокировать экран (свой экран блокировки; упадёт без пароля —
                         сторож запустит снова)
-  shell snapshot lock ТЕКСТ ФАЙЛ.png
+  mimshel snapshot lock ТЕКСТ ФАЙЛ.png
                         нарисовать экран блокировки в картинку (проверка вида)
-  shell action ДЕЙСТВИЕ пункт меню яблока: about settings forcequit sleep restart shutdown lock logout
-  shell backup [ПОМЕТКА] сохранить настройки Xfce, Plank и shell
-  shell backups         список копий
-  shell restore [--dry-run] [ИМЯ]
+  mimshel action ДЕЙСТВИЕ пункт меню яблока: about settings forcequit sleep restart shutdown lock logout
+  mimshel backup [ПОМЕТКА] сохранить настройки Xfce, Plank и shell
+  mimshel backups         список копий
+  mimshel restore [--dry-run] [ИМЯ]
                         вернуть настройки из копии (по умолчанию — самой первой, «как было»);
                         --dry-run — только показать, что будет сделано";
 
@@ -59,7 +59,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("test-apps") => list_apps(),
-        Some("test-clipboard") => match shell_x11::clipboard_files() {
+        Some("test-clipboard") => match mimshel_x11::clipboard_files() {
             Some((cut, files)) => {
                 println!(
                     "{}:",
@@ -108,7 +108,7 @@ fn main() {
                 .status();
         }
         Some("lock") if args.len() == 2 && args[1] == "--nofork" => {
-            std::process::exit(shell_setup::lock::supervise(&guard::own_exe()))
+            std::process::exit(mimshel_setup::lock::supervise(&guard::own_exe()))
         }
         Some("lock-screen") => std::process::exit(lock_ui::run()),
         Some("backup") if args.len() <= 2 => {
@@ -124,7 +124,7 @@ fn main() {
             }
         }
         Some("action") if args.len() == 2 => {
-            std::process::exit(shell_setup::actions::action(&args[1], &guard::own_exe()))
+            std::process::exit(mimshel_setup::actions::action(&args[1], &guard::own_exe()))
         }
         Some(cmd) if ui::Panel::parse(cmd).is_some() => {
             let panel = ui::Panel::parse(cmd).expect("проверено выше");
@@ -149,16 +149,16 @@ fn main() {
     }
 }
 
-fn exit_on_error(result: shell_x11::Result<()>) {
+fn exit_on_error(result: mimshel_x11::Result<()>) {
     if let Err(e) = result {
         eprintln!("Ошибка: {e}");
         std::process::exit(1);
     }
 }
 
-fn load() -> Vec<shell_apps::App> {
+fn load() -> Vec<mimshel_apps::App> {
     let start = Instant::now();
-    let apps = shell_apps::load(&ui::app_settings(&ui::load_config()));
+    let apps = mimshel_apps::load(&ui::app_settings(&ui::load_config()));
     eprintln!(
         "Прочитано программ: {} за {:?}",
         apps.len(),
@@ -177,7 +177,7 @@ fn search(text: &str) {
     let apps = load();
     let start = Instant::now();
     let query = Query::new(text);
-    let found = best(&query, &apps, shell_launcher::fields);
+    let found = best(&query, &apps, mimshel_launcher::fields);
     eprintln!("Поиск занял {:?}", start.elapsed());
     for app in found.iter().take(10) {
         println!("{:<32} {}", app.name, app.id);
@@ -186,7 +186,7 @@ fn search(text: &str) {
 
 fn watch() {
     let settings = ui::app_settings(&ui::load_config());
-    let mut watcher = match shell_apps::Watcher::new(&settings) {
+    let mut watcher = match mimshel_apps::Watcher::new(&settings) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("Не удалось следить за ярлыками: {e}");
@@ -201,9 +201,9 @@ fn watch() {
             std::process::exit(1);
         }
         let new = load();
-        let old_by_id: HashMap<&str, &shell_apps::App> =
+        let old_by_id: HashMap<&str, &mimshel_apps::App> =
             apps.iter().map(|a| (a.id.as_str(), a)).collect();
-        let new_by_id: HashMap<&str, &shell_apps::App> =
+        let new_by_id: HashMap<&str, &mimshel_apps::App> =
             new.iter().map(|a| (a.id.as_str(), a)).collect();
         for app in &new {
             match old_by_id.get(app.id.as_str()) {

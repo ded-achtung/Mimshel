@@ -16,8 +16,8 @@ mod search_panel;
 pub use apps_panel::{AppsPanel, Grid, backdrop};
 pub use search_panel::SearchPanel;
 
-use shell_apps::App;
-use shell_core::search::{Fields, Prepared, Query, best_prepared};
+use mimshel_apps::App;
+use mimshel_core::search::{Fields, Prepared, Query, best_prepared};
 
 /// Что сделать после события.
 #[derive(Debug, Clone, PartialEq)]

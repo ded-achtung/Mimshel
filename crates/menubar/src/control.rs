@@ -4,11 +4,11 @@
 //! адаптера Bluetooth), то показывается как недоступное. Здесь состояние,
 //! мышь и рисование; включать и выключать — дело службы.
 
-use shell_core::input::Key;
-use shell_icons::Icons;
-use shell_render::Canvas;
-use shell_text::{Fonts, Style};
-use shell_widgets::shape::{circle, paint, rounded};
+use mimshel_core::input::Key;
+use mimshel_icons::Icons;
+use mimshel_render::Canvas;
+use mimshel_text::{Fonts, Style};
+use mimshel_widgets::shape::{circle, paint, rounded};
 use tiny_skia::{FillRule, FilterQuality, PixmapPaint, Stroke, Transform};
 
 use crate::status::Sound;

@@ -95,7 +95,7 @@ impl Canvas {
     }
 
     /// Нарисовать значок `icon` (отрисованный в пикселях экрана, см.
-    /// `shell_icons::Icons::get`) левым верхним углом в точке `x`, `y`.
+    /// `mimshel_icons::Icons::get`) левым верхним углом в точке `x`, `y`.
     pub fn draw_icon(&mut self, icon: PixmapRef, x: f32, y: f32, paint: &PixmapPaint) {
         let k = 1.0 / self.scale;
         let t = Transform::from_scale(k, k).post_translate(x, y);

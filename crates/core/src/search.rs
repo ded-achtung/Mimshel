@@ -384,7 +384,7 @@ mod tests {
     }
 
     /// Замер: поиск по большому списку на каждое нажатие. Пропущен в обычном
-    /// прогоне; запуск: `cargo test -p shell-core search_timing -- --ignored --nocapture`
+    /// прогоне; запуск: `cargo test -p mimshel-core search_timing -- --ignored --nocapture`
     #[test]
     #[ignore = "замер скорости"]
     fn search_timing() {

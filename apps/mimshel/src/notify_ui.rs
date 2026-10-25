@@ -5,13 +5,13 @@
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use shell_apps::App;
-use shell_core::config::dock_entry_matches;
-use shell_dbus::notify::{self, NotifyEvent, NotifyServer};
-use shell_icons::Icons;
-use shell_notify::{Banner, Banners, Center, CenterHit, CloseReason, Hit, Notification, WIDTH};
-use shell_text::Fonts;
-use shell_x11::{Display, Event, Key, Popup};
+use mimshel_apps::App;
+use mimshel_core::config::dock_entry_matches;
+use mimshel_dbus::notify::{self, NotifyEvent, NotifyServer};
+use mimshel_icons::Icons;
+use mimshel_notify::{Banner, Banners, Center, CenterHit, CloseReason, Hit, Notification, WIDTH};
+use mimshel_text::Fonts;
+use mimshel_x11::{Display, Event, Key, Popup};
 use tiny_skia::{IntSize, Pixmap};
 
 use crate::ui::{Msg, Result};

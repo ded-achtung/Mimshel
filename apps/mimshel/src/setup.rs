@@ -1,13 +1,13 @@
-//! Команды настройки системы: `shell doctor [--fix]`, `shell set`,
-//! `shell apply`, `shell config`. Сама работа — в `crates/setup`.
+//! Команды настройки системы: `mimshel doctor [--fix]`, `mimshel set`,
+//! `mimshel apply`, `mimshel config`. Сама работа — в `crates/setup`.
 
-use shell_core::config::{self, PARTS, SETTINGS, set_value, setting_value};
-use shell_setup::doctor::{Check, checks, fix_parts};
-use shell_setup::parts::{APPLY_PARTS, apply};
+use mimshel_core::config::{self, PARTS, SETTINGS, set_value, setting_value};
+use mimshel_setup::doctor::{Check, checks, fix_parts};
+use mimshel_setup::parts::{APPLY_PARTS, apply};
 
 use crate::ui::{config_path, config_store, load_config};
 
-/// `shell doctor`. Код выхода: 0 — всё в порядке, 1 — есть проблемы.
+/// `mimshel doctor`. Код выхода: 0 — всё в порядке, 1 — есть проблемы.
 pub fn doctor(fix: bool) -> i32 {
     let config = load_config();
     let path = config_path();
@@ -30,7 +30,7 @@ pub fn doctor(fix: bool) -> i32 {
         return 1;
     };
     if !fix {
-        println!("⚠ Чтобы починить: shell doctor --fix");
+        println!("⚠ Чтобы починить: mimshel doctor --fix");
         return 1;
     }
     // Пакеты ставит установщик (нужен пароль sudo) — его не запускаем сами.
@@ -78,8 +78,8 @@ fn print_check(c: &Check) {
     println!("{mark} [{}] {}{hint}", c.part, c.what);
 }
 
-/// `shell set раздел.ключ значение`: записать в файл настроек и применить.
-/// `apply` = false (`shell set --no-apply`) — только записать: установщик
+/// `mimshel set раздел.ключ значение`: записать в файл настроек и применить.
+/// `apply` = false (`mimshel set --no-apply`) — только записать: установщик
 /// пишет несколько настроек и применяет всё разом.
 pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     let key = &config::current_key(key);
@@ -129,7 +129,7 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
             }]
         }
         "dock" if !config.dock => vec!["dock"],
-        // Тема значков — для всех программ (xsettings), не только для shell.
+        // Тема значков — для всех программ (xsettings), не только для Mimshel.
         "look" if name == "icon_theme" || name == "png_icons" => vec!["icons"],
         "look" if name == "wallpaper" => vec!["wallpaper"],
         "look" if name == "gtk_theme" || name == "cursor_theme" => vec!["look"],
@@ -140,7 +140,7 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     run_apply(&config, &parts)
 }
 
-/// Свой Проводник включили (`shell`) или вернули Thunar: значок в доке —
+/// Свой Проводник включили (`mimshel`) или вернули Thunar: значок в доке —
 /// того, кто открывает папки, а Thunar при своём Проводнике не показывается
 /// в окнах «Программы» и «Поиск» (иначе там два «Проводника»).
 fn swap_file_manager(text: &str, shell: bool) -> Option<String> {
@@ -185,7 +185,7 @@ fn swap_file_manager(text: &str, shell: bool) -> Option<String> {
     set_value(&text, "apps", "hide", toml_edit::Value::Array(hide))
 }
 
-/// `shell apply [части]`.
+/// `mimshel apply [части]`.
 pub fn apply_cmd(parts: &[String]) -> i32 {
     let mut list = Vec::new();
     for p in parts {
@@ -202,7 +202,7 @@ pub fn apply_cmd(parts: &[String]) -> i32 {
     run_apply(&load_config(), &list)
 }
 
-fn run_apply(config: &shell_core::config::Config, parts: &[&str]) -> i32 {
+fn run_apply(config: &mimshel_core::config::Config, parts: &[&str]) -> i32 {
     match apply(config, parts) {
         Ok(()) => {
             println!("✔ Применено");
@@ -215,7 +215,7 @@ fn run_apply(config: &shell_core::config::Config, parts: &[&str]) -> i32 {
     }
 }
 
-/// `shell config`: где файл, что в нём и что можно менять.
+/// `mimshel config`: где файл, что в нём и что можно менять.
 pub fn show_config() -> i32 {
     let config = load_config();
     let Some(path) = config_path() else {
@@ -236,15 +236,15 @@ pub fn show_config() -> i32 {
 }
 
 fn print_settings() {
-    println!("Настройки (shell set КЛЮЧ ЗНАЧЕНИЕ):");
+    println!("Настройки (mimshel set КЛЮЧ ЗНАЧЕНИЕ):");
     for (key, what) in SETTINGS {
         println!("  {key:<22} {what}");
     }
 }
 
-/// `shell backup [ПОМЕТКА]`.
+/// `mimshel backup [ПОМЕТКА]`.
 pub fn backup(label: Option<&str>) -> i32 {
-    match shell_setup::backup::make(label.unwrap_or("manual")) {
+    match mimshel_setup::backup::make(label.unwrap_or("manual")) {
         Ok(dest) => {
             println!("✔ Копия сохранена: {}", dest.display());
             0
@@ -256,9 +256,9 @@ pub fn backup(label: Option<&str>) -> i32 {
     }
 }
 
-/// `shell backups`.
+/// `mimshel backups`.
 pub fn backups() -> i32 {
-    let all = shell_setup::backup::list();
+    let all = mimshel_setup::backup::list();
     if all.is_empty() {
         println!("Резервных копий нет");
     }
@@ -268,18 +268,18 @@ pub fn backups() -> i32 {
     0
 }
 
-/// `shell restore [--dry-run] [ИМЯ]` — по умолчанию самая первая копия.
+/// `mimshel restore [--dry-run] [ИМЯ]` — по умолчанию самая первая копия.
 pub fn restore(args: &[String]) -> i32 {
     let dry = args.iter().any(|a| a == "--dry-run");
     let name = args.iter().find(|a| *a != "--dry-run").map(String::as_str);
-    let Some(src) = shell_setup::backup::find(name) else {
-        println!("✘ Нет такой копии. Список: shell backups");
+    let Some(src) = mimshel_setup::backup::find(name) else {
+        println!("✘ Нет такой копии. Список: mimshel backups");
         return 1;
     };
     if dry {
         println!("Откат к {} (ничего не меняется):", src.display());
     }
-    match shell_setup::backup::restore(&src, dry) {
+    match mimshel_setup::backup::restore(&src, dry) {
         Ok(()) if dry => 0,
         Ok(()) => {
             println!("✔ Готово. Если что-то выглядит странно — выйдите из системы и зайдите снова");
@@ -302,7 +302,7 @@ mod tests {
             "[dock]\napps = [\"thunar\", \"org.telegram.desktop\"]\n\n[apps]\nhide = [\"rofi\"]\n";
         let on = swap_file_manager(text, true).unwrap();
         assert!(
-            on.contains("[\"shell-folder\", \"org.telegram.desktop\"]"),
+            on.contains("[\"mimshel-folder\", \"org.telegram.desktop\"]"),
             "{on}"
         );
         assert!(on.contains("[\"rofi\", \"thunar\"]"), "{on}");
