@@ -98,6 +98,39 @@ enum Press {
     Selecting,
     /// Pressed over a program that wants the mouse itself.
     Program(u8),
+    /// Dragging the scrollbar thumb; the number — where in the thumb it was
+    /// grabbed (pixels from its top).
+    Scrollbar(f32),
+}
+
+/// Scrollbar on the right of the terminal (pixels at scale 1): width when
+/// idle and when hovered or dragged, and how far from the edge the mouse
+/// still counts as «on the bar».
+const SB_THIN: f32 = 4.0;
+const SB_WIDE: f32 = 9.0;
+const SB_HIT: f32 = 16.0;
+const SB_MIN_THUMB: f32 = 24.0;
+
+/// Scrollbar thumb in a track `top..top+len` (pixels): its top and height for
+/// `history` lines above a `lines`-line screen scrolled up by `offset`.
+fn thumb(top: f32, len: f32, history: usize, lines: usize, offset: usize) -> (f32, f32) {
+    let total = (history + lines).max(1) as f32;
+    let h = (len * lines as f32 / total).max(SB_MIN_THUMB).min(len);
+    // offset 0 — the thumb at the bottom; offset = history — at the top.
+    let free = len - h;
+    let y = if history == 0 {
+        top + free
+    } else {
+        top + free * (1.0 - offset as f32 / history as f32)
+    };
+    (y, h)
+}
+
+/// The reverse: the scroll offset for the thumb top at `y`.
+fn offset_for(y: f32, top: f32, len: f32, thumb_h: f32, history: usize) -> usize {
+    let free = (len - thumb_h).max(1.0);
+    let pos = ((y - top) / free).clamp(0.0, 1.0);
+    ((1.0 - pos) * history as f32).round() as usize
 }
 
 struct Tab {
@@ -125,6 +158,8 @@ struct Tabs {
     /// there are two tabs.
     ui_fonts: Option<Fonts>,
     hover: Option<BarHit>,
+    /// The mouse is over the scrollbar or drags it — draw it wide.
+    sb_active: bool,
 }
 
 impl Tabs {
@@ -220,10 +255,32 @@ impl Tabs {
         focused: bool,
     ) -> Option<tiny_skia::Pixmap> {
         let bar = self.bar_h(scale);
-        let term = self
-            .active()
-            .session
-            .render(glyphs, (w, h.saturating_sub(bar)), focused)?;
+        let session = &self.active().session;
+        let mut term = session.render(glyphs, (w, h.saturating_sub(bar)), focused)?;
+        // Scrollback scrollbar on the right (only when there is history).
+        let (history, offset) = session.history();
+        if history > 0 {
+            let len = term.height() as f32 - 4.0 * scale;
+            let (y, th) = thumb(2.0 * scale, len, history, session.size().1, offset);
+            let bw = if self.sb_active { SB_WIDE } else { SB_THIN } * scale;
+            let alpha = if self.sb_active || offset > 0 {
+                0xb0
+            } else {
+                0x60
+            };
+            if let Some(r) = rounded_rect(w as f32 - bw - 3.0 * scale, y, bw, th, bw / 2.0) {
+                let mut p = Paint::default();
+                p.set_color(Color::from_rgba8(0xcd, 0xd6, 0xf4, alpha));
+                p.anti_alias = true;
+                term.fill_path(
+                    &r,
+                    &p,
+                    tiny_skia::FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
         if bar == 0 {
             return Some(term);
         }
@@ -343,6 +400,23 @@ impl Tabs {
     }
 }
 
+/// Rounded rectangle path (the scrollbar thumb).
+fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
+    let r = r.min(w / 2.0).min(h / 2.0);
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    pb.quad_to(x + w, y, x + w, y + r);
+    pb.line_to(x + w, y + h - r);
+    pb.quad_to(x + w, y + h, x + w - r, y + h);
+    pb.line_to(x + r, y + h);
+    pb.quad_to(x, y + h, x, y + h - r);
+    pb.line_to(x, y + r);
+    pb.quad_to(x, y, x + r, y);
+    pb.close();
+    pb.finish()
+}
+
 /// What to do: the same from the top menu and from the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Cmd {
@@ -360,6 +434,10 @@ enum Cmd {
     NextTab,
     PrevTab,
     SelectTab(usize),
+    /// Scrollback: by lines (up — positive), to the top or bottom.
+    ScrollLines(i32),
+    ScrollTop,
+    ScrollBottom,
 }
 
 /// The window menu in the top menu bar, like macOS Terminal. Item ids
@@ -445,6 +523,10 @@ fn shortcut(k: &KeyPress) -> Option<Cmd> {
         _ if ctrl_shift && matches!(letter, Some('=' | '+')) => Some(Cmd::Bigger),
         _ if ctrl_shift && matches!(letter, Some('-' | '_')) => Some(Cmd::Smaller),
         _ if ctrl_shift && matches!(letter, Some('0' | ')')) => Some(Cmd::NormalSize),
+        Key::Up if ctrl_shift => Some(Cmd::ScrollLines(1)),
+        Key::Down if ctrl_shift => Some(Cmd::ScrollLines(-1)),
+        Key::Home if ctrl_shift => Some(Cmd::ScrollTop),
+        Key::End if ctrl_shift => Some(Cmd::ScrollBottom),
         Key::PageDown if k.ctrl && !k.shift => Some(Cmd::NextTab),
         Key::PageUp if k.ctrl && !k.shift => Some(Cmd::PrevTab),
         Key::Tab if k.ctrl => Some(if k.shift { Cmd::PrevTab } else { Cmd::NextTab }),
@@ -497,6 +579,27 @@ impl Window {
         let c = cell_at(x, y, cell, grid);
         let right = (x - PAD as f32) - (c.0 as f32 * cell.0 as f32) > cell.0 as f32 / 2.0;
         (c, right)
+    }
+
+    /// Scrollbar of the active tab in window pixels: track top, track length,
+    /// thumb top and height, history length. `None` — no history, no bar.
+    fn scrollbar(&self) -> Option<(f32, f32, f32, f32, usize)> {
+        let session = &self.tabs.active().session;
+        let (history, offset) = session.history();
+        if history == 0 {
+            return None;
+        }
+        let bar = self.tabs.bar_h(self.scale) as f32;
+        let top = bar + 2.0 * self.scale;
+        let len = self.size.1 as f32 - bar - 4.0 * self.scale;
+        let (y, h) = thumb(top, len, history, session.size().1, offset);
+        Some((top, len, y, h, history))
+    }
+
+    /// Is the window point (pixels) over the scrollbar strip?
+    fn on_scrollbar(&self, x: f32, y: f32) -> bool {
+        let bar = self.tabs.bar_h(self.scale) as f32;
+        y >= bar && x >= self.size.0 as f32 - SB_HIT * self.scale && self.scrollbar().is_some()
     }
 
     fn new_tab(&mut self) -> mimshel_x11::Result<()> {
@@ -583,6 +686,9 @@ impl Window {
                     self.tabs.active = i;
                 }
             }
+            Cmd::ScrollLines(n) => session.scroll(n),
+            Cmd::ScrollTop => session.scroll_end(true),
+            Cmd::ScrollBottom => session.scroll_end(false),
         }
         Ok(true)
     }
@@ -640,9 +746,30 @@ impl Window {
                     }
                     return Ok(true);
                 }
+                let (px, py) = (f32::from(x) * scale, f32::from(y) * scale);
+                if button == 1 && self.on_scrollbar(px, py) {
+                    if let Some((top, len, ty, th, history)) = self.scrollbar() {
+                        // On the thumb — grab it where pressed; on the track —
+                        // jump so the thumb centre is under the pointer.
+                        let grab = if (ty..ty + th).contains(&py) {
+                            py - ty
+                        } else {
+                            th / 2.0
+                        };
+                        let session = &self.tabs.active().session;
+                        session.scroll_to(offset_for(py - grab, top, len, th, history));
+                        self.press = Press::Scrollbar(grab);
+                        self.tabs.sb_active = true;
+                    }
+                    return Ok(true);
+                }
                 let (c, right) = self.at(x, y);
                 let session = &self.tabs.active().session;
+                // Shift + wheel always scrolls the terminal's own history, even
+                // when the program took the mouse (Claude Code, mc, htop).
+                let shift = self.d.modifiers().1;
                 match button {
+                    4 | 5 if shift => session.scroll(if button == 4 { 3 } else { -3 }),
                     4 | 5 => session.wheel(button == 4, c),
                     b if session.mouse_wanted() => {
                         session.mouse_report(b - 1, c, true, false);
@@ -673,6 +800,20 @@ impl Window {
                     self.tabs.hover = hover;
                     self.dirty = true;
                 }
+                let (px, py) = (f32::from(x) * scale, f32::from(y) * scale);
+                if let Press::Scrollbar(grab) = self.press {
+                    if let Some((top, len, _, th, history)) = self.scrollbar() {
+                        let session = &self.tabs.active().session;
+                        session.scroll_to(offset_for(py - grab, top, len, th, history));
+                        self.dirty = true;
+                    }
+                    return Ok(true);
+                }
+                let over = self.on_scrollbar(px, py);
+                if over != self.tabs.sb_active {
+                    self.tabs.sb_active = over;
+                    self.dirty = true;
+                }
                 let (c, right) = self.at(x, y);
                 let session = &self.tabs.active().session;
                 match self.press {
@@ -681,11 +822,15 @@ impl Window {
                         self.dirty = true;
                     }
                     Press::Program(b) => session.mouse_report(b, c, true, true),
-                    Press::None => {}
+                    Press::None | Press::Scrollbar(_) => {}
                 }
             }
             Event::Leave { window } if window == me => {
                 if self.tabs.hover.take().is_some() {
+                    self.dirty = true;
+                }
+                if self.tabs.sb_active && !matches!(self.press, Press::Scrollbar(_)) {
+                    self.tabs.sb_active = false;
                     self.dirty = true;
                 }
             }
@@ -708,6 +853,7 @@ impl Window {
                         self.dirty = true;
                     }
                     Press::Program(b) => session.mouse_report(b, c, false, false),
+                    Press::Scrollbar(_) => self.dirty = true,
                     _ => {}
                 }
                 self.press = Press::None;
@@ -793,6 +939,7 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         tx: tx.clone(),
         ui_fonts: None,
         hover: None,
+        sb_active: false,
     };
     tabs.open_with(dir, START, command)?;
     {
@@ -885,6 +1032,7 @@ mod tests {
             tx,
             ui_fonts: None,
             hover: None,
+            sb_active: false,
         };
         tabs.open(None, (60, 10)).unwrap();
         assert_eq!(tabs.bar_h(1.0), 0, "one tab — no strip");
@@ -908,6 +1056,73 @@ mod tests {
         tabs.close(0);
         assert_eq!((tabs.list.len(), tabs.active), (1, 0));
         assert_eq!(tabs.bar_h(1.0), 0, "one again — the strip is gone");
+    }
+
+    /// A real shell prints 300 lines: history appears and the scrollbar is
+    /// drawn at the right edge. `MIMSHEL_SB_PNG=file` saves the frame.
+    #[test]
+    fn scrollbar_appears_with_history() {
+        let (tx, _rx) = mpsc::channel();
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0);
+        let mut tabs = Tabs {
+            list: Vec::new(),
+            active: 0,
+            next_id: 0,
+            cell: glyphs.cell,
+            tx,
+            ui_fonts: None,
+            hover: None,
+            sb_active: false,
+        };
+        tabs.open(None, (50, 12)).unwrap();
+        let session = &tabs.list[0].session;
+        session.input(b"seq 1 300\r".to_vec());
+        let start = Instant::now();
+        while session.history().0 < 200 && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            session.history().0 >= 200,
+            "history: {:?}",
+            session.history()
+        );
+        session.scroll(100);
+        assert_eq!(session.history().1, 100);
+        let (w, h) = (420, 240);
+        let frame = tabs.render(&mut glyphs, (w, h), 1.0, true).unwrap();
+        if let Some(path) = std::env::var_os("MIMSHEL_SB_PNG") {
+            frame.save_png(path).unwrap();
+        }
+        // Somewhere in the right edge column there is the light thumb.
+        let x = w - 4 - SB_THIN as u32 / 2;
+        let lit = (0..h).any(|y| frame.pixel(x, y).is_some_and(|p| p.red() > 0x70));
+        assert!(lit, "scrollbar thumb is drawn");
+        tabs.list[0].session.scroll_end(false);
+        assert_eq!(tabs.list[0].session.history().1, 0);
+    }
+
+    #[test]
+    fn scrollbar_geometry() {
+        // 100 lines of history, 25 on screen, track 400 px from y=10.
+        let (y, h) = thumb(10.0, 400.0, 100, 25, 0);
+        assert_eq!(h, 80.0, "thumb is the visible share of everything");
+        assert_eq!(y, 330.0, "at the bottom when not scrolled");
+        let (top_y, _) = thumb(10.0, 400.0, 100, 25, 100);
+        assert_eq!(top_y, 10.0, "scrolled all the way up — at the top");
+        // Back from the thumb position to the offset.
+        assert_eq!(offset_for(330.0, 10.0, 400.0, h, 100), 0);
+        assert_eq!(offset_for(10.0, 10.0, 400.0, h, 100), 100);
+        assert_eq!(offset_for(170.0, 10.0, 400.0, h, 100), 50);
+        // A huge history still leaves a thumb you can grab.
+        assert_eq!(thumb(0.0, 400.0, 100_000, 25, 0).1, SB_MIN_THUMB);
+        assert_eq!(
+            shortcut(&key(Key::Up, true, true, false)),
+            Some(Cmd::ScrollLines(1))
+        );
+        assert_eq!(
+            shortcut(&key(Key::Home, true, true, false)),
+            Some(Cmd::ScrollTop)
+        );
     }
 
     #[test]

@@ -222,6 +222,29 @@ impl Session {
         self.term.lock().scroll_display(Scroll::Delta(lines));
     }
 
+    /// Scrollback length (lines above the screen) and how far up we are now
+    /// (0 — at the bottom, the live screen).
+    pub fn history(&self) -> (usize, usize) {
+        let term = self.term.lock();
+        let grid = term.grid();
+        (grid.history_size(), grid.display_offset())
+    }
+
+    /// Scroll so that `offset` lines of history are above the bottom (clamped).
+    pub fn scroll_to(&self, offset: usize) {
+        let mut term = self.term.lock();
+        let now = term.grid().display_offset() as i32;
+        let target = offset.min(term.grid().history_size()) as i32;
+        term.scroll_display(Scroll::Delta(target - now));
+    }
+
+    /// To the very top of the scrollback or back to the bottom.
+    pub fn scroll_end(&self, top: bool) {
+        self.term
+            .lock()
+            .scroll_display(if top { Scroll::Top } else { Scroll::Bottom });
+    }
+
     pub fn scroll_page(&self, up: bool) {
         self.term
             .lock()
