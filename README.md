@@ -1,137 +1,145 @@
-# Mimshel
+<p align="center">
+  <img src="docs/images/banner.png" alt="Mimshel — a macOS-style desktop shell for Linux / X11" width="100%">
+</p>
 
-**Русский** · [English](README.en.md)
+<p align="center">
+  <a href="https://github.com/ded-achtung/Mimshel/actions/workflows/check.yml"><img src="https://github.com/ded-achtung/Mimshel/actions/workflows/check.yml/badge.svg" alt="Checks"></a>
+  <img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later">
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
+</p>
 
-**Mimshel (Мимшел)** — название проекта, вдохновлённое Мимасом, его кратером Гершель и словом *shell* («оболочка»). Команда — `mimshel` (прежняя `shell` осталась ссылкой на неё); папки настроек и данных, ярлыки и пометки переименованы, прежние программа узнаёт и переносит сама.
+**English** · [Русский](README.ru.md)
 
-Оболочка рабочего стола для Linux/X11 в стиле macOS на Rust. Окнами управляет
-xfwm4; Mimshel рисует док, строку меню, окна «Поиск» и «Программы» и уведомления.
-Отрисовка — на процессоре через tiny-skia, текст — cosmic-text, связь с X11 —
-x11rb, с D-Bus — zbus. Wayland не поддерживается.
+**Mimshel** is a macOS-style desktop shell for Linux on X11, written in Rust as a
+single program with a single config file. It draws the menu bar, the dock, the
+desktop, the file manager, the Search and Apps windows, notifications, the
+Control Center, the lock screen and its own terminal. Windows are managed by
+xfwm4 from Xfce. Wayland is not supported.
 
-## Возможности
+The name comes from Saturn's moon Mimas, its Herschel crater, and the word *shell*.
 
-- Окно «Поиск» (Super+Пробел) — поиск программ, в том числе при неверной раскладке,
-  и окно «Программы» (Super+A) — все программы сеткой.
-- Док: закрепление и перестановка значков, группировка окон, миниатюры, корзина.
-- Строка меню: глобальное меню GTK/DBusMenu, трей StatusNotifierItem, раскладка,
-  часы с календарём, громкость, батарея и Пункт управления. Старый трей XEmbed не реализован.
-- Баннеры и история уведомлений (по щелчку на колокольчике), режим «Не беспокоить».
-- Настройки TOML, диагностика `doctor`, переключение между Mimshel и компонентами Xfce.
-- Сторож службы и свой экран блокировки (пароль — PAM) под сторожем, который
-  перезапускает экран при любом сбое.
-- Резервные копии настроек и откат к исходному Xfce (`backup`, `restore`).
+<p align="center">
+  <img src="docs/images/desktop.png" alt="The Mimshel desktop: menu bar, dock, terminal and file manager" width="100%">
+</p>
 
-Нужен EndeavourOS или Arch с Xfce в сеансе X11. Всё остальное — пакеты, значки,
-тему окон, курсор, обои — ставит `install.sh`; дальше настройкой занимается сама
-программа (`mimshel apply`, `mimshel set`, `mimshel doctor`).
+## Why
 
-## Установка
+The same look can be glued together from existing programs (the Xfce panel,
+Plank, rofi, i3lock…), but every seam shows: slow launchers, ~450 MB of memory,
+and bugs where the programs meet. Mimshel does it in one Rust program: the Search
+window opens in a fraction of a second (0.1–0.2 s), and the whole shell — menu bar, dock, desktop,
+notifications and file manager — takes around 30 MB of memory and practically no
+CPU when idle.
 
-Нужна EndeavourOS или Arch Linux с рабочим столом Xfce (сеанс X11). В терминале Xfce:
+## Features
+
+- **Menu bar** — the app menu of the active window (GTK and DBusMenu, like on a
+  Mac), the system tray (StatusNotifierItem), keyboard layout, clock with a
+  calendar, battery, volume and a notification bell.
+- **Control Center** — Wi-Fi, Bluetooth, Do Not Disturb and volume. Click a tile
+  name for details:
+  - **Wi-Fi**: nearby networks with signal strength, connect with one click;
+  - **Bluetooth**: paired and nearby devices, pair and connect;
+  - **Sound**: overall volume and a slider for **every app that is playing**.
+- **Dock** — pin and reorder apps, window previews, Trash, magnification,
+  auto-hide; the right-click menu can make an app always start on the
+  **discrete NVIDIA GPU** (apps that ask for it, like Blender, do so automatically).
+- **Search** (Super+Space) and **Apps** (Super+A) windows — they find apps even
+  when typed in the wrong keyboard layout.
+- **Desktop** — wallpapers drawn by the program, file icons, drag and drop to and
+  from the file manager, keyboard shortcuts like in Finder and Windows Explorer.
+- **File manager** — opens in about 0.1 s: places and devices, path bar, search,
+  hidden files, copy/cut/paste, drag and drop.
+- **Terminal** (`mimshel terminal`) — tabs, an app menu in the menu bar, colour
+  emoji, mouse support for programs like htop and mc, OSC 52 clipboard (copy from
+  programs over SSH), clickable links, a scrollbar for touchpads.
+- **Notifications** — banners, history, Do Not Disturb.
+- **Lock screen** — passwords checked by PAM, a watchdog restarts it after any
+  failure, Super+L.
+- **Setup** — `install.sh` sets everything up; `mimshel doctor` checks the
+  system, `mimshel set` changes settings, `mimshel restore` brings back plain Xfce.
+
+## Status
+
+Alpha. It is used daily on a real laptop (EndeavourOS, Xfce, X11), but expect
+rough edges. Wayland is not planned: the target programs (Houdini and others) run
+on X11.
+
+## Installing
+
+You need EndeavourOS or Arch Linux with the Xfce desktop in an X11 session. In a
+terminal:
 
 ```sh
 git clone https://github.com/ded-achtung/Mimshel.git
 cd Mimshel && ./install.sh
 ```
 
-Установщик спросит пароль sudo. Он ставит пакеты, значки, тему окон и курсор
-Colloid, собирает Mimshel в `~/.local/bin/mimshel` и включает все его части, включая
-свой экран блокировки. Перед этим
-он сохраняет копию настроек: вернуть как было — `~/.local/bin/mimshel restore`.
-После установки выйдите из системы и войдите снова. Запуск повторно безопасен.
+The installer asks for your sudo password. It installs the packages, the Colloid
+icons, window theme and cursor, builds Mimshel into `~/.local/bin/mimshel` and
+turns all of its parts on. It saves a copy of your settings first —
+`~/.local/bin/mimshel restore` brings them back. Log out and back in afterwards.
+Running it again is safe.
 
-## Сборка и проверки
+## Using
 
-Проверено с Rust 1.99.1. Для тестов отрисовки нужны системные шрифты
-(например, пакет `fonts-dejavu-core`). Для модульных тестов X-сервер не нужен. Интеграционный тест уведомлений
-сам запускает отдельную шину через `dbus-run-session` (пакет `dbus`).
+```sh
+mimshel search            # open the Search window (also Super+Space)
+mimshel apps              # open the Apps window (also Super+A)
+mimshel terminal          # a new terminal window
+mimshel folder ~/Pictures # open a folder
+mimshel doctor            # check the setup
+mimshel config            # list the settings
+mimshel set dock.icon_size 56
+mimshel --help            # all commands
+```
+
+Settings live in `~/.config/mimshel/config.toml` (TOML, with comments). The file
+is checked for syntax, key names, types and value ranges; a broken file never
+replaces the last good copy (`~/.local/state/mimshel/config.good.toml`), and the
+service falls back to that copy.
+
+## Building and testing
+
+Tested with Rust 1.99.1. Rendering tests need system fonts (for example the
+`fonts-dejavu-core` package); unit tests do not need an X server.
 
 ```sh
 cargo build --release --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-# Отдельно: окна на виртуальном X-сервере (нужен Xvfb)
+# Windows on a virtual X server (needs Xvfb)
 cargo test -p mimshel-x11 --test windows --locked -- --ignored
 ```
 
-Те же проверки настроены в GitHub Actions. Тест X11 запускает собственный Xvfb
-и проверяет показ, скрытие, изменение размеров, пиксели окна и резерв места панели;
-прогоняются пути с MIT-SHM и без него. `SHELL_TEST_XVFB` задаёт путь к Xvfb,
-если он не установлен в PATH. Тест D-Bus проверяет уведомления, действия,
-закрытие и повторное подключение после перезапуска службы.
+The same checks run in GitHub Actions. The X11 test starts its own Xvfb
+(`MIMSHEL_TEST_XVFB` sets its path) and checks windows, pixels and the panel's
+reserved space, with and without MIT-SHM. The D-Bus test checks notifications
+on a private bus. The terminal tests run a real shell.
 
-В обычном прогоне пропущены тест Xvfb (запускается отдельной командой выше)
-и замер скорости фона окна «Программы». Тесты не проверяют реальную блокировку экрана,
-оборудование Wi-Fi/Bluetooth и совместимость со всеми приложениями.
+## How it is built
 
-Для работы нужен сеанс X11 с D-Bus; интеграция использует `pactl`,
-`xfconf-query`, `nmcli`, `bluetoothctl` и утилиты GNU coreutils, включая `timeout`.
-Батарея читается напрямую из файлов ядра `/sys/class/power_supply` — `upower`
-не нужен. Для блокировки по бездействию нужен xss-lock, для проверки пароля — PAM.
-Шрифт и тема иконок задаются в конфиге; по умолчанию — Inter и Colloid.
+| Layer | Crates |
+|---|---|
+| Model and settings (no windows, no I/O) | `core` |
+| Platform | `x11` (x11rb), `render` (tiny-skia, CPU), `text` (cosmic-text), `icons` (resvg), `apps` (Desktop Entry), `dbus` (zbus) |
+| Shell parts | `launcher`, `dock`, `menubar`, `notify`, `desktop`, `folder`, `terminal`, `lock`, `wallpaper`, `widgets` |
+| Setup and diagnostics | `setup` |
+| The program | `apps/mimshel` — one long-running service plus separate processes for the terminal and the lock screen |
 
-## Запуск и настройки
+Everything is drawn on the CPU with tiny-skia, so it works without a GPU. The
+terminal's escape-sequence parsing comes from `alacritty_terminal`
+(Apache-2.0); its window, rendering, tabs and input are Mimshel's own.
 
-```sh
-./target/release/mimshel apps
-./target/release/mimshel search терминал
-./target/release/mimshel daemon
-```
+## Approach
 
-Последняя команда запускает службу в текущем графическом сеансе. Из другого
-терминала `mimshel search` и `mimshel apps` открывают окна «Поиск» и «Программы».
-Для связи используется `$XDG_RUNTIME_DIR/mimshel.sock`. Если переменная отсутствует,
-берётся `/run/user/UID/mimshel.sock`, а при отсутствии этого каталога —
-`/tmp/mimshel-runtime-UID/mimshel.sock`. Каталог должен принадлежать пользователю и
-быть закрыт для остальных (0700); запасной каталог создаётся с такими правами.
-Полный список команд программа печатает с `--help`.
+We study how macOS and existing programs behave and follow the open standards
+(EWMH/ICCCM, Desktop Entry, Icon Theme, StatusNotifierItem, DBusMenu,
+Notifications, BlueZ, NetworkManager), and write our own implementation. We do
+not copy other projects' code. Passwords are checked by PAM, the same system used
+at login.
 
-Настройки: `$XDG_CONFIG_HOME/mimshel/config.toml` или `~/.config/mimshel/config.toml`.
-Нет файла — он создаётся со значениями по умолчанию. `MIMSHEL_CONFIG` задаёт отдельный
-файл для проверок. `mimshel config` показывает доступные ключи; `mimshel set КЛЮЧ ЗНАЧЕНИЕ`
-сохраняет настройку и применяет её, включая перезапуск службы. `mimshel doctor`
-проверяет окружение, `mimshel doctor --fix` меняет его для устранения найденных проблем.
+## License
 
-Файл проверяется по синтаксису, именам ключей, типам и диапазонам значений.
-Размеры иконок: 16–256, высота меню: 16–128, увеличение дока: 100–300 %,
-сетка окна «Программы»: 1–32 строки и столбца. Ошибочный файл не заменяет исправную копию
-`$XDG_STATE_HOME/mimshel/config.good.toml` (по умолчанию
-`~/.local/state/mimshel/config.good.toml`). Служба использует её при ошибке синтаксиса,
-значений или чтения; удалённый основной файл также восстанавливается из копии.
-Повреждённый или нечитаемый существующий файл автоматически не перезаписывается.
-
-Изменения дока и CLI выполняются под общей межпроцессной блокировкой `config.toml.lock`:
-чтение, правка, замена файла и обновление резервной копии проходят последовательно.
-Временные файлы имеют уникальные имена и создаются с правами 0600. Это защищает
-от потери параллельных изменений самого Mimshel; сторонние текстовые редакторы
-эту блокировку не используют.
-
-Сторож блокировки продолжает попытки после повторных сбоев экрана блокировки, пока проверка
-X-сервера подтверждает доступность сеанса. Первый повтор — без намеренной паузы,
-следующие имеют задержку до секунды против постоянного цикла ошибок.
-На X11 перезапуск упавшего блокировщика **не обеспечивает непрерывной блокировки**:
-до повторного захвата ввода экран может оказаться доступен.
-
-## Структура
-
-- `core` — модель, поиск, разбор настроек, без окон и файлового ввода-вывода.
-- `x11`, `text`, `icons`, `apps`, `dbus` — платформенные функции.
-- `widgets` — общие меню и элементы рисования.
-- `launcher`, `dock`, `menubar`, `notify` — логика и отрисовка частей оболочки.
-- `lock` — фон экрана блокировки.
-- `setup` — диагностика, применение настроек, действия сеанса, сторож блокировки,
-  резервные копии и откат.
-- `apps/mimshel` — команды, окна, фоновые наблюдатели и обмен событиями.
-
-## Принцип
-
-Изучаем поведение существующих программ и открытые стандарты
-(EWMH/ICCCM, Desktop Entry, Icon Theme, StatusNotifierItem, DBusMenu, Notifications),
-пишем собственную реализацию. Чужой код не копируем. Пароль проверяет PAM — та же
-система, что при входе; свой способ проверки паролей не реализуем.
-
-## Лицензия
-
-GPL-3.0-or-later — текст в файле [LICENSE](LICENSE).
+GPL-3.0-or-later — see [LICENSE](LICENSE).
