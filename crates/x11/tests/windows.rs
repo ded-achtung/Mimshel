@@ -162,7 +162,10 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
         AtomEnum::CARDINAL,
         &[1],
     )?;
-    observer.flush()?;
+    // flush только отправляет запросы: сервер мог ещё не выполнить их, когда
+    // придёт чтение по другому соединению. Ответ на запрос — значит, всё
+    // отправленное раньше уже выполнено.
+    observer.get_input_focus()?.reply()?;
     assert_eq!(d.workarea(), Some((0, 28, 800, 472)));
     Ok(())
 }
