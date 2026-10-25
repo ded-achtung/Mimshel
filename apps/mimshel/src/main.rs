@@ -1,6 +1,7 @@
 //! Оболочка рабочего стола: служба, окна «Поиск» и «Программы», настройка
 //! и проверочные команды.
 
+mod about_ui;
 mod config_store;
 mod desktop_files;
 mod desktop_ui;
@@ -128,6 +129,8 @@ fn main() {
                 }
             }
         }
+        // «Об этом компьютере» — своё окно в службе; без неё — окно zenity.
+        Some("action") if args.len() == 2 && args[1] == "about" && ui::ask_daemon_about() => {}
         Some("action") if args.len() == 2 => {
             std::process::exit(mimshel_setup::actions::action(&args[1], &guard::own_exe()))
         }
