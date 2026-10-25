@@ -571,6 +571,7 @@ mod tests {
             name: name.into(),
             kind: Kind::File,
             icons: vec![],
+            size: 0,
         }
     }
 

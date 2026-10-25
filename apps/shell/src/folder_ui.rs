@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use inotify::{Inotify, WatchMask};
 use shell_core::config::Config;
-use shell_desktop::files::{Item, MimeDb, scan};
+use shell_desktop::files::{Item, MimeDb, scan, scan_with};
 use shell_desktop::rename_box::{RenameBox, RenameResult};
 use shell_folder::view::{DEFAULT_SIZE, MIN_SIZE};
 use shell_folder::{Action, FolderView, Place};
@@ -43,7 +43,11 @@ pub enum FolderMsg {
         window: u32,
         dir: PathBuf,
         items: Vec<Item>,
+        /// Свободное место на диске папки, байт.
+        free: Option<u64>,
     },
+    /// Подключили или извлекли диск — перечитать места в боковой панели.
+    Places,
 }
 
 /// Пункты меню по правому щелчку.
@@ -82,6 +86,8 @@ struct Drag {
 pub struct FolderUi {
     windows: Vec<FolderWindow>,
     places: Vec<Place>,
+    /// Особые папки (Документы, Загрузки…) — своими значками в сетке.
+    special: Vec<(PathBuf, &'static str)>,
     mime: Arc<MimeDb>,
     menu_popup: Popup,
     /// Открытое меню: в каком окне.
@@ -107,6 +113,7 @@ impl FolderUi {
         Ok(FolderUi {
             windows: Vec::new(),
             places: shell_folder::places(),
+            special: shell_folder::special_folders(),
             mime: Arc::new(MimeDb::load()),
             menu_popup: d.create_popup("folder-menu")?,
             menu: None,
@@ -143,7 +150,8 @@ impl FolderUi {
     /// Открыть папку в новом окне.
     pub fn open(&mut self, d: &Display, dir: PathBuf) -> Result<()> {
         let opened = std::time::Instant::now();
-        let view = FolderView::new(dir.clone(), self.places.clone(), DEFAULT_SIZE);
+        let mut view = FolderView::new(dir.clone(), self.places.clone(), DEFAULT_SIZE);
+        view.set_special(self.special.clone());
         let win = d.create_app_window(WINDOW_CLASS, &view.title(), DEFAULT_SIZE, MIN_SIZE)?;
         win.show(d)?;
         if std::env::var_os("SHELL_TIMING").is_some() {
@@ -153,6 +161,7 @@ impl FolderUi {
         watch(
             win.id(),
             dir,
+            false,
             self.mime.clone(),
             stop.clone(),
             self.tx.clone(),
@@ -198,7 +207,20 @@ impl FolderUi {
 
     pub fn message(&mut self, msg: FolderMsg) {
         match msg {
-            FolderMsg::Files { window, dir, items } => {
+            FolderMsg::Places => {
+                self.places = shell_folder::places();
+                for w in &mut self.windows {
+                    if w.view.set_places(self.places.clone()) {
+                        w.dirty = true;
+                    }
+                }
+            }
+            FolderMsg::Files {
+                window,
+                dir,
+                items,
+                free,
+            } => {
                 if std::env::var_os("SHELL_TIMING").is_some()
                     && let Some(w) = self.windows.iter().find(|w| w.win.id() == window)
                 {
@@ -211,6 +233,7 @@ impl FolderUi {
                     && w.view.dir() == dir
                 {
                     w.view.set_items(items);
+                    w.view.set_free(free);
                     w.dirty = true;
                 }
             }
@@ -314,15 +337,27 @@ impl FolderUi {
         match action {
             Action::Nothing => {}
             Action::Redraw => w.dirty = true,
-            Action::Load => {
-                // Новая папка: прежнее слежение — остановить, новое — начать.
+            // Новая папка или показ скрытых: прежнее слежение — остановить,
+            // новое — начать.
+            Action::Load | Action::ToggleHidden => {
                 w.stop.store(true, Ordering::Relaxed);
                 w.stop = Arc::new(AtomicBool::new(false));
                 w.win.set_title(d, &w.view.title())?;
                 w.dirty = true;
                 let dir = w.view.dir().to_path_buf();
-                let stop = w.stop.clone();
-                watch(window, dir, self.mime.clone(), stop, self.tx.clone());
+                let (hidden, stop) = (w.view.show_hidden(), w.stop.clone());
+                watch(
+                    window,
+                    dir,
+                    hidden,
+                    self.mime.clone(),
+                    stop,
+                    self.tx.clone(),
+                );
+            }
+            Action::Eject(path) => {
+                w.dirty = true;
+                eject(path, self.tx.clone());
             }
             Action::Open(items) => {
                 for item in &items {
@@ -862,17 +897,56 @@ fn pairs_into(
     pairs
 }
 
+/// Свободное место на диске папки (`df`: в стандартной библиотеке Rust
+/// такого нет, а `statvfs` напрямую — небезопасный код).
+fn free_space(dir: &Path) -> Option<u64> {
+    let out = std::process::Command::new("df")
+        .args(["-B1", "--output=avail", "--"])
+        .arg(dir)
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .nth(1)?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Извлечь диск (`gio mount -e`), потом перечитать места в боковой панели.
+fn eject(path: PathBuf, tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        let ok = std::process::Command::new("gio")
+            .args(["mount", "-e", "--"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            desktop_files::error(&format!("Не удалось извлечь «{}».", path.display()));
+        }
+        let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Places)));
+    });
+}
+
 /// Следить за папкой окна: сразу и после каждой перемены присылать список
 /// файлов. Поток заканчивается, когда окно закрыли или ушли из папки.
-fn watch(window: u32, dir: PathBuf, mime: Arc<MimeDb>, stop: Arc<AtomicBool>, tx: Sender<Msg>) {
+fn watch(
+    window: u32,
+    dir: PathBuf,
+    hidden: bool,
+    mime: Arc<MimeDb>,
+    stop: Arc<AtomicBool>,
+    tx: Sender<Msg>,
+) {
     std::thread::spawn(move || {
         let locale = shell_apps::Locale::from_env();
         let send = |tx: &Sender<Msg>| {
-            let items = scan(&dir, &mime, locale.as_ref());
+            let items = scan_with(&dir, &mime, locale.as_ref(), hidden);
             let msg = FolderMsg::Files {
                 window,
                 dir: dir.clone(),
                 items,
+                free: free_space(&dir),
             };
             tx.send(Msg::Folder(Box::new(msg))).is_ok()
         };
@@ -897,9 +971,22 @@ fn watch(window: u32, dir: PathBuf, mime: Arc<MimeDb>, stop: Arc<AtomicBool>, tx
                 .read_events(&mut buffer)
                 .is_ok_and(|mut events| events.next().is_some())
         };
+        // Подключённые диски: раз в ~2 с сверить — вставили флешку, и она
+        // появится в боковой панели.
+        let mounts = || std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+        let mut known = mounts();
+        let mut polls = 0u32;
         while !stop.load(Ordering::Relaxed) {
             if !changed(&mut inotify) {
                 std::thread::sleep(POLL);
+                polls += 1;
+                if polls.is_multiple_of(8) {
+                    let now = mounts();
+                    if now != known {
+                        known = now;
+                        let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Places)));
+                    }
+                }
                 continue;
             }
             // Ждём тишины: пока идут события (копируется пачка файлов),
