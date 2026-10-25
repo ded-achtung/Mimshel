@@ -4,8 +4,8 @@
 //!
 //! Fonts: the window opens at once with just the monospace family; every
 //! other installed font (for emoji, CJK, rare symbols) loads in a background
-//! thread and replaces it when ready — then the characters that were missing
-//! are drawn again. Colour emoji keep their colours.
+//! thread and replaces it when ready — then every character is drawn again
+//! (missing ones were «tofu» boxes). Colour emoji keep their colours.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
@@ -87,8 +87,8 @@ impl Glyphs {
         self.measure();
     }
 
-    /// All fonts have loaded — switch to them and redraw the characters that
-    /// were missing. `true` — the screen should be redrawn.
+    /// All fonts have loaded — switch to them and redraw every character.
+    /// `true` — the screen should be redrawn.
     pub fn refresh(&mut self) -> bool {
         let Some(rx) = &self.full else {
             return false;
@@ -98,7 +98,9 @@ impl Glyphs {
         };
         self.full = None;
         self.fonts = fonts;
-        self.cache.retain(|_, mask| mask.is_some());
+        // Everything anew: a missing character is not blank — the monospace
+        // font draws a «tofu» box for it, so we cannot tell which ones to redo.
+        self.cache.clear();
         true
     }
 
