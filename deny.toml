@@ -1,0 +1,48 @@
+# cargo-deny rules (CI job `deps`; locally: cargo deny --locked check).
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[advisories]
+# Every ignore needs a reason; remove it as soon as the dependency is gone.
+ignore = [
+    # `users`, via pam 0.8. Its code runs from pam's open_session /
+    # initialize_environment; the lock screen only authenticates and never
+    # opens a PAM session. Replace the pam binding (security audit, 2026-10-25).
+    { id = "RUSTSEC-2023-0040", reason = "users unmaintained; only via pam, see above" },
+    { id = "RUSTSEC-2025-0040", reason = "users group listing bug; code path not used, see above" },
+    # Split-out crates folded into zbus 6; goes away with the zbus 6 move.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; migrate to zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; migrate to zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; migrate to zbus 6" },
+    # Font parsing via cosmic-text/resvg; wait for them to switch.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; follows cosmic-text/resvg" },
+]
+
+[licenses]
+# All compatible with the project's GPL-3.0-or-later.
+allow = [
+    "GPL-3.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+# Workspace crates refer to each other by path without a version; the
+# project is not published to crates.io and builds use Cargo.lock.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

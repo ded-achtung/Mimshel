@@ -11,7 +11,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.99.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Инструменты и шрифты для тестов отрисовки
         run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
@@ -25,3 +25,17 @@ jobs:
         run: cargo test --workspace --locked
       - name: Окна на отдельном X-сервере
         run: cargo test -p mimshel-x11 --test windows --locked -- --ignored
+
+  # Known vulnerabilities (RustSec), unmaintained crates, licenses and
+  # crate sources — rules in deny.toml.
+  deps:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: cargo-deny
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo deny --locked check
