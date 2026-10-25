@@ -382,6 +382,12 @@ pub fn terminal(terminal: &[String], dir: &Path) {
     // Уже запущенный xfce4-terminal (и похожие) открывает окно в своей
     // папке, а не в нашей, — папку им передаём явно.
     let name = program.rsplit('/').next().unwrap_or(program);
+    // Our own terminal (`mimshel terminal …`) takes the folder as an argument.
+    if terminal.get(1).map(String::as_str) == Some("terminal") {
+        let dir = dir.display().to_string();
+        spawn(&[program, "terminal", &dir], Some(Path::new(&dir)));
+        return;
+    }
     let flag = match name {
         "xfce4-terminal" | "gnome-terminal" | "mate-terminal" | "lxterminal" => {
             Some(format!("--working-directory={}", dir.display()))

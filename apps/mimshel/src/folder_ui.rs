@@ -125,7 +125,7 @@ impl FolderUi {
             drag_popup,
             drag: None,
             drag_dirty: false,
-            terminal: config.terminal.clone(),
+            terminal: crate::ui::terminal_command(config),
             tx,
         })
     }

@@ -68,12 +68,13 @@ pub struct Session {
 }
 
 impl Session {
-    /// Запустить оболочку пользователя в сетке `cols`×`rows` клеток размером
-    /// `cell` пикселей. `dir` — папка, где она откроется.
+    /// Start the user's shell (or `command` — program and arguments) in a
+    /// `cols`×`rows` grid of `cell`-pixel cells, in folder `dir`.
     pub fn spawn(
         (cols, rows): (usize, usize),
         cell: (u32, u32),
         dir: Option<PathBuf>,
+        command: Option<Vec<String>>,
         palette: Palette,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Session> {
@@ -81,11 +82,17 @@ impl Session {
         // Программы узнают по TERM, что умеет терминал: умеем всё, что xterm, и 24-битный цвет.
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
+        let shell = command.and_then(|mut c| {
+            (!c.is_empty()).then(|| {
+                let program = c.remove(0);
+                tty::Shell::new(program, c)
+            })
+        });
         let options = tty::Options {
+            shell,
             working_directory: dir,
             drain_on_exit: true,
             env,
-            ..tty::Options::default()
         };
         let pty = tty::new(&options, window_size((cols, rows), cell), 0)?;
         let shell_pid = pty.child().id();
@@ -369,7 +376,8 @@ mod tests {
     /// Настоящий сеанс: оболочка печатает — сетка это видит, OSC 52 доходит.
     #[test]
     fn shell_output_and_osc52() {
-        let mut s = Session::spawn((40, 5), (8, 18), None, Palette::default(), || {}).unwrap();
+        let mut s =
+            Session::spawn((40, 5), (8, 18), None, None, Palette::default(), || {}).unwrap();
         s.input(b"printf 'privet\\033]52;c;0J/RgNC40LLQtdGC\\a'; echo\r".to_vec());
         let start = Instant::now();
         let mut copied = None;

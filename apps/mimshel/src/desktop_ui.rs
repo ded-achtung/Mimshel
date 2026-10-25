@@ -197,7 +197,7 @@ impl DesktopUi {
             full_dirty: false,
             cells_dirty: Vec::new(),
             regions_dirty: Vec::new(),
-            terminal: config.terminal.clone(),
+            terminal: crate::ui::terminal_command(config),
             folders: config.folders,
             menubar_height: config.menubar_height,
             chosen_at: None,

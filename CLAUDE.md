@@ -542,7 +542,16 @@ Python-скрипт, который делал вид macOS из чужих пр
   `X-Macos-Look-*` в ~/.local/share/applications
 
 ## Терминал и блокировка (25.10.2026)
-- **Терминал — kitty** (решение пользователя): Терминал Xfce не умеет OSC 52, и копирование в Claude Code
+- **Свой терминал — `mimshel terminal`** (решение пользователя 25.10.2026, «свой всё-таки делать»):
+  ядро — `alacritty_terminal` (разбор xterm, сетка, история, PTY; Apache-2.0), своё — `crates/terminal`
+  (кэш знаков-масок, палитра, клавиши → байты, сеанс) и окно `apps/mimshel/src/term_ui.rs` (вкладки,
+  мышь, выделение → PRIMARY, OSC 52 → CLIPBOARD, меню наверху через `crates/dbus/src/menu_export.rs` —
+  DBusMenu + регистратор). Отдельный процесс (урок 12). `-e ПРОГРАММА` — для `Terminal=true`.
+  Терминал по умолчанию с этого дня: `[apps] terminal = ["mimshel","terminal","-e"]` (служба
+  подставляет полный путь — `ui::terminal_command`), ярлык `mimshel-terminal.desktop` (`apply
+  launchers`), помощник Xfce `~/.local/share/xfce4/helpers/mimshel-terminal.desktop` +
+  `TerminalEmulator=mimshel-terminal` (`apply look`, `crates/setup/src/terminal.rs`).
+- Раньше (до своего) — **kitty**: Терминал Xfce не умеет OSC 52, и копирование в Claude Code
   по SSH не доходило до буфера обмена. `crates/setup/src/terminal.rs`: при `[apps] terminal = ["kitty"]`
   `apply look` пишет `TerminalEmulator=kitty` в `~/.config/xfce4/helpers.rc` (прежний — пометкой
   `# mimshel: прежний TerminalEmulator=…`) и `crates/setup/data/kitty.conf`, если своего нет; `restore`

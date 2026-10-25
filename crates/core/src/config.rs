@@ -108,9 +108,9 @@ impl Default for Config {
             wallpaper: "space".into(),
             scale: None,
             png_icons: true,
-            // kitty, а не Терминал Xfce: тот не умеет OSC 52, и копирование
-            // из программ по SSH не попадало в буфер (решение 25.10.2026).
-            terminal: vec!["kitty".into()],
+            // Our own terminal (`mimshel terminal -e PROGRAM`) — the user's
+            // decision 2026-10-25; before that kitty (Xfce Terminal lacks OSC 52).
+            terminal: vec!["mimshel".into(), "terminal".into(), "-e".into()],
             apps_columns: 7,
             apps_rows: 4,
             apps_icon: 72,
@@ -118,7 +118,7 @@ impl Default for Config {
                 "thunar",
                 "macos-launchpad",
                 "firefox",
-                "kitty",
+                "mimshel-terminal",
                 "org.xfce.mousepad",
                 "xfce-settings-manager",
             ]
@@ -157,7 +157,7 @@ impl Default for Config {
             no_dgpu_apps: Vec::new(),
             rename_apps: [
                 ("thunar", "Проводник"),
-                ("kitty", "Терминал"),
+                ("mimshel-terminal", "Терминал"),
                 ("xfce4-terminal", "Терминал Xfce"),
                 ("org.xfce.mousepad", "Блокнот"),
                 ("xfce-settings-manager", "Системные настройки"),

@@ -50,7 +50,6 @@ PKGS=(
     network-manager-applet       # значок сети
     xfce4-taskmanager            # «Принудительно завершить»
     pavucontrol                  # «Настройки звука»
-    kitty                        # терминал (копирование из программ по SSH — OSC 52)
 )
 step "Пакеты (pacman спросит пароль sudo и подтверждение)"
 # -Syu, а не -Sy: частичное обновление ломает Arch.

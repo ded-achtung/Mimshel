@@ -152,6 +152,17 @@ pub fn load_config() -> Config {
     }
 }
 
+/// The terminal command from settings, ready to run: `mimshel …` (our own
+/// terminal) becomes the full path of this program — the session's PATH
+/// may not include `~/.local/bin`.
+pub fn terminal_command(config: &Config) -> Vec<String> {
+    let mut cmd = config.terminal.clone();
+    if cmd.first().map(String::as_str) == Some(mimshel_core::names::APP) {
+        cmd[0] = crate::guard::own_exe().display().to_string();
+    }
+    cmd
+}
+
 /// Запустить программу: на видеокарте NVIDIA, если так выбрано в настройках
 /// или просит ярлык. Настройки читаются заново — галочку в доке могли
 /// переключить только что.
@@ -384,7 +395,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         background: None,
         frame: None,
         shown: None,
-        terminal: config.terminal,
+        terminal: terminal_command(&config),
         dock,
         desktop,
         folders,

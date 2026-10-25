@@ -106,7 +106,7 @@ impl DockUi {
             poof: None,
             painted: None,
             tx,
-            terminal: config.terminal.clone(),
+            terminal: crate::ui::terminal_command(config),
             screen: (u32::from(sw), u32::from(sh)),
         };
         if mimshel_apps::gpu::offload_available() {

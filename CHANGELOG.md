@@ -4,6 +4,12 @@
 
 ## [Не выпущено]
 
+- **Own terminal** `mimshel terminal` (core: alacritty_terminal): tabs, menu in the top menu bar,
+  OSC 52, mouse for programs, font size. It is now the default: `[apps] terminal = ["mimshel",
+  "terminal", "-e"]`, a «Терминал Mimshel» launcher (`apply launchers`), an Xfce helper so
+  Ctrl+Alt+T and Thunar open it (`apply look`), the dock. kitty is no longer installed by default.
+- Commit messages and code comments are in English from 2026-10-25 (the user's decision).
+
 - Аудит 25.10.2026: ярлык `.desktop` без права на выполнение больше не выдаётся за документ (подпись и
   значок — не из файла) и перед запуском спрашивает, показав команду; экран блокировки берёт имя
   пользователя у системы (`id -un`), а не из `$USER`; исправлен нестабильный тест окон в CI.

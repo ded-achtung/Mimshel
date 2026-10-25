@@ -57,9 +57,19 @@ enum Wake {
     Menu(i32),
 }
 
+/// What to open: `[DIR]` or `-e PROGRAM [ARGS…]` (also `-x`, `--`, as other
+/// terminals accept — programs with `Terminal=true` are launched this way).
+pub fn parse_args(args: &[String]) -> (Option<PathBuf>, Option<Vec<String>>) {
+    match args.first().map(String::as_str) {
+        Some("-e" | "-x" | "--") => (None, Some(args[1..].to_vec()).filter(|c| !c.is_empty())),
+        Some(dir) => (Some(PathBuf::from(dir)), None),
+        None => (None, None),
+    }
+}
+
 /// Run a terminal window. Exit code 0: the shells finished or the window was closed.
-pub fn run(dir: Option<PathBuf>) -> i32 {
-    match terminal(dir) {
+pub fn run(dir: Option<PathBuf>, command: Option<Vec<String>>) -> i32 {
+    match terminal(dir, command) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("Терминал: {e}");
@@ -118,20 +128,38 @@ struct Tabs {
 }
 
 impl Tabs {
-    /// Open a tab in folder `dir` with grid `grid`.
+    /// Open a tab in folder `dir` with grid `grid` running the shell.
     fn open(&mut self, dir: Option<PathBuf>, grid: (usize, usize)) -> mimshel_x11::Result<()> {
+        self.open_with(dir, grid, None)
+    }
+
+    /// Open a tab running `command` (program and arguments) instead of the shell.
+    fn open_with(
+        &mut self,
+        dir: Option<PathBuf>,
+        grid: (usize, usize),
+        command: Option<Vec<String>>,
+    ) -> mimshel_x11::Result<()> {
         let id = self.next_id;
         self.next_id += 1;
         let wake = self.tx.clone();
-        let session = Session::spawn(grid, self.cell, dir, Palette::default(), move || {
-            let _ = wake.send(Wake::Term(id));
-        })
+        let title = command
+            .as_ref()
+            .and_then(|c| c.first())
+            .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
+            .unwrap_or_else(|| TITLE.to_string());
+        let session = Session::spawn(
+            grid,
+            self.cell,
+            dir,
+            command,
+            Palette::default(),
+            move || {
+                let _ = wake.send(Wake::Term(id));
+            },
+        )
         .map_err(|e| format!("оболочка не запустилась: {e}"))?;
-        self.list.push(Tab {
-            id,
-            session,
-            title: TITLE.to_string(),
-        });
+        self.list.push(Tab { id, session, title });
         self.active = self.list.len() - 1;
         Ok(())
     }
@@ -736,7 +764,7 @@ impl Window {
     }
 }
 
-fn terminal(dir: Option<PathBuf>) -> mimshel_x11::Result<()> {
+fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::Result<()> {
     let d = Arc::new(Display::connect()?);
     let scale = d.scale();
     let family = mono_family();
@@ -766,7 +794,7 @@ fn terminal(dir: Option<PathBuf>) -> mimshel_x11::Result<()> {
         ui_fonts: None,
         hover: None,
     };
-    tabs.open(dir, START)?;
+    tabs.open_with(dir, START, command)?;
     {
         let d = Arc::clone(&d);
         let tx = tx.clone();
@@ -880,6 +908,25 @@ mod tests {
         tabs.close(0);
         assert_eq!((tabs.list.len(), tabs.active), (1, 0));
         assert_eq!(tabs.bar_h(1.0), 0, "one again — the strip is gone");
+    }
+
+    #[test]
+    fn command_line() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_args(&[]), (None, None));
+        assert_eq!(
+            parse_args(&s(&["/tmp"])),
+            (Some(PathBuf::from("/tmp")), None)
+        );
+        assert_eq!(
+            parse_args(&s(&["-e", "htop", "-d", "5"])),
+            (None, Some(s(&["htop", "-d", "5"])))
+        );
+        assert_eq!(
+            parse_args(&s(&["-e"])),
+            (None, None),
+            "-e without a program — the shell"
+        );
     }
 
     #[test]

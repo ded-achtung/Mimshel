@@ -1,14 +1,15 @@
-//! Терминал по умолчанию — kitty (решение пользователя 25.10.2026): Терминал
-//! Xfce не умеет OSC 52, и текст, скопированный в программе по SSH (Claude
-//! Code, tmux, vim), не попадал в буфер обмена.
+//! The default terminal for Xfce (`helpers.rc`: Ctrl+Alt+T, «Open terminal
+//! here» in Thunar), following `[apps] terminal`:
+//! - our own `mimshel terminal` (the default since 2026-10-25): an Xfce helper
+//!   file describing it, then `TerminalEmulator=mimshel-terminal`;
+//! - kitty (the default before; Xfce Terminal lacks OSC 52, so text copied
+//!   in programs over SSH never reached the clipboard): `TerminalEmulator=kitty`
+//!   and our kitty.conf if the user has none.
 //!
-//! `mimshel apply look`, если в `[apps] terminal` выбран kitty и он
-//! установлен: делает его терминалом Xfce (`helpers.rc`: Ctrl+Alt+T,
-//! «Открыть терминал здесь» в Thunar) и кладёт наши настройки kitty, если
-//! своих у человека нет. `mimshel restore` возвращает прежний терминал Xfce и
-//! убирает только наши, помеченные настройки kitty.
+//! `mimshel apply look` sets it up; `mimshel restore` brings back the previous
+//! Xfce terminal and removes only our marked files.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::sys::{home, read, which, write_if_changed};
 
@@ -28,6 +29,33 @@ fn kitty_conf() -> PathBuf {
     home().join(".config/kitty/kitty.conf")
 }
 
+/// Name of our Xfce helper (the `TerminalEmulator` value) and its file.
+const HELPER: &str = "mimshel-terminal";
+/// Marks our helper file (Xfce skips `#` lines).
+const HELPER_MARK: &str = "# mimshel: terminal helper";
+
+fn helper_file() -> PathBuf {
+    home().join(format!(".local/share/xfce4/helpers/{HELPER}.desktop"))
+}
+
+/// Xfce helper for our terminal: how to open it and how to run a command in it.
+fn helper_text(bin: &Path) -> String {
+    let bin = bin.display();
+    format!(
+        "{HELPER_MARK}\n[Desktop Entry]\nNoDisplay=true\nVersion=1.0\nType=X-XFCE-Helper\n\
+         X-XFCE-Category=TerminalEmulator\nName=Терминал Mimshel\nIcon=utilities-terminal\n\
+         X-XFCE-Commands={bin} terminal\nX-XFCE-CommandsWithParameter={bin} terminal -e \"%s\"\n"
+    )
+}
+
+/// Our own terminal is chosen in `[apps] terminal` (`mimshel terminal …`).
+pub fn is_mimshel(terminal: &[String]) -> bool {
+    terminal
+        .first()
+        .is_some_and(|p| p.rsplit('/').next() == Some(mimshel_core::names::APP))
+        && terminal.get(1).map(String::as_str) == Some("terminal")
+}
+
 /// Выбран ли kitty в `[apps] terminal`.
 pub fn is_kitty(terminal: &[String]) -> bool {
     terminal
@@ -35,9 +63,22 @@ pub fn is_kitty(terminal: &[String]) -> bool {
         .is_some_and(|p| p.rsplit('/').next() == Some("kitty"))
 }
 
-/// Включить kitty (см. описание модуля). Ничего не делает, если выбран другой
-/// терминал или kitty не установлен.
-pub fn apply(terminal: &[String]) {
+/// Make the chosen terminal Xfce's default (see the module docs). `bin` —
+/// our program (`~/.local/bin/mimshel`). Other terminals are left alone.
+pub fn apply(terminal: &[String], bin: &Path) {
+    if is_mimshel(terminal) {
+        println!("▶ Терминал: Mimshel");
+        let file = helper_file();
+        if let Err(e) = write_if_changed(&file, &helper_text(bin)) {
+            println!("✘ Не записать {}: {e}", file.display());
+            return;
+        }
+        let path = helpers_rc();
+        if let Err(e) = write_if_changed(&path, &set_terminal(&read(&path), HELPER)) {
+            println!("✘ Не записать {}: {e}", path.display());
+        }
+        return;
+    }
     if !is_kitty(terminal) {
         return;
     }
@@ -71,6 +112,9 @@ pub fn owned() -> Vec<String> {
             kitty_conf().display()
         ));
     }
+    if read(&helper_file()).starts_with(HELPER_MARK) {
+        out.push(format!("убрать помощник Xfce {}", helper_file().display()));
+    }
     out
 }
 
@@ -83,6 +127,12 @@ pub fn cleanup() -> std::io::Result<()> {
     }
     if read(&kitty_conf()).starts_with(KITTY_MARK) {
         match std::fs::remove_file(kitty_conf()) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    if read(&helper_file()).starts_with(HELPER_MARK) {
+        match std::fs::remove_file(helper_file()) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
@@ -133,6 +183,24 @@ fn restore_terminal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mimshel_terminal_is_recognized() {
+        let t = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(is_mimshel(&t(&["mimshel", "terminal", "-e"])));
+        assert!(is_mimshel(&t(&[
+            "/home/ded/.local/bin/mimshel",
+            "terminal"
+        ])));
+        assert!(!is_mimshel(&t(&["mimshel", "folder"])));
+        assert!(!is_mimshel(&t(&["kitty"])));
+        let text = helper_text(Path::new("/home/ded/.local/bin/mimshel"));
+        assert!(text.starts_with(HELPER_MARK));
+        assert!(text.contains("X-XFCE-Category=TerminalEmulator"));
+        assert!(text.contains(
+            "X-XFCE-CommandsWithParameter=/home/ded/.local/bin/mimshel terminal -e \"%s\""
+        ));
+    }
 
     #[test]
     fn kitty_is_recognized_by_program_name() {

@@ -27,7 +27,6 @@ const PACKAGES: &[&str] = &[
     "sassc",
     "network-manager-applet",
     "xfce4-taskmanager",
-    "kitty",
 ];
 /// Глобальное меню в панели Xfce (если строка меню — панель Xfce).
 const APPMENU_PACKAGES: &[&str] = &["vala-panel-appmenu-xfce", "vala-panel-appmenu-registrar"];

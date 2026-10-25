@@ -605,6 +605,20 @@ impl Plan<'_> {
                 &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
             ),
         );
+        // Our terminal — a normal app in «Программы», «Поиск» and the dock.
+        write(
+            &self.paths.applications.join("mimshel-terminal.desktop"),
+            &desktop_entry(
+                "Терминал Mimshel",
+                &format!("{} terminal", self.paths.shell_bin.display()),
+                "utilities-terminal",
+                &format!(
+                    "GenericName=Терминал\nComment=Командная строка\n\
+                     Categories=System;TerminalEmulator;\nKeywords=terminal;shell;консоль;\n\
+                     StartupWMClass=mimshel-terminal\n{MANAGED_MARK}\n"
+                ),
+            ),
+        );
         // Список «тип файла → программа» для своих ярлыков: без него копии
         // ярлыков в ~/.local/share/applications заслоняют системные, и папки
         // нечем открыть (gio open).
@@ -861,7 +875,7 @@ impl Plan<'_> {
         if crate::gtk_fixes::apply() {
             println!("  Проводник увидит изменения после перезапуска: thunar -q");
         }
-        crate::terminal::apply(&c.terminal);
+        crate::terminal::apply(&c.terminal, &self.paths.shell_bin);
     }
 
     /// Обои на все мониторы (и фон блокировки — из них же).
