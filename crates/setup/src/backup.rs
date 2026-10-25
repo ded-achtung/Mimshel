@@ -270,10 +270,44 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Заменить папку `dst` копией `src`.
+/// Replace folder `dst` with a copy of `src` (no `src` — just remove `dst`).
+///
+/// All or nothing: the copy is built next to `dst` first, then swapped in by
+/// renames on the same file system. If copying fails, `dst` is untouched; if
+/// the swap fails, the old `dst` is put back.
 fn replace_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
-    remove_tree(dst)?;
-    copy_tree(src, dst)
+    if !src.is_dir() {
+        return remove_tree(dst);
+    }
+    let sibling = |tag: &str| {
+        let name = dst.file_name().unwrap_or_default().to_string_lossy();
+        dst.with_file_name(format!(".{name}.mimshel-{tag}"))
+    };
+    let (new, old) = (sibling("new"), sibling("old"));
+    // Leftovers of an interrupted earlier run.
+    remove_tree(&new)?;
+    remove_tree(&old)?;
+    if let Err(e) = copy_tree(src, &new) {
+        let _ = remove_tree(&new);
+        return Err(e);
+    }
+    let had_dst = dst.symlink_metadata().is_ok();
+    if had_dst {
+        if let Err(e) = std::fs::rename(dst, &old) {
+            let _ = remove_tree(&new);
+            return Err(e);
+        }
+    }
+    if let Err(e) = std::fs::rename(&new, dst) {
+        if had_dst {
+            let _ = std::fs::rename(&old, dst);
+        }
+        let _ = remove_tree(&new);
+        return Err(e);
+    }
+    // The new settings are in place; a leftover old copy is harmless.
+    let _ = remove_tree(&old);
+    Ok(())
 }
 
 fn remove_tree(path: &Path) -> std::io::Result<()> {
@@ -338,5 +372,49 @@ mod tests {
         assert_eq!(managed(&[&apps]), [apps.join("ours.desktop")]);
         remove_tree(&t.0.join("нет")).unwrap();
         remove_file(&t.0.join("нет")).unwrap();
+    }
+
+    #[test]
+    fn replace_failure_keeps_old_folder() {
+        let t = Temp(std::env::temp_dir().join(format!("shell-replace-{}", std::process::id())));
+        let src = t.0.join("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("a.xml"), "A").unwrap();
+        // A socket cannot be copied: the copy fails halfway through.
+        let _sock = std::os::unix::net::UnixListener::bind(src.join("sub/sock")).unwrap();
+        let dst = t.0.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("old.xml"), "OLD").unwrap();
+
+        assert!(replace_tree(&src, &dst).is_err());
+        assert_eq!(std::fs::read_to_string(dst.join("old.xml")).unwrap(), "OLD");
+        assert!(!dst.join("a.xml").exists(), "nothing half-copied into dst");
+        let mut left: Vec<_> = std::fs::read_dir(&t.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["dst", "src"], "no staging folders left behind");
+    }
+
+    #[test]
+    fn replace_into_missing_and_from_missing() {
+        let t = Temp(std::env::temp_dir().join(format!("shell-replace2-{}", std::process::id())));
+        let src = t.0.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.xml"), "A").unwrap();
+        // No dst yet — it appears.
+        let dst = t.0.join("dst");
+        replace_tree(&src, &dst).unwrap();
+        assert_eq!(std::fs::read_to_string(dst.join("a.xml")).unwrap(), "A");
+        // Stale staging folders from an interrupted run do not get in the way.
+        std::fs::create_dir_all(t.0.join(".dst.mimshel-new/junk")).unwrap();
+        std::fs::create_dir_all(t.0.join(".dst.mimshel-old")).unwrap();
+        replace_tree(&src, &dst).unwrap();
+        assert!(!t.0.join(".dst.mimshel-new").exists());
+        assert!(!t.0.join(".dst.mimshel-old").exists());
+        // No src — dst is removed, as before.
+        replace_tree(&t.0.join("нет"), &dst).unwrap();
+        assert!(!dst.exists());
     }
 }
