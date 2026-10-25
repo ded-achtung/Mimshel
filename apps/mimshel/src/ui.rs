@@ -764,33 +764,42 @@ impl Ui<'_> {
     }
 
     fn event(&mut self, ev: Event) -> Result<()> {
+        // Открыто окно «Поиск» или «Программы» — клавиатура его (оно её и
+        // захватило). Иначе нажатия забирали стол или окно папки, если они
+        // были активны, и в поиске ничего не набиралось.
+        let to_panel = matches!(ev, Event::Key(_)) && self.shown.is_some();
         // Одно событие может быть нужно и строке меню, и доку (например,
         // сменилось активное окно).
         let mut handled = false;
         if let Some(notify) = &mut self.notify
+            && !to_panel
             && notify.wants(&ev)
         {
             return notify.event(self.display, &mut self.fonts, ev);
         }
         if let Some(menubar) = &mut self.menubar
+            && !to_panel
             && menubar.wants(self.display, &ev)
         {
             menubar.event(self.display, &mut self.fonts, ev)?;
             handled = true;
         }
         if let Some(dock) = &mut self.dock
+            && !to_panel
             && dock.wants(self.display, &ev)
         {
             dock.event(self.display, &mut self.fonts, ev)?;
             handled = true;
         }
         if let Some(desktop) = &mut self.desktop
+            && !to_panel
             && desktop.wants(self.display, &ev)
         {
             desktop.event(self.display, &mut self.fonts, ev)?;
             handled = true;
         }
         if let Some(folders) = &mut self.folders
+            && !to_panel
             && folders.wants(self.display, &ev)
         {
             folders.event(self.display, &mut self.fonts, ev)?;
