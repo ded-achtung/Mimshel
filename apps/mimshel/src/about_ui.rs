@@ -17,7 +17,7 @@ use crate::ui::Msg;
 
 /// Класс окна — по нему строка меню и док узнают его.
 const WINDOW_CLASS: &str = "mimshel-about";
-const W: u32 = 700;
+const W: u32 = 770;
 const PAD: f32 = 32.0;
 const LOGO: u32 = 144;
 /// Где начинается правая колонка и где в ней значения.
