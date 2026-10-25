@@ -842,6 +842,10 @@ impl Plan<'_> {
         xset("xfwm4", "/general/button_layout", "string", "CHM|");
         xset("xfwm4", "/general/use_compositing", "bool", "true");
         xset("xfwm4", "/general/show_dock_shadow", "bool", "false");
+        // Alt+Tab: выбранное окно выходит вперёд целиком, как в macOS и Windows,
+        // а не обводится рамкой на своём месте (её видно и сквозь другие окна).
+        xset("xfwm4", "/general/cycle_raise", "bool", "true");
+        xset("xfwm4", "/general/cycle_draw_frame", "bool", "false");
         // Курсор для X11 и программ не на GTK — тема «default».
         write(
             &self.paths.icons.join("default/index.theme"),
