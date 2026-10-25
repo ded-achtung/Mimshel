@@ -48,6 +48,12 @@ pub enum FolderMsg {
     },
     /// Подключили или извлекли диск — перечитать места в боковой панели.
     Places,
+    /// Phones and cameras found by a background scan. `open` — the window
+    /// that asked to mount this location: open the phone there.
+    Phones {
+        list: Vec<Place>,
+        open: Option<(u32, String)>,
+    },
 }
 
 /// Пункты меню по правому щелчку.
@@ -85,7 +91,12 @@ struct Drag {
 
 pub struct FolderUi {
     windows: Vec<FolderWindow>,
+    /// Places and disks plus `phones` — what the sidebars show.
     places: Vec<Place>,
+    /// Phones and cameras (gvfs): scanned in a background thread.
+    phones: Vec<Place>,
+    /// A phone was just mounted for this window: open it on the next flush.
+    open_phone: Option<(u32, PathBuf)>,
     /// Особые папки (Документы, Загрузки…) — своими значками в сетке.
     special: Vec<(PathBuf, &'static str)>,
     mime: Arc<MimeDb>,
@@ -113,6 +124,8 @@ impl FolderUi {
         Ok(FolderUi {
             windows: Vec::new(),
             places: mimshel_folder::places(),
+            phones: Vec::new(),
+            open_phone: None,
             special: mimshel_folder::special_folders(),
             mime: Arc::new(MimeDb::load()),
             menu_popup: d.create_popup("folder-menu")?,
@@ -128,6 +141,7 @@ impl FolderUi {
             terminal: crate::ui::terminal_command(config),
             tx,
         })
+        .inspect(|ui| scan_phones(ui.tx.clone()))
     }
 
     /// Значки окна папки — заранее: первое окно открывается без задержки.
@@ -150,6 +164,8 @@ impl FolderUi {
     /// Открыть папку в новом окне.
     pub fn open(&mut self, d: &Display, dir: PathBuf) -> Result<()> {
         let opened = std::time::Instant::now();
+        // A phone may have been plugged in while no window was watching.
+        scan_phones(self.tx.clone());
         let mut view = FolderView::new(dir.clone(), self.places.clone(), DEFAULT_SIZE);
         view.set_special(self.special.clone());
         let win = d.create_app_window(WINDOW_CLASS, &view.title(), DEFAULT_SIZE, MIN_SIZE)?;
@@ -174,6 +190,16 @@ impl FolderUi {
             opened: Some(opened),
         });
         Ok(())
+    }
+
+    fn update_places(&mut self) {
+        self.places = mimshel_folder::places();
+        self.places.extend(self.phones.iter().cloned());
+        for w in &mut self.windows {
+            if w.view.set_places(self.places.clone()) {
+                w.dirty = true;
+            }
+        }
     }
 
     fn find(&mut self, window: u32) -> Option<&mut FolderWindow> {
@@ -208,12 +234,17 @@ impl FolderUi {
     pub fn message(&mut self, msg: FolderMsg) {
         match msg {
             FolderMsg::Places => {
-                self.places = mimshel_folder::places();
-                for w in &mut self.windows {
-                    if w.view.set_places(self.places.clone()) {
-                        w.dirty = true;
-                    }
+                self.update_places();
+                scan_phones(self.tx.clone());
+            }
+            FolderMsg::Phones { list, open } => {
+                if let Some((window, uri)) = open
+                    && let Some(p) = list.iter().find(|p| p.remote.as_ref() == Some(&uri))
+                {
+                    self.open_phone = Some((window, p.path.clone()));
                 }
+                self.phones = list;
+                self.update_places();
             }
             FolderMsg::Files {
                 window,
@@ -357,7 +388,20 @@ impl FolderUi {
             }
             Action::Eject(path) => {
                 w.dirty = true;
-                eject(path, self.tx.clone());
+                let remote = self
+                    .places
+                    .iter()
+                    .find(|p| p.path == path)
+                    .and_then(|p| p.remote.clone());
+                eject(path, remote, self.tx.clone());
+            }
+            Action::Mount(uri) => {
+                let name = self
+                    .places
+                    .iter()
+                    .find(|p| p.remote.as_ref() == Some(&uri))
+                    .map_or_else(|| uri.clone(), |p| p.name.clone());
+                mount(window, uri, name, self.tx.clone());
             }
             Action::Open(items) => {
                 for item in &items {
@@ -752,6 +796,12 @@ impl FolderUi {
     }
 
     pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        if let Some((window, path)) = self.open_phone.take()
+            && let Some(w) = self.find(window)
+            && w.view.navigate(path) == Action::Load
+        {
+            self.act(d, fonts, window, Action::Load)?;
+        }
         if std::mem::take(&mut self.menu_dirty)
             && let Some((_, menu)) = &self.menu
         {
@@ -914,18 +964,78 @@ fn free_space(dir: &Path) -> Option<u64> {
 }
 
 /// Извлечь диск (`gio mount -e`), потом перечитать места в боковой панели.
-fn eject(path: PathBuf, tx: Sender<Msg>) {
+/// A phone (`remote`) cannot be ejected, only unmounted (`gio mount -u`).
+fn eject(path: PathBuf, remote: Option<String>, tx: Sender<Msg>) {
     std::thread::spawn(move || {
-        let ok = std::process::Command::new("gio")
-            .args(["mount", "-e", "--"])
-            .arg(&path)
-            .status()
-            .is_ok_and(|s| s.success());
+        let mut gio = std::process::Command::new("gio");
+        match &remote {
+            Some(uri) => gio.args(["mount", "-u", "--", uri]),
+            None => gio.args(["mount", "-e", "--"]).arg(&path),
+        };
+        let ok = gio.status().is_ok_and(|s| s.success());
         if !ok {
             desktop_files::error(&format!("Не удалось извлечь «{}».", path.display()));
         }
         let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Places)));
     });
+}
+
+/// Mount a phone or camera (`gio mount`), then open it in `window`.
+fn mount(window: u32, uri: String, name: String, tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        let ok = std::process::Command::new("gio")
+            .args(["mount", "--", &uri])
+            .stdin(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            desktop_files::error(&format!(
+                "Не удалось открыть «{name}». Разблокируйте телефон и выберите \
+                 на нём «Передача файлов»."
+            ));
+        }
+        let list = mimshel_folder::phones();
+        let open = ok.then_some((window, uri));
+        let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Phones { list, open })));
+    });
+}
+
+/// Rescan phones and cameras in a background thread (`gio` is slow).
+fn scan_phones(tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        let list = mimshel_folder::phones();
+        let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Phones {
+            list,
+            open: None,
+        })));
+    });
+}
+
+/// What the sidebar «Devices» depends on, cheap to read: mounted disks, gvfs
+/// mounts (phones) and plugged USB devices (a phone before it is mounted).
+fn devices_state() -> String {
+    let mut state = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let mut names = |dir: &Path| {
+        let mut list: Vec<String> = std::fs::read_dir(dir)
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        list.sort();
+        for n in list {
+            state.push_str(&n);
+            state.push('\n');
+        }
+    };
+    names(&mimshel_folder::gvfs_dir());
+    if let Ok(buses) = std::fs::read_dir("/dev/bus/usb") {
+        for bus in buses.flatten() {
+            names(&bus.path());
+        }
+    }
+    state
 }
 
 /// Следить за папкой окна: сразу и после каждой перемены присылать список
@@ -973,7 +1083,7 @@ fn watch(
         };
         // Подключённые диски: раз в ~2 с сверить — вставили флешку, и она
         // появится в боковой панели.
-        let mounts = || std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+        let mounts = devices_state;
         let mut known = mounts();
         let mut polls = 0u32;
         while !stop.load(Ordering::Relaxed) {

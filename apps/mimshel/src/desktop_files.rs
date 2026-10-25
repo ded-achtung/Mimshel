@@ -262,7 +262,10 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
         let mut cmd = Command::new(if moving { "mv" } else { "cp" });
         cmd.args(["--no-clobber", "-T"]);
         if !moving {
-            cmd.arg("-a");
+            // Phones (MTP over gvfs) do not keep owners and permissions:
+            // `cp -a` would copy the file and still report a failure.
+            let phone = dest.starts_with(mimshel_folder::gvfs_dir());
+            cmd.arg(if phone { "-r" } else { "-a" });
         }
         let ok = cmd
             .arg("--")

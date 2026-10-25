@@ -162,6 +162,8 @@ pub enum Action {
     Close,
     /// Извлечь подключённый диск.
     Eject(PathBuf),
+    /// Mount a phone or camera (its gvfs location), then open it.
+    Mount(String),
     /// Показать или спрятать скрытые файлы (Ctrl+H) — прочитать папку заново.
     ToggleHidden,
 }
@@ -802,8 +804,15 @@ impl FolderView {
                 }
             }
             Hit::Place(n) => {
-                let path = self.places[n].path.clone();
-                self.navigate(path)
+                let place = &self.places[n];
+                match &place.remote {
+                    // A phone that is not mounted yet has no folder to open.
+                    Some(uri) if !place.removable => Action::Mount(uri.clone()),
+                    _ => {
+                        let path = place.path.clone();
+                        self.navigate(path)
+                    }
+                }
             }
             Hit::Eject(n) => Action::Eject(self.places[n].path.clone()),
             Hit::Item(i) if ctrl => {
@@ -1749,6 +1758,7 @@ mod tests {
             icon: "folder-symbolic",
             section,
             removable,
+            remote: None,
         };
         let mut v = FolderView::new(
             PathBuf::from("/дом"),
@@ -1768,6 +1778,16 @@ mod tests {
             v.press(SIDEBAR_W - 10.0, fy + 5.0, 1, false, false),
             Action::Eject(PathBuf::from("/Флешка"))
         );
+        // A phone that is not mounted yet: a click mounts it, no navigation.
+        let mut places = v.places.clone();
+        places[2].remote = Some("mtp://Phone/".into());
+        places[2].removable = false;
+        v.set_places(places);
+        assert_eq!(
+            v.press(40.0, fy + 5.0, 1, false, false),
+            Action::Mount("mtp://Phone/".into())
+        );
+        assert_eq!(v.dir(), Path::new("/дом"));
         v.set_special(vec![(PathBuf::from("/дом/Папка"), "folder-documents")]);
         v.set_items(view(2).all);
         assert_eq!(v.items()[0].icons[0], "folder-documents");

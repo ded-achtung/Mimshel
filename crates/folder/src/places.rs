@@ -32,6 +32,9 @@ pub struct Place {
     pub section: Section,
     /// Подключённый диск, который можно извлечь (кнопка ⏏).
     pub removable: bool,
+    /// gvfs location of a phone or camera (`mtp://…/`). Such a place with
+    /// `removable == false` is not mounted yet: a click mounts it first.
+    pub remote: Option<String>,
 }
 
 /// Папки пользователя: (ключ в `user-dirs.dirs`, значок в боковой панели,
@@ -85,6 +88,7 @@ pub fn places() -> Vec<Place> {
             icon: "user-trash-symbolic",
             section: Section::Places,
             removable: false,
+            remote: None,
         },
     );
     list.push(Place {
@@ -93,6 +97,7 @@ pub fn places() -> Vec<Place> {
         icon: "drive-harddisk-symbolic",
         section: Section::Devices,
         removable: false,
+        remote: None,
     });
     let user = home
         .file_name()
@@ -116,6 +121,7 @@ fn from_user_dirs(text: &str, home: &Path) -> Vec<Place> {
         icon: "user-home-symbolic",
         section: Section::Places,
         removable: false,
+        remote: None,
     }];
     for (path, side, _) in user_dirs(text, home) {
         if side.is_empty() {
@@ -132,6 +138,7 @@ fn from_user_dirs(text: &str, home: &Path) -> Vec<Place> {
             icon: side,
             section: Section::Places,
             removable: false,
+            remote: None,
         });
     }
     list
@@ -189,9 +196,161 @@ fn removable(mounts: &str, user: &str) -> Vec<Place> {
                 icon: "drive-removable-media-symbolic",
                 section: Section::Devices,
                 removable: true,
+                remote: None,
             }
         })
         .collect()
+}
+
+/// gvfs schemes of phones and cameras, with their sidebar icons.
+const PHONE_SCHEMES: &[(&str, &str)] = &[
+    ("mtp", "phone-symbolic"),
+    ("afc", "phone-apple-iphone-symbolic"),
+    ("gphoto2", "camera-photo-symbolic"),
+];
+
+/// Folder where gvfs shows its mounts as ordinary files (FUSE).
+pub fn gvfs_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| PathBuf::from("/run/user").join(uid()))
+        .join("gvfs")
+}
+
+fn uid() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .unwrap_or_default()
+        .lines()
+        .find_map(|l| l.strip_prefix("Uid:"))
+        .and_then(|v| v.split_whitespace().next())
+        .unwrap_or("0")
+        .to_string()
+}
+
+/// Connected phones and cameras (MTP, iPhone, PTP) as gvfs sees them.
+/// Slow — `gio mount -li` takes about half a second, so call it from a
+/// background thread.
+pub fn phones() -> Vec<Place> {
+    let Ok(out) = std::process::Command::new("gio")
+        .args(["mount", "-li"])
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let gvfs = gvfs_dir();
+    let entries: Vec<String> = std::fs::read_dir(&gvfs)
+        .map(|dir| {
+            dir.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut list = phones_from(&String::from_utf8_lossy(&out.stdout), &gvfs, &entries);
+    // A phone usually has one storage («Internal shared storage») — open it
+    // right away instead of a folder with a single folder inside.
+    for p in list.iter_mut().filter(|p| p.removable) {
+        if let Some(only) = single_subdir(&p.path) {
+            p.path = only;
+        }
+    }
+    list
+}
+
+fn single_subdir(dir: &Path) -> Option<PathBuf> {
+    let mut entries = std::fs::read_dir(dir).ok()?.flatten();
+    let first = entries.next()?;
+    (entries.next().is_none() && first.file_type().ok()?.is_dir()).then(|| first.path())
+}
+
+/// Phones from the `gio mount -li` text. `entries` — names in the gvfs
+/// FUSE folder `gvfs`: a mounted phone has its folder there
+/// (`mtp:host=Xiaomi_…`).
+fn phones_from(gio: &str, gvfs: &Path, entries: &[String]) -> Vec<Place> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut volume = String::new();
+    for line in gio.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("Volume(") {
+            volume = rest
+                .split_once("): ")
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_default();
+            continue;
+        }
+        let entry = if let Some(uri) = line.strip_prefix("activation_root=") {
+            Some((volume.clone(), uri.to_string()))
+        } else if let Some(rest) = line.strip_prefix("Mount(") {
+            // A mount without a volume (or one gvfs mounted by itself).
+            rest.split_once("): ")
+                .and_then(|(_, m)| m.split_once(" -> "))
+                .map(|(n, u)| (n.to_string(), u.to_string()))
+        } else {
+            None
+        };
+        if let Some((name, uri)) = entry
+            && location(&uri).is_some()
+            && !found.iter().any(|(_, u)| *u == uri)
+        {
+            found.push((name, uri));
+        }
+    }
+    found
+        .into_iter()
+        .filter_map(|(name, uri)| {
+            let (scheme, host) = location(&uri)?;
+            let icon = PHONE_SCHEMES.iter().find(|(s, _)| *s == scheme)?.1;
+            let mounted = entries.iter().find(|e| {
+                e.split_once(":host=").is_some_and(|(s, h)| {
+                    s == scheme && percent_decode(h.split(',').next().unwrap_or(h)) == host
+                })
+            });
+            let path = match mounted {
+                Some(e) => gvfs.join(e),
+                None => gvfs.join(format!("{scheme}:host={host}")),
+            };
+            Some(Place {
+                name: if name.is_empty() { host } else { name },
+                path,
+                icon,
+                section: Section::Devices,
+                removable: mounted.is_some(),
+                remote: Some(uri),
+            })
+        })
+        .collect()
+}
+
+/// Scheme and host of a phone location: `mtp://Xiaomi_…/` → (`mtp`, `Xiaomi_…`).
+fn location(uri: &str) -> Option<(&str, String)> {
+    let (scheme, rest) = uri.split_once("://")?;
+    PHONE_SCHEMES
+        .iter()
+        .any(|(s, _)| *s == scheme)
+        .then_some(())?;
+    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
+    Some((scheme, percent_decode(host)))
+}
+
+/// `%5B` → `[` (gvfs escapes special characters in hosts).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let Some(v) = s
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// В `/proc/mounts` пробел и другие знаки записаны как `\040`.
@@ -253,6 +412,38 @@ mod tests {
         assert!(
             list.iter()
                 .all(|p| p.removable && p.section == Section::Devices)
+        );
+    }
+
+    #[test]
+    fn phones_from_gio() {
+        let gio = "Drive(0): KINGSTON\n  Volume(0): Том 917 Гб\n    uuid=6C1E\n\
+                   Volume(0): Xiaomi 13T Pro\n  Type: GProxyVolume (GProxyVolumeMonitorMTP)\n\
+                   \x20 activation_root=mtp://Xiaomi_13T_ABC/\n\
+                   \x20 Mount(0): Xiaomi 13T Pro -> mtp://Xiaomi_13T_ABC/\n\
+                   Mount(1): mtp -> mtp://Xiaomi_13T_ABC/\n\
+                   Volume(1): Canon\n  activation_root=gphoto2://%5Busb%3A001%2C007%5D/\n\
+                   Mount(2): Общий -> smb://nas/share/\n";
+        let gvfs = Path::new("/run/user/1000/gvfs");
+        // Not mounted yet: a click mounts it.
+        let list = phones_from(gio, gvfs, &[]);
+        let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Xiaomi 13T Pro", "Canon"], "no network shares");
+        assert!(!list[0].removable);
+        assert_eq!(list[0].remote.as_deref(), Some("mtp://Xiaomi_13T_ABC/"));
+        assert_eq!(list[0].icon, "phone-symbolic");
+        assert_eq!(list[1].icon, "camera-photo-symbolic");
+        // Mounted: its FUSE folder is there.
+        let entries = [
+            "mtp:host=Xiaomi_13T_ABC".to_string(),
+            "gphoto2:host=%5Busb%3A001%2C007%5D".to_string(),
+        ];
+        let list = phones_from(gio, gvfs, &entries);
+        assert!(list.iter().all(|p| p.removable));
+        assert_eq!(list[0].path, gvfs.join("mtp:host=Xiaomi_13T_ABC"));
+        assert_eq!(
+            list[1].path,
+            gvfs.join("gphoto2:host=%5Busb%3A001%2C007%5D")
         );
     }
 }
