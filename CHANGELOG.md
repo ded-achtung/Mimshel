@@ -1,37 +1,51 @@
-# История изменений
+# Changelog
 
-Документ ведётся с первого публично обозначенного предварительного этапа. **Mimshel** — принятое название проекта после создания первого альфа-тега; в теге исторически использовалось рабочее имя `shell`.
+Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
-## [Не выпущено]
+## [Unreleased]
 
-- **Own terminal** `mimshel terminal` (core: alacritty_terminal): tabs, menu in the top menu bar,
-  OSC 52, mouse for programs, font size. It is now the default: `[apps] terminal = ["mimshel",
-  "terminal", "-e"]`, a «Терминал Mimshel» launcher (`apply launchers`), an Xfce helper so
-  Ctrl+Alt+T and Thunar open it (`apply look`), the dock. kitty is no longer installed by default.
-- Commit messages and code comments are in English from 2026-10-25 (the user's decision).
+## [v0.0.2-alpha] — 2026-10-25
 
-- Аудит 25.10.2026: ярлык `.desktop` без права на выполнение больше не выдаётся за документ (подпись и
-  значок — не из файла) и перед запуском спрашивает, показав команду; экран блокировки берёт имя
-  пользователя у системы (`id -un`), а не из `$USER`; исправлен нестабильный тест окон в CI.
-- Терминал по умолчанию — **kitty** (Терминал Xfce не умеет OSC 52: текст из программ по SSH не попадал
-  в буфер обмена): `install.sh` ставит его, `mimshel apply look` делает его терминалом Xfce и кладёт
-  `~/.config/kitty/kitty.conf`, если своего нет; `restore` возвращает как было. Док и `[apps] terminal`
-  в новых настройках — kitty.
-- Блокировка по **Super+L** (`mimshel apply lock`; Ctrl+Alt+L у Xfce остаётся), проверка в `doctor`.
-- Док: запись `org.telegram.desktop` больше не превращается в `org.telegram` (значок Telegram пропадал).
+Second alpha. Tested daily on a real laptop (Tanshi X669: Ryzen 9 7940H, Radeon 780M + RTX 4070,
+EndeavourOS, Xfce 4.20, X11). From this release on, commit messages, code comments and the GitHub
+pages are in English.
 
-- Экспериментальная ветка `fix/master-audit-20261024` слита в `master` (25.10.2026) после проверки
-  GitHub Actions и замеров в ВМ: перетаскивание значка на столе — ~40 % меньше работы процессора
-  (перерисовываются только клетки), запуск, память и окна папок — без изменений.
-- Проводник: вид как у Thunar — строка пути и поиск, «Места» и «Устройства» (флешки с «извлечь»),
-  значки особых папок, строка состояния с размером и свободным местом, скрытые файлы (Ctrl+H).
-- Стол: значки не сдвигаются в освободившуюся клетку после переноса файла в папку или в корзину.
-- Утверждено название **Mimshel (Мимшел)**, и проект переименован везде (25.10.2026): команда `mimshel`
-  (`~/.local/bin/shell` остаётся ссылкой), пакеты `mimshel-*`, папки `~/.config|.local/state|.local/share|.cache/mimshel`,
-  сокет `mimshel.sock`, ярлыки `mimshel*.desktop`, пометки `X-Mimshel`/`mimshel-no-*`, класс окон `Mimshel`,
-  тема значков `Colloid-mimshel`, знак `mimshel-logo`, переменные `MIMSHEL_*`. Прежние имена программа узнаёт:
-  папки переносит сама, настройки и пометки заменяет при `mimshel apply`. Тег `v0.0.1-alpha` не тронут.
-- `doctor`: проверка темы значков учитывает готовые PNG (`Colloid-…-png`).
+### New
+
+- **Own terminal** `mimshel terminal` — now the default terminal. Core: `alacritty_terminal`
+  (Apache-2.0); window, rendering, tabs and input are Mimshel's own. Tabs (Ctrl+Shift+T/W,
+  Ctrl+PageUp/PageDown, Alt+1…9), an app menu in the top menu bar, colour emoji and CJK via
+  fallback fonts, mouse for htop/mc, OSC 52 clipboard (copy from programs over SSH), Ctrl+click
+  links, a scrollbar and scrollback keys for touchpads, Ctrl+wheel zoom, blinking cursor,
+  `-e PROGRAM` for apps with `Terminal=true`. Set up by `apply launchers` and `apply look`
+  (Ctrl+Alt+T, Thunar «open terminal here»).
+- **Wi-Fi panel** — nearby networks with signal and lock, connect with one click (NetworkManager).
+- **Bluetooth panel** — paired and nearby devices, pair and connect (BlueZ over D-Bus).
+- **Per-app volume** in the sound panel, like the Windows volume mixer.
+- **Discrete GPU launching** — apps that ask for it (`PrefersNonDefaultGPU`, e.g. Blender) start
+  on the NVIDIA GPU in hybrid mode; a dock menu item does it for any app.
+- **About this computer** — Mimshel's own window (the planet logo, all GPUs named properly).
+- **Window menus for own apps** — `crates/dbus/src/menu_export.rs` publishes DBusMenu menus.
+- File manager looks like Thunar: path bar, search, places and devices, status bar.
+- Lock screen on **Super+L**.
+
+### Fixed
+
+- Security: a `.desktop` file without the executable bit is no longer shown as a document and
+  asks before running (a downloaded «invoice.desktop» could pose as a PDF).
+- Lock screen: the user name comes from the system (`id -un`), not `$USER`; before suspend only
+  one lock screen starts (the password was asked twice).
+- Menu bar popups close on a click elsewhere or when another window becomes active (the
+  calendar kept the keyboard).
+- Alt+Tab shows the choice in the switcher instead of a window outline.
+- Dock: entries like `org.telegram.desktop` are no longer cut to `org.telegram`.
+- `doctor`: the laptop lid switch is not reported as a keyboard without layouts.
+- CI: the X11 window test no longer fails at random.
+
+### Changed
+
+- The project is named **Mimshel** everywhere (command `mimshel`, `~/.local/bin/shell` stays a link).
+- README is in English with a banner and a screenshot; the Russian one is `README.ru.md`.
 
 ## [v0.0.1-alpha] — 2026-10-25
 
