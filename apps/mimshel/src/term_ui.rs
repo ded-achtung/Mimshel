@@ -649,6 +649,45 @@ mod tests {
         }
     }
 
+    /// Две настоящие вкладки: полоска появляется, сетка под ней, щелчки по
+    /// полоске попадают куда нужно. `MIMSHEL_TAB_PNG=файл` — сохранить кадр.
+    #[test]
+    fn two_tabs_render_with_bar() {
+        let (tx, _rx) = mpsc::channel();
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0);
+        let mut tabs = Tabs {
+            list: Vec::new(),
+            active: 0,
+            next_id: 0,
+            cell: glyphs.cell,
+            tx,
+            ui_fonts: None,
+            hover: None,
+        };
+        tabs.open(None, (60, 10)).unwrap();
+        assert_eq!(tabs.bar_h(1.0), 0, "одна вкладка — без полоски");
+        tabs.open(None, (60, 10)).unwrap();
+        tabs.list[0].title = "mc [ded@ded-gamingseries]:~".into();
+        tabs.list[1].title = "ded@ded-gamingseries:~".into();
+        assert_eq!(tabs.active, 1, "новая вкладка — активная");
+        let bar = tabs.bar_h(1.0);
+        assert_eq!(bar, BAR_H as u32);
+        let w = 700;
+        assert_eq!(tabs.bar_hit(10.0, w, 1.0), Some(BarHit::Tab(0)));
+        let tw = tabs.tab_w(w, 1.0);
+        assert_eq!(tabs.bar_hit(tw - 5.0, w, 1.0), Some(BarHit::Close(0)));
+        assert_eq!(tabs.bar_hit(2.0 * tw + 5.0, w, 1.0), Some(BarHit::Plus));
+        tabs.hover = Some(BarHit::Tab(0));
+        let frame = tabs.render(&mut glyphs, (w, 260), 1.0, true).unwrap();
+        assert_eq!((frame.width(), frame.height()), (w, 260));
+        if let Some(path) = std::env::var_os("MIMSHEL_TAB_PNG") {
+            frame.save_png(path).unwrap();
+        }
+        tabs.close(0);
+        assert_eq!((tabs.list.len(), tabs.active), (1, 0));
+        assert_eq!(tabs.bar_h(1.0), 0, "снова одна — полоска ушла");
+    }
+
     #[test]
     fn tab_shortcuts() {
         assert!(matches!(
