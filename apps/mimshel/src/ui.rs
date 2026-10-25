@@ -768,6 +768,29 @@ impl Ui<'_> {
         // захватило). Иначе нажатия забирали стол или окно папки, если они
         // были активны, и в поиске ничего не набиралось.
         let to_panel = matches!(ev, Event::Key(_)) && self.shown.is_some();
+        // Щелчок по своему же окну (стол, док, окно папки, уведомление)
+        // приходит прямо ему, мимо захвата мыши всплывающим окном. Открытое
+        // окошко строки меню и центр уведомлений закрываются, как при щелчке
+        // по окну другой программы.
+        if let Event::Button { window, .. } = ev {
+            let on_menubar = self.menubar.as_ref().is_some_and(|m| m.owns(window));
+            let on_notify = self.notify.as_ref().is_some_and(|n| n.owns(window));
+            if let Some(menubar) = &mut self.menubar
+                && menubar.popup_open()
+                && !on_menubar
+            {
+                menubar.close_popup(self.display)?;
+            }
+            // Щелчок по строке меню центр не закрывает: колокольчик сам его
+            // открывает и закрывает.
+            if let Some(notify) = &mut self.notify
+                && notify.center_open()
+                && !on_notify
+                && !on_menubar
+            {
+                notify.close_center(self.display)?;
+            }
+        }
         // Одно событие может быть нужно и строке меню, и доку (например,
         // сменилось активное окно).
         let mut handled = false;

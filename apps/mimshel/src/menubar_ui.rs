@@ -257,11 +257,16 @@ impl MenubarUi {
         self.dirty = true;
     }
 
-    fn popup_open(&self) -> bool {
+    pub fn popup_open(&self) -> bool {
         self.menu.is_some()
             || self.sound_panel.is_some()
             || self.control_panel.is_some()
             || self.calendar.is_some()
+    }
+
+    /// Окно строки меню (сама полоса или её всплывающее окно).
+    pub fn owns(&self, window: u32) -> bool {
+        window == self.window.id() || window == self.popup.id()
     }
 
     /// Это событие для строки меню?
@@ -451,6 +456,9 @@ impl MenubarUi {
                     self.dirty = true;
                 }
                 if d.active_window() != self.app_window {
+                    // Перешли в другое окно — открытое окошко больше не нужно
+                    // (и не должно держать клавиатуру).
+                    self.close_popup(d)?;
                     self.load_app_menu(d, None);
                 }
             }

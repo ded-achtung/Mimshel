@@ -239,6 +239,12 @@ impl CalendarPanel {
     }
 
     pub fn press(&mut self, x: f32, y: f32) -> CalendarAction {
+        // Щелчок мимо календаря (мышь захвачена, сюда приходят и чужие
+        // щелчки) — закрыть, как остальные окошки строки меню.
+        let (w, h) = self.size();
+        if !(0.0..w as f32).contains(&x) || !(0.0..h as f32).contains(&y) {
+            return CalendarAction::Close;
+        }
         match self.spot_at(x, y) {
             Some(Spot::Prev) => self.flip(-1),
             Some(Spot::Next) => self.flip(1),
@@ -449,6 +455,11 @@ mod tests {
         assert_eq!(c.press(40.0, PAD + 5.0), CalendarAction::Redraw);
         assert_eq!(c.shown(), (2026, 12));
         assert_eq!(c.key(Key::Escape), CalendarAction::Close);
+        // Щелчок мимо календаря (по другому окну) — закрыть.
+        let (w, h) = c.size();
+        assert_eq!(c.press(-5.0, 10.0), CalendarAction::Close);
+        assert_eq!(c.press(w as f32 + 1.0, 10.0), CalendarAction::Close);
+        assert_eq!(c.press(10.0, h as f32 + 1.0), CalendarAction::Close);
 
         let mut fonts = Fonts::new("Inter");
         let pm = c.render(&mut fonts);

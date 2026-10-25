@@ -256,6 +256,11 @@ impl NotifyUi {
         self.history.truncate(HISTORY);
     }
 
+    /// Окно уведомлений (баннеры или центр).
+    pub fn owns(&self, window: u32) -> bool {
+        window == self.popup.id() || window == self.center_popup.id()
+    }
+
     /// Открыть центр уведомлений или закрыть, если открыт.
     pub fn toggle_center(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
         if self.center.is_some() {
