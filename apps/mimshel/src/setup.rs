@@ -193,8 +193,42 @@ fn swap_file_manager(text: &str, shell: bool) -> Option<String> {
     set_value(&text, "apps", "hide", toml_edit::Value::Array(hide))
 }
 
-/// `mimshel apply [части]`.
-pub fn apply_cmd(parts: &[String]) -> i32 {
+/// `mimshel apply [части]`. `greeter` (the login screen) is handled apart:
+/// it asks for the sudo password and never restarts the service, so it is
+/// not part of the plain apply-all — `mimshel apply greeter [--dry-run]`.
+pub fn apply_cmd(args: &[String]) -> i32 {
+    let mut dry = false;
+    let mut greeter = false;
+    let mut rest: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--dry-run" => dry = true,
+            "greeter" => greeter = true,
+            other => rest.push(other.to_string()),
+        }
+    }
+    if greeter {
+        let mut code = match mimshel_setup::greeter::apply(&load_config(), dry) {
+            Ok(()) => 0,
+            Err(e) => {
+                println!("✘ {e}");
+                1
+            }
+        };
+        if code == 0 && !rest.is_empty() {
+            code = apply_parts(&rest);
+        }
+        return code;
+    }
+    if dry {
+        println!("✘ --dry-run умеет только: mimshel apply greeter --dry-run");
+        return 2;
+    }
+    apply_parts(args)
+}
+
+/// Parts listed in `APPLY_PARTS` (the plain `mimshel apply [части…]`).
+fn apply_parts(parts: &[String]) -> i32 {
     let mut list = Vec::new();
     for p in parts {
         let p = match p.as_str() {

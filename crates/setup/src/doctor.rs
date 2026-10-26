@@ -243,6 +243,19 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "",
     );
 
+    // Экран входа (LightDM): информационно, не ошибка ни в одном случае.
+    let greeter_styled = crate::greeter::is_ours(&read(Path::new(crate::greeter::CONF)));
+    add(
+        "greeter",
+        if greeter_styled {
+            "экран входа в систему — оформление Mimshel"
+        } else {
+            "экран входа в систему — стандартный (mimshel apply greeter — оформить)"
+        },
+        true,
+        "",
+    );
+
     // Строка меню: своя или панель Xfce.
     if cfg.menubar {
         add(

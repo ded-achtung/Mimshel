@@ -209,6 +209,18 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
     if !dry {
         crate::terminal::cleanup()?;
     }
+    // Login screen (LightDM): our slick-greeter.conf plus the files under
+    // /usr/local/share. Without a terminal `undo` only prints the sudo
+    // command and the restore continues.
+    if crate::greeter::is_ours(&read(Path::new(crate::greeter::CONF))) {
+        step("вернуть исходный конфиг экрана входа (LightDM)");
+        for p in crate::greeter::installed_paths() {
+            step(&format!("удалить {p}"));
+        }
+        if !dry && let Err(e) = crate::greeter::undo() {
+            println!("⚠ Экран входа в систему не откачен: {e}");
+        }
+    }
     step("перезапустить настройки, окна, рабочий стол и панель Xfce");
     if !dry {
         spawn(&["xfsettingsd", "--replace"]);

@@ -46,9 +46,13 @@ const HELP: &str = "\
   mimshel set [--no-apply] КЛЮЧ ЗНАЧЕНИЕ
                         поменять настройку и применить (например: mimshel set dock.icon_size 56,
                         mimshel set parts.dock plank — вернуть Plank)
-  mimshel apply [ЧАСТЬ…]  применить заново: menubar dock notify launchers lock power service
-                        (launchers — сочетания клавиш окон «Поиск» и «Программы»)
-                        (без частей — все)
+  mimshel apply [ЧАСТЬ…]  применить заново: menubar dock notify desktop folders
+                        launchers lock power icons look wallpaper service
+                        (launchers — сочетания клавиш окон «Поиск» и «Программы»;
+                        без частей — все)
+  mimshel apply greeter [--dry-run]
+                        оформить экран входа в систему (LightDM): свои обои, тема,
+                        курсор и шрифт (нужен пароль sudo; --dry-run — только показать)
   mimshel lock            заблокировать экран (свой экран блокировки; упадёт без пароля —
                         сторож запустит снова)
   mimshel snapshot lock ТЕКСТ ФАЙЛ.png
