@@ -216,6 +216,9 @@ fn translate_about_value(lang: mimshel_core::i18n::Language, value: &str) -> Str
             };
         }
     }
+    if let Some(n) = value.strip_suffix(" ГБ") {
+        return format!("{n} GB");
+    }
     if let Some(base) = value.strip_suffix(" потоков)") {
         if let Some((head, n)) = base.rsplit_once(" (") {
             return match lang.resolve() {
