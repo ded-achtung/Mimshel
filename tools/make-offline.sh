@@ -39,6 +39,8 @@ pack Colloid-gtk-theme "$COLLOID_GTK_URL" "$COLLOID_GTK_REV"
 
 echo "▶ Библиотеки Rust"
 cargo vendor --quiet --locked --offline "$WORK/Mimshel/offline/vendor" >/dev/null
+# install.sh uses the vendored crates only for this exact Cargo.lock.
+sha256sum <Cargo.lock | cut -d' ' -f1 >"$WORK/Mimshel/offline/vendor.lock-sha256"
 
 mkdir -p "$OUT"
 tar czf "$OUT/mimshel-offline.tar.gz" -C "$WORK" Mimshel

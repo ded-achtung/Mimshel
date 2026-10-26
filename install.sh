@@ -109,7 +109,16 @@ fi
 
 # --- Сама программа ---------------------------------------------------------
 step "Собираю Mimshel (первый раз — несколько минут)"
-if [ -d "$ROOT/offline/vendor" ]; then
+# Vendored crates only if they were made for this Cargo.lock: a stale
+# offline/ folder (an older archive unpacked here) must not break the build.
+vendor_ok() {
+    [ -d "$ROOT/offline/vendor" ] && [ -f "$ROOT/offline/vendor.lock-sha256" ] \
+        && [ "$(cat "$ROOT/offline/vendor.lock-sha256")" = "$(sha256sum <"$ROOT/Cargo.lock" | cut -d' ' -f1)" ]
+}
+if [ -d "$ROOT/offline/vendor" ] && ! vendor_ok; then
+    warn "offline/vendor собран для другой версии — собираю с crates.io"
+fi
+if vendor_ok; then
     # Библиотеки Rust из архива — без обращения к crates.io.
     (cd "$ROOT" && cargo build --release --locked --offline \
         --config 'source.crates-io.replace-with="vendored"' \
