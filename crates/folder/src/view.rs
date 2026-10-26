@@ -1064,7 +1064,7 @@ impl FolderView {
             format!(
                 "  |  {}: {}",
                 mimshel_core::i18n::t(self.language, "status.free"),
-                human_size(f)
+                human_size(self.language, f)
             )
         });
         let items = self.selected_items();
@@ -1089,7 +1089,7 @@ impl FolderView {
                     parts.push(format!(
                         "{n} {}: {}",
                         count_word(self.language, n, "file"),
-                        size_with_bytes(size)
+                        size_with_bytes(self.language, size)
                     ));
                 }
                 parts.join("  |  ")
@@ -1103,7 +1103,11 @@ impl FolderView {
                 };
                 format!("«{}»  |  {}", one.name, noun)
             }
-            [one] => format!("«{}»  |  {}", one.name, size_with_bytes(one.size)),
+            [one] => format!(
+                "«{}»  |  {}",
+                one.name,
+                size_with_bytes(self.language, one.size)
+            ),
             many => {
                 let size: u64 = many.iter().map(|i| i.size).sum();
                 let n = many.len();
@@ -1111,18 +1115,21 @@ impl FolderView {
                     mimshel_core::i18n::Language::En => format!(
                         "Selected: {n} {}: {}",
                         if n == 1 { "item" } else { "items" },
-                        size_with_bytes(size)
+                        size_with_bytes(self.language, size)
                     ),
                     mimshel_core::i18n::Language::Zh => {
-                        format!("已选: {n} 个项目: {}", size_with_bytes(size))
+                        format!("已选: {n} 个项目: {}", size_with_bytes(self.language, size))
                     }
                     mimshel_core::i18n::Language::ZhTw => {
-                        format!("已選取：{n} 個項目：{}", size_with_bytes(size))
+                        format!(
+                            "已選取：{n} 個項目：{}",
+                            size_with_bytes(self.language, size)
+                        )
                     }
                     _ => format!(
                         "Выделено: {n} {}: {}",
                         plural(n, ["объект", "объекта", "объектов"]),
-                        size_with_bytes(size)
+                        size_with_bytes(self.language, size)
                     ),
                 }
             }
@@ -1492,37 +1499,65 @@ fn plural(n: usize, [one, few, many]: [&'static str; 3]) -> &'static str {
 }
 
 /// Размер словами, как у Thunar: «73,1 КиБ».
-fn human_size(bytes: u64) -> String {
+fn human_size(lang: mimshel_core::i18n::Language, bytes: u64) -> String {
+    let lang = lang.resolve();
     if bytes < 1024 {
-        return format!(
-            "{bytes} {}",
-            plural(bytes as usize, ["байт", "байта", "байт"])
-        );
+        let word = match lang {
+            mimshel_core::i18n::Language::En => {
+                if bytes == 1 {
+                    "byte"
+                } else {
+                    "bytes"
+                }
+            }
+            mimshel_core::i18n::Language::Zh => "字节",
+            mimshel_core::i18n::Language::ZhTw => "位元組",
+            _ => plural(bytes as usize, ["байт", "байта", "байт"]),
+        };
+        return format!("{bytes} {word}");
     }
-    let units = ["КиБ", "МиБ", "ГиБ", "ТиБ"];
+    let units = match lang {
+        mimshel_core::i18n::Language::Ru => ["КиБ", "МиБ", "ГиБ", "ТиБ"],
+        _ => ["KiB", "MiB", "GiB", "TiB"],
+    };
     let mut value = bytes as f64 / 1024.0;
     let mut unit = 0;
     while value >= 1024.0 && unit < units.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
-    format!("{value:.1} {}", units[unit]).replace('.', ",")
+    let text = format!("{value:.1} {}", units[unit]);
+    match lang {
+        mimshel_core::i18n::Language::Ru => text.replace('.', ","),
+        _ => text,
+    }
 }
 
 /// «73,1 КиБ (74 846 байт)»; меньше килобайта — просто байты.
-fn size_with_bytes(bytes: u64) -> String {
+fn size_with_bytes(lang: mimshel_core::i18n::Language, bytes: u64) -> String {
     if bytes < 1024 {
-        return human_size(bytes);
+        return human_size(lang, bytes);
     }
+    let lang = lang.resolve();
+    let sep = match lang {
+        mimshel_core::i18n::Language::Ru => '\u{a0}',
+        _ => ',',
+    };
+    let word = match lang {
+        mimshel_core::i18n::Language::En => "bytes",
+        mimshel_core::i18n::Language::Zh => "字节",
+        mimshel_core::i18n::Language::ZhTw => "位元組",
+        _ => "байт",
+    };
     let digits = bytes.to_string();
     let mut grouped = String::new();
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            grouped.push('\u{a0}');
+            grouped.push(sep);
         }
         grouped.push(c);
     }
-    format!("{} ({grouped} байт)", human_size(bytes))
+    format!("{} ({grouped} {word})", human_size(lang, bytes))
 }
 
 /// Прямоугольник рамки между точкой начала и указателем.
@@ -1692,8 +1727,36 @@ mod tests {
         assert!(v.status().starts_with("«файл1.txt»  |  1000 байт"));
         v.selected = vec![1, 2];
         assert!(v.status().starts_with("Выделено: 2 объекта: 2,0 КиБ"));
-        assert_eq!(human_size(500), "500 байт");
-        assert_eq!(human_size(74_846), "73,1 КиБ");
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::Ru, 500),
+            "500 байт"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::Ru, 74_846),
+            "73,1 КиБ"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::En, 500),
+            "500 bytes"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::En, 74_846),
+            "73.1 KiB"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::Zh, 74_846),
+            "73.1 KiB"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::ZhTw, 74_846),
+            "73.1 KiB"
+        );
+        v.set_language(mimshel_core::i18n::Language::En);
+        v.selected = vec![];
+        assert_eq!(
+            v.status(),
+            "1 folder  |  3 files: 2.9 KiB (3,000 bytes)  |  Free: 42.8 GiB"
+        );
     }
 
     #[test]

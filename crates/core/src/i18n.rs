@@ -136,6 +136,30 @@ pub fn t(lang: Language, key: &str) -> &str {
             "系統監控",
         ),
         "app.home" => ("Home", "Домашняя папка", "主文件夹", "家目錄"),
+        // --- Apple / start menu (top-left logo menu) ---
+        "apple.about" => (
+            "About This Computer",
+            "Об этом компьютере",
+            "关于本机",
+            "關於這台電腦",
+        ),
+        "apple.settings" => (
+            "System Settings…",
+            "Системные настройки…",
+            "系统设置…",
+            "系統設定…",
+        ),
+        "apple.forcequit" => (
+            "Force Quit…",
+            "Принудительно завершить…",
+            "强制退出…",
+            "強制結束…",
+        ),
+        "apple.sleep" => ("Sleep", "Режим сна", "睡眠", "睡眠"),
+        "apple.restart" => ("Restart…", "Перезагрузить…", "重新启动…", "重新啟動…"),
+        "apple.shutdown" => ("Shut Down…", "Выключить…", "关机…", "關機…"),
+        "apple.lock" => ("Lock Screen", "Заблокировать экран", "锁定屏幕", "鎖定螢幕"),
+        "apple.logout" => ("Log Out…", "Завершить сеанс…", "退出登录…", "登出…"),
         // --- Terminal window menus (macOS-style) ---
         "menu.shell" => ("Shell", "Оболочка", "Shell", "Shell"),
         "menu.edit" => ("Edit", "Правка", "编辑", "編輯"),
@@ -318,6 +342,14 @@ pub const KEYS: &[&str] = &[
     "status.folders",
     "status.files",
     "status.free",
+    "apple.about",
+    "apple.settings",
+    "apple.forcequit",
+    "apple.sleep",
+    "apple.restart",
+    "apple.shutdown",
+    "apple.lock",
+    "apple.logout",
 ];
 
 #[cfg(test)]

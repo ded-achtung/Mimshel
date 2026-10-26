@@ -767,6 +767,27 @@ impl MenubarUi {
         self.show_popup(d, part, x, size)
     }
 
+    fn apple_label(lang: mimshel_core::i18n::Language, item: &AppleItem) -> String {
+        let action = item
+            .command
+            .iter()
+            .position(|c| c == "action")
+            .and_then(|i| item.command.get(i + 1))
+            .map(|s| s.as_str());
+        let key = match action {
+            Some("about") => "apple.about",
+            Some("settings") => "apple.settings",
+            Some("forcequit") => "apple.forcequit",
+            Some("sleep") => "apple.sleep",
+            Some("restart") => "apple.restart",
+            Some("shutdown") => "apple.shutdown",
+            Some("lock") => "apple.lock",
+            Some("logout") => "apple.logout",
+            _ => return item.label.clone(),
+        };
+        mimshel_core::i18n::t(lang, key).to_string()
+    }
+
     fn open_apple(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
         // Пункты перечитываем: `mimshel apply launchers` мог их поменять.
         self.apple = apple_menu(&apple_menu_file());
@@ -774,7 +795,10 @@ impl MenubarUi {
             .apple
             .iter()
             .enumerate()
-            .map(|(i, item)| entry(&item.label, Cmd::Apple(i), false, item.separator_before))
+            .map(|(i, item)| {
+                let label = Self::apple_label(self.language, item);
+                entry(&label, Cmd::Apple(i), false, item.separator_before)
+            })
             .collect();
         self.open_menu(d, fonts, Part::Apple, "apple".into(), x, entries)
     }
@@ -1228,7 +1252,10 @@ impl MenubarUi {
             self.apps
                 .iter()
                 .find(|a| a.id == "thunar.desktop")
-                .map_or_else(|| "Проводник".to_string(), |a| a.name.clone())
+                .map_or_else(
+                    || mimshel_core::i18n::t(self.language, "app.file_manager").to_string(),
+                    |a| a.name.clone(),
+                )
         };
         let Some(info) = d.active_window().and_then(|w| d.window_info(w)) else {
             return desktop();
