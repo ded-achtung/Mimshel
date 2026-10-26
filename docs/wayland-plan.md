@@ -83,6 +83,35 @@ write our own window manager".
    handling (the compositor's own crash reports, the shell's guard).
 4. **Polish on the GPU**: live wallpapers, blur, window animations.
 
+## Phase 0 results (2026-10-26) — GO
+
+`probes/compositor-probe` (Smithay 0.7.0, winit backend nested in the X11
+session, GLES on the laptop's Radeon 780M; the panel runs at ~165 Hz, so the
+real budget is ~6 ms). `render` = the compositor's own CPU+GPU work until the
+GPU finished; `present` (waiting for vblank) is excluded.
+
+| Case | render avg | p99 |
+|---|---|---|
+| 1280x800, vsync, wallpaper + dock | 0.69 ms | 0.95 ms |
+| 1280x800, unthrottled | 0.39 ms | 0.87 ms |
+| 1920x1141 (whole free screen), unthrottled | 0.66 ms | 1.2–1.6 ms |
+| same, no wallpaper (dock only) | 0.31 ms | 0.71 ms |
+| same, no dock (wallpaper only) | 0.61 ms | 1.15 ms |
+| 1920x1141, vsync, wallpaper + dock | 0.90 ms | 1.17 ms |
+| same + two kitty clients scrolling text | 0.89–0.92 ms | 2.1–2.4 ms |
+
+- The dock zoom costs ~0.06 ms; a full-screen shader wallpaper ~0.35 ms.
+- 4K could not be shown in a window on this screen; scaling the measured
+  per-pixel cost gives roughly 2–2.5 ms — still inside a 120 Hz budget.
+- Rare spikes (max 6–11 ms, below p99) appear while nested inside xfwm4's
+  compositor; re-check on the real DRM path in phase 3.
+- Not yet measured: a VM without a GPU, the NVIDIA dGPU, XWayland clients
+  (xorg-xwayland is not installed on the laptop yet).
+
+Conclusion: GPU rendering with GLES in a Smithay compositor keeps far inside
+the frame budget with a live wallpaper, the dock animation and real
+windows. Next: phase 1 (the platform boundary in today's shell).
+
 ## Risks to watch
 
 - NVIDIA in the hybrid setup on Wayland (better than before, still the
