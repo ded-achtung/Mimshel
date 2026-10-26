@@ -335,7 +335,23 @@ fn listing_line(path: &Path) -> String {
         .as_deref()
         .and_then(common::report_summary)
         .unwrap_or_else(|| common::exit_reason(Some(101), None));
-    common::listing_line(at, id, &reason, &path.display().to_string())
+    // Reports keep UTC (the panic hook must not run `date`); a person
+    // reads local time. Here, in a plain command, `date` is fine.
+    let when = common::stamp_seconds(&name)
+        .and_then(local_time)
+        .unwrap_or_else(|| format!("{} UTC", common::pretty(at)));
+    common::listing_line(&when, id, &reason, &path.display().to_string())
+}
+
+/// `secs` since the epoch as local "YYYY-MM-DD HH:MM:SS", via `date`.
+fn local_time(secs: u64) -> Option<String> {
+    let out = std::process::Command::new("date")
+        .args(["-d", &format!("@{secs}"), "+%F %T"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    let text = text.trim();
+    (out.status.success() && !text.is_empty()).then(|| text.to_string())
 }
 
 /// A report file name -> (time, component, pid). The time is the first 19
