@@ -93,7 +93,14 @@ impl SearchPanel {
         let text_y = (bar - ENTRY.line_height()) / 2.0;
         let text_w = wf - text_x - BAR_PAD_X;
         if self.field.is_empty() {
-            fonts.draw(&mut pm, "Поиск", &PLACEHOLDER, text_x, text_y, Some(text_w));
+            fonts.draw(
+                &mut pm,
+                mimshel_core::i18n::t(self.language, "panel.search"),
+                &PLACEHOLDER,
+                text_x,
+                text_y,
+                Some(text_w),
+            );
         } else {
             fonts.draw(
                 &mut pm,

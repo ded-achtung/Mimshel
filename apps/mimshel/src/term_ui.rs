@@ -462,45 +462,46 @@ enum Cmd {
 
 /// The window menu in the top menu bar, like macOS Terminal. Item ids
 /// come back on click ([`menu_cmd`]).
-fn menus() -> Vec<MenuSpec> {
+fn menus(lang: mimshel_core::i18n::Language) -> Vec<MenuSpec> {
+    let tr = |k: &'static str| mimshel_core::i18n::t(lang, k);
     vec![
         MenuSpec::menu(
             1,
-            "Оболочка",
+            tr("menu.shell"),
             vec![
-                MenuSpec::item(101, "Новое окно"),
-                MenuSpec::item(102, "Новая вкладка    Ctrl+Shift+T"),
+                MenuSpec::item(101, tr("term.new_window")),
+                MenuSpec::item(102, &format!("{}    Ctrl+Shift+T", tr("term.new_tab"))),
                 MenuSpec::separator(103),
-                MenuSpec::item(104, "Закрыть вкладку    Ctrl+Shift+W"),
-                MenuSpec::item(105, "Закрыть окно"),
+                MenuSpec::item(104, &format!("{}    Ctrl+Shift+W", tr("term.close_tab"))),
+                MenuSpec::item(105, tr("term.close_window")),
             ],
         ),
         MenuSpec::menu(
             2,
-            "Правка",
+            tr("menu.edit"),
             vec![
-                MenuSpec::item(201, "Копировать    Ctrl+Shift+C"),
-                MenuSpec::item(202, "Вставить    Ctrl+Shift+V"),
-                MenuSpec::item(203, "Выделить всё"),
+                MenuSpec::item(201, &format!("{}    Ctrl+Shift+C", tr("term.copy"))),
+                MenuSpec::item(202, &format!("{}    Ctrl+Shift+V", tr("term.paste"))),
+                MenuSpec::item(203, tr("term.select_all")),
                 MenuSpec::separator(204),
-                MenuSpec::item(205, "Очистить историю"),
+                MenuSpec::item(205, tr("term.clear_history")),
             ],
         ),
         MenuSpec::menu(
             3,
-            "Вид",
+            tr("menu.view"),
             vec![
-                MenuSpec::item(301, "Крупнее    Ctrl+Shift+="),
-                MenuSpec::item(302, "Мельче    Ctrl+Shift+−"),
-                MenuSpec::item(303, "Обычный размер    Ctrl+Shift+0"),
+                MenuSpec::item(301, &format!("{}    Ctrl+Shift+=", tr("term.zoom_in"))),
+                MenuSpec::item(302, &format!("{}    Ctrl+Shift+−", tr("term.zoom_out"))),
+                MenuSpec::item(303, &format!("{}    Ctrl+Shift+0", tr("term.zoom_reset"))),
             ],
         ),
         MenuSpec::menu(
             4,
-            "Окно",
+            tr("menu.window"),
             vec![
-                MenuSpec::item(401, "Следующая вкладка    Ctrl+PageDown"),
-                MenuSpec::item(402, "Предыдущая вкладка    Ctrl+PageUp"),
+                MenuSpec::item(401, &format!("{}    Ctrl+PageDown", tr("term.next_tab"))),
+                MenuSpec::item(402, &format!("{}    Ctrl+PageUp", tr("term.prev_tab"))),
             ],
         ),
     ]
@@ -973,7 +974,8 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
             (h as f32 / scale).ceil() as u32,
         )
     };
-    let win = d.create_app_window(WINDOW_CLASS, TITLE, to_pt(px(START)), to_pt(px((20, 4))))?;
+    let title = mimshel_core::i18n::t(crate::ui::load_config().language, "app.terminal");
+    let win = d.create_app_window(WINDOW_CLASS, title, to_pt(px(START)), to_pt(px((20, 4))))?;
 
     let mut tabs = Tabs {
         list: Vec::new(),
@@ -1003,9 +1005,13 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
     // re-registered whenever the service restarts. Fails only without a
     // session bus.
     let menu_tx = tx.clone();
-    let _menu = match mimshel_dbus::menu_export::export(win.id(), menus(), move |id| {
-        let _ = menu_tx.send(Wake::Menu(id));
-    }) {
+    let _menu = match mimshel_dbus::menu_export::export(
+        win.id(),
+        menus(crate::ui::load_config().language),
+        move |id| {
+            let _ = menu_tx.send(Wake::Menu(id));
+        },
+    ) {
         Ok(m) => Some(m),
         Err(e) => {
             eprintln!("Терминал: меню в строке меню не выставлено: {e}");
@@ -1266,7 +1272,7 @@ mod tests {
         // Menu and keys share the same commands.
         assert_eq!(menu_cmd(102), Some(Cmd::NewTab));
         assert_eq!(menu_cmd(103), None, "separator");
-        let ids: Vec<i32> = menus()
+        let ids: Vec<i32> = menus(mimshel_core::i18n::Language::Ru)
             .iter()
             .flat_map(|m| m.children.iter().filter(|i| !i.separator).map(|i| i.id))
             .collect();

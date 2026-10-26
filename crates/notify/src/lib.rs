@@ -421,6 +421,8 @@ pub struct Center {
     pub list: Banners,
     /// Указатель над «Очистить».
     pub hover_clear: bool,
+    /// Interface language for header/clear/empty (default: Russian).
+    pub language: mimshel_core::i18n::Language,
 }
 
 /// Что нажали в центре уведомлений.
@@ -439,8 +441,6 @@ const HEADER_TEXT: Style = Style {
     color: [0xf2, 0xf2, 0xf2, 0xff],
     weight: 700,
 };
-const CLEAR: &str = "Очистить";
-const EMPTY: &str = "Нет уведомлений";
 
 impl Center {
     /// Карточки из истории (иконки подобрала служба), в высоту не больше `max_h`.
@@ -456,6 +456,19 @@ impl Center {
         Center {
             list,
             hover_clear: false,
+            language: mimshel_core::i18n::Language::Ru,
+        }
+    }
+
+    fn clear_text(&self) -> &'static str {
+        mimshel_core::i18n::t(self.language, "notify.clear")
+    }
+
+    fn empty_text(&self) -> &'static str {
+        match self.language.resolve() {
+            mimshel_core::i18n::Language::En => "No notifications",
+            mimshel_core::i18n::Language::Zh => "没有通知",
+            _ => "Нет уведомлений",
         }
     }
 
@@ -469,13 +482,13 @@ impl Center {
         (WIDTH as u32, h.ceil() as u32)
     }
 
-    fn clear_rect(fonts: &mut Fonts) -> (f32, f32) {
-        let w = fonts.measure(CLEAR, &BUTTON_TEXT) + 24.0;
+    fn clear_rect(&self, fonts: &mut Fonts) -> (f32, f32) {
+        let w = fonts.measure(self.clear_text(), &BUTTON_TEXT) + 24.0;
         (WIDTH - PAD - w, w)
     }
 
     pub fn motion(&mut self, fonts: &mut Fonts, x: f32, y: f32) -> bool {
-        let (cx, cw) = Self::clear_rect(fonts);
+        let (cx, cw) = self.clear_rect(fonts);
         let clear = (6.0..HEADER - 6.0).contains(&y) && (cx..cx + cw).contains(&x);
         let cards = self.list.motion(fonts, x, y - HEADER - GAP);
         let changed = clear != self.hover_clear || cards;
@@ -485,7 +498,7 @@ impl Center {
 
     /// Щелчок; `None` за краями — закрыть центр (решает служба).
     pub fn hit(&self, fonts: &mut Fonts, x: f32, y: f32) -> Option<CenterHit> {
-        let (cx, cw) = Self::clear_rect(fonts);
+        let (cx, cw) = self.clear_rect(fonts);
         if y < HEADER {
             return (x >= cx && x < cx + cw && !self.list.items.is_empty())
                 .then_some(CenterHit::Clear);
@@ -513,25 +526,46 @@ impl Center {
         // Заголовок — своей карточкой: панель лежит прямо на обоях.
         fill(&mut pm, rounded(0.0, 0.0, WIDTH, HEADER, RADIUS), BG);
         let ty = ((HEADER - HEADER_TEXT.line_height()) / 2.0).round();
-        fonts.draw(&mut pm, "Уведомления", &HEADER_TEXT, PAD + 2.0, ty, None);
+        fonts.draw(
+            &mut pm,
+            mimshel_core::i18n::t(self.language, "notify.notifications"),
+            &HEADER_TEXT,
+            PAD + 2.0,
+            ty,
+            None,
+        );
         if !self.list.items.is_empty() {
-            let (cx, cw) = Self::clear_rect(fonts);
+            let (cx, cw) = self.clear_rect(fonts);
             let c = if self.hover_clear {
                 BUTTON_HOVER
             } else {
                 BUTTON
             };
             fill(&mut pm, rounded(cx, 7.0, cw, HEADER - 14.0, 7.0), c);
-            let tw = fonts.measure(CLEAR, &BUTTON_TEXT);
+            let tw = fonts.measure(self.clear_text(), &BUTTON_TEXT);
             let by = ((HEADER - BUTTON_TEXT.line_height()) / 2.0).round();
-            fonts.draw(&mut pm, CLEAR, &BUTTON_TEXT, cx + (cw - tw) / 2.0, by, None);
+            fonts.draw(
+                &mut pm,
+                self.clear_text(),
+                &BUTTON_TEXT,
+                cx + (cw - tw) / 2.0,
+                by,
+                None,
+            );
         }
         let top = HEADER + GAP;
         if self.list.items.is_empty() {
             fill(&mut pm, rounded(0.0, top, WIDTH, 60.0, RADIUS), BG);
-            let tw = fonts.measure(EMPTY, &BODY);
+            let tw = fonts.measure(self.empty_text(), &BODY);
             let ey = top + ((60.0 - BODY.line_height()) / 2.0).round();
-            fonts.draw(&mut pm, EMPTY, &APP, (WIDTH - tw) / 2.0, ey, None);
+            fonts.draw(
+                &mut pm,
+                self.empty_text(),
+                &APP,
+                (WIDTH - tw) / 2.0,
+                ey,
+                None,
+            );
         } else {
             let cards = self.list.render(fonts);
             pm.draw_canvas(0.0, top, &cards, &PixmapPaint::default());
@@ -639,7 +673,7 @@ mod tests {
         let c = Center::new(&mut fonts, items, 500.0);
         assert!(c.list.items.len() < 20, "не влезли — не показываем");
         assert!(c.size(&mut fonts).1 <= 500);
-        let (cx, _) = Center::clear_rect(&mut fonts);
+        let (cx, _) = c.clear_rect(&mut fonts);
         assert_eq!(
             c.hit(&mut fonts, cx + 5.0, HEADER / 2.0),
             Some(CenterHit::Clear)

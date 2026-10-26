@@ -297,7 +297,7 @@ impl AppsPanel {
         let ty = y + (h - SEARCH_TEXT.line_height()) / 2.0;
         let gy = y + (h - glass) / 2.0;
         if self.field.is_empty() {
-            let label = "Поиск";
+            let label = mimshel_core::i18n::t(self.language, "panel.search");
             let tw = fonts.measure(label, &PLACEHOLDER);
             let gx = x + (w - (glass + 6.0 + tw)) / 2.0;
             magnifier(pm, gx, gy, glass, GLASS);

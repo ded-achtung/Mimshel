@@ -5,6 +5,8 @@
 
 use toml_edit::{Array, DocumentMut, Value};
 
+use crate::i18n::Language;
+
 /// Когда прятать док.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockHide {
@@ -24,6 +26,9 @@ pub struct Config {
     pub font: String,
     /// Тема иконок.
     pub icon_theme: String,
+    /// Interface language: `auto` (default, follow system locale), `en`,
+    /// `ru` or `zh`. See `crate::i18n`. Resolved via `language.resolve()`.
+    pub language: Language,
     /// Тема окон и программ (GTK и xfwm4), курсор и обои: `space`, `waves`,
     /// `aurora` — свои, нарисованные программой, или путь к картинке.
     pub gtk_theme: String,
@@ -106,6 +111,7 @@ impl Default for Config {
         Config {
             font: "Inter".into(),
             icon_theme: "Colloid-mimshel".into(),
+            language: Language::Auto,
             gtk_theme: "Colloid-Dark".into(),
             cursor_theme: "Colloid-cursors".into(),
             wallpaper: "space".into(),
@@ -141,7 +147,8 @@ impl Default for Config {
             notify: false,
             desktop: false,
             folders: false,
-            lock_placeholder: "Введите пароль".into(),
+            lock_placeholder: crate::i18n::t(Language::Auto.resolve(), "lock.enter_password")
+                .to_string(),
             lock_idle: 10,
             lock_screen_off: 15,
             hide_apps: [
@@ -159,16 +166,18 @@ impl Default for Config {
             .to_vec(),
             dgpu_apps: Vec::new(),
             no_dgpu_apps: Vec::new(),
-            rename_apps: [
-                ("thunar", "Проводник"),
-                ("mimshel-terminal", "Терминал"),
-                ("xfce4-terminal", "Терминал Xfce"),
-                ("org.xfce.mousepad", "Блокнот"),
-                ("xfce-settings-manager", "Системные настройки"),
-                ("xfce4-taskmanager", "Мониторинг системы"),
-            ]
-            .map(|(a, n)| (a.to_string(), n.to_string()))
-            .to_vec(),
+            rename_apps: {
+                let lang = Language::Auto.resolve();
+                let tr = |k: &'static str| crate::i18n::t(lang, k).to_string();
+                vec![
+                    ("thunar".to_string(), tr("app.file_manager")),
+                    ("mimshel-terminal".to_string(), tr("app.terminal")),
+                    ("xfce4-terminal".to_string(), tr("app.xfce_terminal")),
+                    ("org.xfce.mousepad".to_string(), tr("app.text_editor")),
+                    ("xfce-settings-manager".to_string(), tr("app.settings")),
+                    ("xfce4-taskmanager".to_string(), tr("app.task_manager")),
+                ]
+            },
         }
     }
 }
@@ -332,6 +341,9 @@ impl Config {
         if let Some(v) = text("look", "icon_theme") {
             c.icon_theme = v;
         }
+        if let Some(v) = text("look", "language").and_then(|v| Language::parse(&v)) {
+            c.language = v;
+        }
         if let Some(v) = get("look", "scale")
             .and_then(|i| i.as_value())
             .and_then(scale_value)
@@ -416,6 +428,25 @@ impl Config {
                 .collect();
             c.rename_apps = renames;
         }
+        // Language-aware defaults: if the file does not set a lock placeholder
+        // or app renames, they follow [look] language (not just system locale).
+        // An explicit placeholder/rename in the file always wins.
+        if get("lock", "placeholder").is_none() {
+            c.lock_placeholder =
+                crate::i18n::t(c.language.resolve(), "lock.enter_password").to_string();
+        }
+        if get("apps", "rename").is_none() {
+            let lang = c.language.resolve();
+            let tr = |k: &'static str| crate::i18n::t(lang, k).to_string();
+            c.rename_apps = vec![
+                ("thunar".to_string(), tr("app.file_manager")),
+                ("mimshel-terminal".to_string(), tr("app.terminal")),
+                ("xfce4-terminal".to_string(), tr("app.xfce_terminal")),
+                ("org.xfce.mousepad".to_string(), tr("app.text_editor")),
+                ("xfce-settings-manager".to_string(), tr("app.settings")),
+                ("xfce4-taskmanager".to_string(), tr("app.task_manager")),
+            ];
+        }
         for (name, old, _) in PARTS {
             // «mimshel» — наша часть; прежнее «shell» тоже.
             let ours = |v: &str| v == crate::names::APP || v == crate::names::OLD;
@@ -472,6 +503,8 @@ apps_panel = {p_apps}
 # свои, нарисованные программой, или путь к картинке). Применить: mimshel apply look wallpaper
 font = {font}
 icon_theme = {theme}
+# Interface language: en, ru, zh or auto (default: system locale).
+language = {language}
 gtk_theme = {gtk_theme}
 cursor_theme = {cursor_theme}
 wallpaper = {wallpaper}
@@ -533,6 +566,7 @@ osc52 = {osc52}
 ",
             font = s(&self.font),
             theme = s(&self.icon_theme),
+            language = s(self.language.name()),
             gtk_theme = s(&self.gtk_theme),
             cursor_theme = s(&self.cursor_theme),
             wallpaper = s(&self.wallpaper),
@@ -843,6 +877,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("look.font", "название шрифта"),
     ("look.icon_theme", "тема иконок"),
     (
+        "look.language",
+        "language: en, ru, zh or auto (default: system locale)",
+    ),
+    (
         "look.gtk_theme",
         "тема окон и программ, например Colloid-Dark",
     ),
@@ -945,6 +983,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 Ok(Value::from(input))
             }
         }
+        "look.language" => words(&["en", "ru", "zh", "auto"]),
         "look.scale" => match input.replace(',', ".").as_str() {
             "auto" => Ok(Value::from("auto")),
             v => match v.parse::<f64>() {
@@ -1318,13 +1357,19 @@ mod tests {
         let text = c.to_toml();
         assert!(toml_error(&text).is_none(), "{text}");
         assert_eq!(Config::from_toml(&text), c);
-        assert_eq!(c.lock_placeholder, "Введите пароль");
+        // Defaults follow the resolved language (i18n branch), not hardcoded
+        // Russian: in a Russian locale this is still "Введите пароль".
+        let lang = c.language.resolve();
+        assert_eq!(
+            c.lock_placeholder,
+            crate::i18n::t(lang, "lock.enter_password")
+        );
         assert!((c.lock_idle, c.lock_screen_off) == (10, 15));
         assert!(c.hide_apps.contains(&"xterm".to_string()));
-        assert!(
-            c.rename_apps
-                .contains(&("thunar".to_string(), "Проводник".to_string()))
-        );
+        assert!(c.rename_apps.contains(&(
+            "thunar".to_string(),
+            crate::i18n::t(lang, "app.file_manager").to_string()
+        )));
     }
 
     #[test]

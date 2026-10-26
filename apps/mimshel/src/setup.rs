@@ -82,7 +82,14 @@ fn print_check(c: &Check) {
 /// `apply` = false (`mimshel set --no-apply`) — только записать: установщик
 /// пишет несколько настроек и применяет всё разом.
 pub fn set(key: &str, input: &str, apply: bool) -> i32 {
-    let key = &config::current_key(key);
+    // Bare `mimshel set language en` is an alias for `look.language`.
+    let key_owned;
+    let key = if key == "language" {
+        key_owned = "look.language".to_string();
+        &key_owned
+    } else {
+        &config::current_key(key)
+    };
     let value = match setting_value(key, input) {
         Ok(v) => v,
         Err(e) => {

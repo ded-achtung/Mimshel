@@ -41,6 +41,7 @@ pub struct NotifyUi {
     dnd: bool,
     top: u32,
     tx: Sender<Msg>,
+    language: mimshel_core::i18n::Language,
 }
 
 impl NotifyUi {
@@ -70,7 +71,15 @@ impl NotifyUi {
             dnd,
             top,
             tx,
+            language: mimshel_core::i18n::Language::Auto,
         })
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
+        if let Some(center) = &mut self.center {
+            center.language = lang;
+        }
     }
 
     pub fn set_apps(&mut self, apps: Vec<App>) {
@@ -299,7 +308,9 @@ impl NotifyUi {
     fn rebuild_center(&mut self, fonts: &mut Fonts, d: &Display) {
         let (_, sh) = d.screen_size();
         let max_h = (u32::from(sh)).saturating_sub(self.top + 2 * MARGIN + DOCK_ROOM) as f32;
-        self.center = Some(Center::new(fonts, self.history.clone(), max_h));
+        let mut center = Center::new(fonts, self.history.clone(), max_h);
+        center.language = self.language;
+        self.center = Some(center);
         self.center_dirty = true;
     }
 

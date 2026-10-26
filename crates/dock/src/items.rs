@@ -15,11 +15,17 @@ pub const TRASH: &str = "trash:";
 
 /// Корзина как «программа»: имя и иконка (пустая или полная). Запускать её
 /// нечего — открывает и очищает её служба (через Проводник).
+#[allow(dead_code)]
 pub(crate) fn trash_app(full: bool) -> App {
+    trash_app_lang(full, mimshel_core::i18n::Language::Ru)
+}
+
+/// Trash as an app, with its display name in `lang`.
+pub(crate) fn trash_app_lang(full: bool, lang: mimshel_core::i18n::Language) -> App {
     App {
         id: TRASH.into(),
         path: PathBuf::new(),
-        name: "Корзина".into(),
+        name: mimshel_core::i18n::t(lang, "dock.trash").to_string(),
         name_untranslated: "Trash".into(),
         generic_name: None,
         comment: None,
@@ -109,6 +115,7 @@ pub(crate) fn build(
     pinned: &[String],
     windows: &[(WindowInfo, Option<usize>)],
     trash: Option<bool>,
+    lang: mimshel_core::i18n::Language,
 ) -> Vec<Item> {
     let mut items: Vec<Item> = pinned
         .iter()
@@ -157,7 +164,7 @@ pub(crate) fn build(
         }
     }
     if let Some(full) = trash {
-        let app = trash_app(full);
+        let app = trash_app_lang(full, lang);
         items.push(Item {
             key: TRASH.into(),
             name: app.name.clone(),
@@ -249,7 +256,13 @@ mod tests {
             (window(10, "thunar", "Thunar"), Some(4)),
             (window(31, "meld", "Meld"), Some(2)),
         ];
-        let items = build(&apps, &["thunar".into(), "nope".into()], &windows, None);
+        let items = build(
+            &apps,
+            &["thunar".into(), "nope".into()],
+            &windows,
+            None,
+            mimshel_core::i18n::Language::Ru,
+        );
         let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
         assert_eq!(keys, ["thunar.desktop", "org.gnome.Meld.desktop"]);
         assert!(items[1].separator_before && !items[0].separator_before);

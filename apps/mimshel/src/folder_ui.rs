@@ -113,6 +113,7 @@ pub struct FolderUi {
     drag: Option<Drag>,
     drag_dirty: bool,
     terminal: Vec<String>,
+    language: mimshel_core::i18n::Language,
     tx: Sender<Msg>,
 }
 
@@ -123,7 +124,7 @@ impl FolderUi {
         drag_popup.pass_through(d)?;
         Ok(FolderUi {
             windows: Vec::new(),
-            places: mimshel_folder::places(),
+            places: mimshel_folder::places_lang(config.language.resolve()),
             phones: Vec::new(),
             open_phone: None,
             special: mimshel_folder::special_folders(),
@@ -139,6 +140,7 @@ impl FolderUi {
             drag: None,
             drag_dirty: false,
             terminal: crate::ui::terminal_command(config),
+            language: config.language,
             tx,
         })
         .inspect(|ui| scan_phones(ui.tx.clone()))
@@ -154,6 +156,7 @@ impl FolderUi {
     pub fn warm_up(&self, fonts: &mut Fonts, icons: &mut Icons) {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         let mut view = FolderView::new(home, self.places.clone(), DEFAULT_SIZE);
+        view.set_language(self.language);
         let locale = mimshel_apps::Locale::from_env();
         let mut items = scan(view.dir(), &self.mime, locale.as_ref());
         items.truncate(40);
@@ -167,6 +170,7 @@ impl FolderUi {
         // A phone may have been plugged in while no window was watching.
         scan_phones(self.tx.clone());
         let mut view = FolderView::new(dir.clone(), self.places.clone(), DEFAULT_SIZE);
+        view.set_language(self.language);
         view.set_special(self.special.clone());
         let win = d.create_app_window(WINDOW_CLASS, &view.title(), DEFAULT_SIZE, MIN_SIZE)?;
         win.show(d)?;
@@ -193,7 +197,7 @@ impl FolderUi {
     }
 
     fn update_places(&mut self) {
-        self.places = mimshel_folder::places();
+        self.places = mimshel_folder::places_lang(self.language.resolve());
         self.places.extend(self.phones.iter().cloned());
         for w in &mut self.windows {
             if w.view.set_places(self.places.clone()) {
@@ -581,22 +585,62 @@ impl FolderUi {
             .is_some_and(|w| w.view.selected_items().len() == 1);
         let entries = if on_item {
             let mut e = vec![
-                entry("Открыть", Command::Open, false),
-                entry("Открыть в новом окне", Command::OpenWindow, false),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.open"),
+                    Command::Open,
+                    false,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.open_in_new_window"),
+                    Command::OpenWindow,
+                    false,
+                ),
             ];
             if one {
-                e.push(entry("Переименовать", Command::Rename, true));
+                e.push(entry(
+                    mimshel_core::i18n::t(self.language, "folder.rename"),
+                    Command::Rename,
+                    true,
+                ));
             }
-            e.push(entry("Копировать", Command::Copy, true));
-            e.push(entry("Вырезать", Command::Cut, false));
-            e.push(entry("В корзину", Command::Trash, true));
+            e.push(entry(
+                mimshel_core::i18n::t(self.language, "folder.copy"),
+                Command::Copy,
+                true,
+            ));
+            e.push(entry(
+                mimshel_core::i18n::t(self.language, "folder.cut"),
+                Command::Cut,
+                false,
+            ));
+            e.push(entry(
+                mimshel_core::i18n::t(self.language, "folder.move_to_trash"),
+                Command::Trash,
+                true,
+            ));
             e
         } else {
             vec![
-                entry("Новая папка", Command::NewFolder, false),
-                entry("Новый текстовый файл", Command::NewTextFile, false),
-                entry("Вставить", Command::Paste, true),
-                entry("Открыть терминал здесь", Command::Terminal, true),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.new_folder"),
+                    Command::NewFolder,
+                    false,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.new_text_file"),
+                    Command::NewTextFile,
+                    false,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.paste"),
+                    Command::Paste,
+                    true,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.open_terminal_here"),
+                    Command::Terminal,
+                    true,
+                ),
             ]
         };
         let mut menu = Menu::new("folder".into(), entries);
@@ -858,7 +902,12 @@ pub fn snapshot(dir: &Path, file: &str) -> Result<()> {
     let config = crate::ui::load_config();
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
-    let mut view = FolderView::new(dir.to_path_buf(), mimshel_folder::places(), DEFAULT_SIZE);
+    let mut view = FolderView::new(
+        dir.to_path_buf(),
+        mimshel_folder::places_lang(config.language.resolve()),
+        DEFAULT_SIZE,
+    );
+    view.set_language(config.language);
     let locale = mimshel_apps::Locale::from_env();
     view.set_items(scan(dir, &MimeDb::load(), locale.as_ref()));
     let start = std::time::Instant::now();

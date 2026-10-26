@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 mimshel-render = { path = "../render" }
+mimshel-core = { path = "../core" }
 mimshel-dbus = { path = "../dbus" }
 mimshel-text = { path = "../text" }
 mimshel-widgets = { path = "../widgets" }

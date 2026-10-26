@@ -385,6 +385,9 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     } else {
         None
     };
+    if let Some(n) = &mut notify {
+        n.set_language(config.language);
+    }
     step("уведомления");
     if daemon {
         // Up after a crash — tell the user through our own banners, or
@@ -425,6 +428,8 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         about: crate::about_ui::AboutUi::new(),
         tx: tx.clone(),
     };
+    ui.search.set_language(config.language);
+    ui.apps_panel.set_language(config.language);
     ui.flush()?;
     step("окна");
     if daemon {
@@ -1043,6 +1048,7 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
     let frame = match panel {
         Panel::Search => {
             let mut s = SearchPanel::new(apps);
+            s.set_language(config.language);
             keys.for_each(|k| {
                 s.key(k);
             });
@@ -1056,6 +1062,7 @@ pub fn snapshot(panel: Panel, text: &str, file: &str) -> Result<()> {
             });
             let shot = display.and_then(|d| d.capture_screen().ok());
             let mut l = AppsPanel::new(apps, size, grid(&config));
+            l.set_language(config.language);
             keys.for_each(|k| {
                 l.key(k);
             });

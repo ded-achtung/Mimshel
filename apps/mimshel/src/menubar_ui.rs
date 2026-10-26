@@ -116,6 +116,7 @@ pub struct MenubarUi {
     dirty: bool,
     /// Служба — для просьб, которые выполняет не строка (центр уведомлений).
     tx: Sender<Msg>,
+    language: mimshel_core::i18n::Language,
 }
 
 impl MenubarUi {
@@ -161,6 +162,7 @@ impl MenubarUi {
             popup_dirty: false,
             dirty: true,
             tx: tx.clone(),
+            language: config.language,
         };
         d.watch_root()?;
         d.watch_keyboard()?;
@@ -791,8 +793,18 @@ impl MenubarUi {
 
     fn open_bell(&mut self, d: &Display, fonts: &mut Fonts, x: f32) -> Result<()> {
         let entries = vec![
-            entry("Не беспокоить", Cmd::ToggleDnd, self.dnd, false),
-            entry("Настройки уведомлений…", Cmd::NotifySettings, false, true),
+            entry(
+                mimshel_core::i18n::t(self.language, "notify.do_not_disturb"),
+                Cmd::ToggleDnd,
+                self.dnd,
+                false,
+            ),
+            entry(
+                mimshel_core::i18n::t(self.language, "notify.settings"),
+                Cmd::NotifySettings,
+                false,
+                true,
+            ),
         ];
         self.open_menu(d, fonts, Part::Bell, "bell".into(), x, entries)
     }

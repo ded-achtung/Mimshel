@@ -115,6 +115,7 @@ impl DockUi {
                 config.no_dgpu_apps.clone(),
             )));
         }
+        ui.dock.set_language(config.language);
         ui.dock.set_trash(trash_full());
         watch_trash(ui.tx.clone());
         d.watch_root()?;
