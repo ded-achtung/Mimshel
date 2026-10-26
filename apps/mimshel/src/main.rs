@@ -3,6 +3,7 @@
 
 mod about_ui;
 mod config_store;
+mod crash;
 mod desktop_files;
 mod desktop_ui;
 mod desktop_wallpaper;
@@ -28,7 +29,7 @@ const HELP: &str = "\
   mimshel search          открыть или закрыть окно «Поиск» (через службу, без неё — сам)
   mimshel apps            открыть или закрыть окно «Программы» (так же)
   mimshel daemon          служба: строка меню, док, уведомления, окна «Поиск» и «Программы»;
-                        упадёт — сторож запустит заново (журнал: ~/.local/state/shell/daemon.log)
+                        упадёт — сторож запустит заново (журнал: ~/.local/state/mimshel/daemon.log)
   mimshel snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
   mimshel --version       версия программы
@@ -42,6 +43,8 @@ const HELP: &str = "\
   mimshel test-clipboard  какие файлы в буфере обмена (для «Вставить» на столе)
   mimshel watch           следить за ярлыками и печатать, что появилось и пропало
   mimshel doctor [--fix]  проверить, что всё на месте; --fix — починить
+  mimshel crashes [last]  отчёты о сбоях: время, часть, причина (новые первыми;
+                        last — последний отчёт целиком)
   mimshel config          где файл настроек и что в нём можно менять
   mimshel set [--no-apply] КЛЮЧ ЗНАЧЕНИЕ
                         поменять настройку и применить (например: mimshel set dock.icon_size 56,
@@ -66,6 +69,9 @@ const HELP: &str = "\
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Any part that fails must leave an understandable trace — install
+    // the hook before anything else.
+    crash::install(component(&args));
     match args.first().map(String::as_str) {
         Some("test-apps") => list_apps(),
         Some("test-clipboard") => match mimshel_x11::clipboard_files() {
@@ -97,6 +103,7 @@ fn main() {
         Some("doctor") if args.len() == 1 || (args.len() == 2 && args[1] == "--fix") => {
             std::process::exit(setup::doctor(args.len() == 2))
         }
+        Some("crashes") => std::process::exit(crash::crashes_cmd(&args[1..])),
         Some("set") if args.len() >= 4 && args[1] == "--no-apply" => {
             std::process::exit(setup::set(&args[2], &args[3..].join(" "), false))
         }
@@ -171,6 +178,22 @@ fn exit_on_error(result: mimshel_x11::Result<()>) {
     if let Err(e) = result {
         eprintln!("Ошибка: {e}");
         std::process::exit(1);
+    }
+}
+
+/// Which part runs — for the crash report (file name and header).
+/// `mimshel daemon --child` is the service, the named commands are their
+/// own parts, everything else is just a command.
+fn component(args: &[String]) -> &'static str {
+    match (
+        args.first().map(String::as_str),
+        args.get(1).map(String::as_str),
+    ) {
+        (Some("daemon"), Some("--child")) => "service",
+        (Some("lock-screen"), _) => "lock-screen",
+        (Some("terminal"), _) => "terminal",
+        (Some("folder"), _) => "folder",
+        _ => "cli",
     }
 }
 

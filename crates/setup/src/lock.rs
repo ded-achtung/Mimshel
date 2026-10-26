@@ -182,11 +182,18 @@ pub fn supervise(exe: &Path) -> i32 {
         return 0;
     }
     supervise_with(
-        || command(&exe.to_string_lossy()).arg("lock-screen").status(),
+        || {
+            // The pid lets the guard attach the crash report (its file
+            // name carries the pid) to the reason in the log.
+            let mut child = command(&exe.to_string_lossy()).arg("lock-screen").spawn()?;
+            let pid = child.id();
+            let status = child.wait()?;
+            Ok((status, pid))
+        },
         || succeeds(&["xset", "q"]),
         |restarts, how| {
             log(&format!(
-                "блокировка: экран завершился {how} без пароля — перезапуск #{restarts}"
+                "блокировка: {how} без пароля — перезапуск #{restarts}"
             ));
             // Первый перезапуск — сразу. При постоянной ошибке запуска
             // ограничиваем нагрузку, но не бросаем попытки заблокировать экран.
@@ -198,6 +205,7 @@ pub fn supervise(exe: &Path) -> i32 {
                 }));
             }
         },
+        crate::crash::panic_reason,
     )
 }
 
@@ -216,19 +224,34 @@ fn single_guard(name: &str) -> Option<std::os::unix::net::UnixListener> {
 }
 
 fn supervise_with(
-    mut launch: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
+    mut launch: impl FnMut() -> std::io::Result<(std::process::ExitStatus, u32)>,
     mut session_alive: impl FnMut() -> bool,
     mut retry: impl FnMut(u32, &str),
+    mut report: impl FnMut(u32) -> Option<String>,
 ) -> i32 {
     let mut restarts = 0u32;
     loop {
         let (code, how) = match launch() {
-            Ok(s) if s.success() => return 0,
-            Ok(s) => match (s.code(), s.signal()) {
-                (Some(c), _) => (c, format!("с кодом {c}")),
-                (None, Some(sig)) => (128 + sig, format!("от сигнала {sig}")),
-                (None, None) => (1, "непонятно как".into()),
-            },
+            Ok((s, _)) if s.success() => return 0,
+            Ok((s, pid)) => {
+                // The plain-Russian reason — the same function the service
+                // guard uses (`mimshel_core::crash::exit_reason`): codes and
+                // signals explained, not just a bare number.
+                let (code, how) = match (s.code(), s.signal()) {
+                    (Some(c), _) => (c, mimshel_core::crash::exit_reason(Some(c), None)),
+                    (None, Some(sig)) => {
+                        (128 + sig, mimshel_core::crash::exit_reason(None, Some(sig)))
+                    }
+                    (None, None) => (1, mimshel_core::crash::exit_reason(None, None)),
+                };
+                // A panic (code 101) leaves a crash report: append its
+                // message and place, so the log says why the screen fell.
+                let how = match report(pid) {
+                    Some(detail) if code == 101 => format!("{how}: {detail}"),
+                    _ => how,
+                };
+                (code, how)
+            }
             Err(e) => (1, format!("не запустившись ({e})")),
         };
         if !session_alive() {
@@ -268,17 +291,58 @@ mod tests {
                 if attempts == 1 {
                     Err(std::io::Error::other("не удалось запустить"))
                 } else {
-                    Ok(std::process::ExitStatus::from_raw(if attempts <= 150 {
-                        6
-                    } else {
-                        0
-                    }))
+                    Ok((
+                        std::process::ExitStatus::from_raw(if attempts <= 150 { 6 } else { 0 }),
+                        5000 + attempts,
+                    ))
                 }
             },
             || true,
             |n, _| retries = n,
+            |_| None,
         );
         assert_eq!((result, attempts, retries), (0, 151, 150));
+    }
+
+    #[test]
+    fn panic_appends_the_report_message_and_place() {
+        // A panic exit (code 101), then a normal unlock: the reason passed
+        // to `retry` carries the report detail for that pid.
+        let mut reasons: Vec<String> = Vec::new();
+        let mut runs = 0;
+        let result = supervise_with(
+            || {
+                runs += 1;
+                let code = if runs == 1 { 101 } else { 0 };
+                Ok((std::process::ExitStatus::from_raw(code << 8), 4242))
+            },
+            || true,
+            |_, how| reasons.push(how.to_string()),
+            |pid| (pid == 4242).then(|| "«bad credentials» в lock_ui.rs:55".to_string()),
+        );
+        assert_eq!(result, 0);
+        assert_eq!(
+            reasons,
+            ["упала (паника): «bad credentials» в lock_ui.rs:55"]
+        );
+    }
+
+    #[test]
+    fn panic_without_a_report_keeps_the_plain_reason() {
+        let mut reasons: Vec<String> = Vec::new();
+        let mut runs = 0;
+        let result = supervise_with(
+            || {
+                runs += 1;
+                let code = if runs == 1 { 101 } else { 0 };
+                Ok((std::process::ExitStatus::from_raw(code << 8), 7777))
+            },
+            || true,
+            |_, how| reasons.push(how.to_string()),
+            |_| None,
+        );
+        assert_eq!(result, 0);
+        assert_eq!(reasons, ["упала (паника)"]);
     }
 
     #[test]
@@ -299,9 +363,10 @@ mod tests {
     #[test]
     fn stops_when_session_is_gone() {
         let result = supervise_with(
-            || Ok(std::process::ExitStatus::from_raw(256)),
+            || Ok((std::process::ExitStatus::from_raw(256), 1)),
             || false,
             |_, _| panic!("сеанс завершён — перезапуск не нужен"),
+            |_| None,
         );
         assert_eq!(result, 1);
     }

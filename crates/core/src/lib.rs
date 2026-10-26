@@ -1,6 +1,7 @@
 //! Общая модель оболочки: то, что не зависит ни от окон, ни от файлов.
 
 pub mod config;
+pub mod crash;
 pub mod input;
 pub mod keyboard;
 pub mod names;

@@ -371,7 +371,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     };
     step("строка меню");
     // Свои уведомления — вместо xfce4-notifyd (`MIMSHEL_NOTIFY=1` — для проверки).
-    let notify = if daemon && (config.notify || mimshel_core::names::flag("NOTIFY")) {
+    let mut notify = if daemon && (config.notify || mimshel_core::names::flag("NOTIFY")) {
         if menubar.is_none() {
             crate::status::watch_dnd(tx.clone());
         }
@@ -386,6 +386,12 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         None
     };
     step("уведомления");
+    if daemon {
+        // Up after a crash — tell the user through our own banners, or
+        // through notify-send when notifications belong to Xfce (once;
+        // last-crash is removed when read).
+        crate::crash::announce_restart(notify.as_mut(), &mut icons);
+    }
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {
         let dock = DockUi::new(&display, &config, all_apps, tx.clone())?;

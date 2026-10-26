@@ -5,6 +5,7 @@
 
 pub mod actions;
 pub mod backup;
+pub mod crash;
 pub mod doctor;
 pub mod greeter;
 pub mod gtk_fixes;

@@ -256,6 +256,21 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "",
     );
 
+    // Crashes in the last week — information, not a failure: like the
+    // greeter line, `ok` is always true so `doctor --fix` never tries to
+    // "fix" it.
+    let (crashes, newest) = crash_week();
+    if crashes == 0 {
+        add("mimshel", "сбоев за неделю не было", true, "");
+    } else {
+        add(
+            "mimshel",
+            &format!("сбоев за неделю: {crashes} (последний: {newest})"),
+            true,
+            "подробности: mimshel crashes",
+        );
+    }
+
     // Строка меню: своя или панель Xfce.
     if cfg.menubar {
         add(
@@ -689,6 +704,36 @@ fn panel_session_slot(command: &[&str]) -> bool {
         .unwrap_or(0);
     (0..count)
         .any(|i| xget_list("xfce4-session", &format!("{SESSION}/Client{i}_Command")) == command)
+}
+
+/// How many crash reports in `crashes` are from the last 7 days, and the
+/// reason of the newest one (in Russian, as `mimshel crashes` lists it).
+fn crash_week() -> (usize, String) {
+    let Some(dir) = mimshel_core::crash::state_dir().map(|d| d.join("crashes")) else {
+        return (0, String::new());
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (0, String::new());
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let week_ago = now.saturating_sub(mimshel_core::crash::WEEK_SECS);
+    let mut fresh: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".txt") && mimshel_core::crash::stamp_seconds(n).is_some())
+        .filter(|n| mimshel_core::crash::stamp_seconds(n).is_some_and(|t| t >= week_ago))
+        .collect();
+    fresh.sort();
+    let count = fresh.len();
+    let newest = fresh
+        .last()
+        .and_then(|n| std::fs::read_to_string(dir.join(n)).ok())
+        .and_then(|t| mimshel_core::crash::report_reason(&t))
+        .unwrap_or_default();
+    (count, newest)
 }
 
 #[cfg(test)]

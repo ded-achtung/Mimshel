@@ -47,16 +47,35 @@ pub fn run() -> ! {
     let mut quick_failures = 0;
     loop {
         let started = Instant::now();
-        let status = spawn(&exe);
+        let child = spawn(&exe);
         let lived = started.elapsed();
-        let reason = match &status {
-            Ok(s) if s.code() == Some(ALREADY_RUNNING) => {
+        let (reason, report, crashed) = match &child {
+            Ok((s, _)) if s.code() == Some(ALREADY_RUNNING) => {
                 log("служба уже запущена другим сторожем — выхожу");
                 std::process::exit(0);
             }
-            Ok(s) => describe(s),
-            Err(e) => format!("не запустилась: {e}"),
+            Ok((s, pid)) => {
+                use std::os::unix::process::ExitStatusExt;
+                let (reason, report) = crate::crash::service_failure(s, *pid);
+                (
+                    reason,
+                    report,
+                    mimshel_core::crash::is_crash(s.code(), s.signal()),
+                )
+            }
+            Err(e) => (format!("не запустилась: {e}"), None, true),
         };
+        if !crashed {
+            // Stopped on purpose — deploying a build kills `daemon --child`
+            // with TERM, the session ends with HUP. A plain restart: no
+            // last-crash, no notification, and it does not count towards
+            // the give-up.
+            log(&format!("служба {reason} — запускаю снова"));
+            quick_failures = 0;
+            continue;
+        }
+        // The restarted service will explain the crash to the user.
+        crate::crash::note_last_crash("service", &reason, report.as_deref());
         quick_failures = if lived >= STABLE {
             1
         } else {
@@ -66,7 +85,7 @@ pub fn run() -> ! {
             log(&format!(
                 "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — больше не перезапускаю"
             ));
-            std::process::exit(1);
+            give_up(&reason);
         }
         // Чем чаще падает, тем дольше пауза: 1, 2, 3, 4 с.
         let pause = Duration::from_secs(u64::from(quick_failures));
@@ -76,6 +95,40 @@ pub fn run() -> ! {
         ));
         std::thread::sleep(pause);
     }
+}
+
+/// Five quick crashes in a row — there will be no dock or menu bar, and
+/// the user must be told why: a dialog with the reason, detached from the
+/// guard (zenity, xmessage as the fallback, else just the log).
+fn give_up(reason: &str) -> ! {
+    let text = format!(
+        "Mimshel остановлен — служба падала {GIVE_UP} раз подряд.\n\
+         Последняя причина: {reason}\n\
+         Подробности: mimshel crashes\n\
+         Вернуть панель Xfce: mimshel restore"
+    );
+    let mut shown = false;
+    for (program, args) in [
+        (
+            "zenity",
+            vec!["--error", "--title", "Mimshel", "--text", &text],
+        ),
+        ("xmessage", vec![text.as_str()]),
+    ] {
+        let mut command = std::process::Command::new(program);
+        command.args(args);
+        match crate::ui::spawn_detached(command) {
+            Ok(()) => {
+                shown = true;
+                break;
+            }
+            Err(e) => log(&format!("окно о сдаче не показано ({program}: {e})")),
+        }
+    }
+    if !shown {
+        log("ни zenity, ни xmessage не запустились — причина только в журнале");
+    }
+    std::process::exit(1);
 }
 
 /// Служба проверяет, жив ли её сторож: осиротевшая служба выходит (иначе
@@ -92,7 +145,7 @@ pub fn watch_parent() {
     });
 }
 
-fn spawn(exe: &PathBuf) -> std::io::Result<ExitStatus> {
+fn spawn(exe: &PathBuf) -> std::io::Result<(ExitStatus, u32)> {
     let mut cmd = Command::new(exe);
     cmd.args(["daemon", "--child"]).stdin(Stdio::null());
     // Распределитель памяти glibc после первого освобождения большого
@@ -111,17 +164,10 @@ fn spawn(exe: &PathBuf) -> std::io::Result<ExitStatus> {
     if let Some(file) = log_file() {
         cmd.stderr(file.try_clone()?).stdout(file);
     }
-    cmd.status()
-}
-
-fn describe(status: &ExitStatus) -> String {
-    use std::os::unix::process::ExitStatusExt;
-    match (status.code(), status.signal()) {
-        (Some(101), _) => "упала (паника)".into(),
-        (Some(code), _) => format!("завершилась с кодом {code}"),
-        (None, Some(sig)) => format!("убита сигналом {sig}"),
-        (None, None) => "завершилась".into(),
-    }
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    let status = child.wait()?;
+    Ok((status, pid))
 }
 
 /// Путь к своей программе. Если её файл заменили новой сборкой (`install`),
