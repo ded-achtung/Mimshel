@@ -34,8 +34,8 @@ pub const MARKER: &str = "# mimshel: login screen look (mimshel apply greeter); 
 
 /// The one root step, run as `sudo sh -c ROOT_SCRIPT sh ARG…`. A constant:
 /// user data arrives only through the arguments. Args: staged wallpaper,
-/// The copies keep symlinks inside cursor themes but are owned by root.
-/// `cp -a` keeps symlinks inside cursor themes as they are. Every copy
+/// marker, staged conf, then (source, target) pairs for themes/cursors.
+/// Copies keep the symlinks inside cursor themes but are owned by root. Every copy
 /// destination is checked before `rm -rf`: it must be under
 /// /usr/local/share/themes/ or /usr/local/share/icons/ and contain no `..`.
 /// Missing directories are created 755; existing ones are left untouched.
