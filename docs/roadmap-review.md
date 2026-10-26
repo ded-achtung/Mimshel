@@ -88,3 +88,19 @@ when Mimshel fails:
 
 Ongoing: split big UI files only when a feature touches them; benchmark
 script before any performance claim.
+
+## Status (2026-10-26)
+
+- **1 — done.** Audit fixes merged and tested on the laptop.
+- **2 — partly done.** Crash reports, plain-Russian reasons and the restart
+  banner are in (`mimshel crashes`, `doctor`); lock screen before suspend
+  checked live (it locks first; a dead built-in keyboard after s2idle was
+  a kernel issue, fixed on the laptop by a keyboard re-probe service).
+  **Postponed** by the user's decision: the automatic fallback to the Xfce
+  panel/Plank when the guard gives up — the give-up dialog already says
+  `mimshel restore`.
+- **3 — postponed** (`doctor --report`): there is one user for now; return
+  to it before the three user tests.
+- Also done that day: brightness slider, login screen styling
+  (`mimshel apply greeter`), terminal menu surviving service restarts,
+  phones in the file manager.
