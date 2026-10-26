@@ -731,7 +731,7 @@ fn crash_week() -> (usize, String) {
     let newest = fresh
         .last()
         .and_then(|n| std::fs::read_to_string(dir.join(n)).ok())
-        .and_then(|t| mimshel_core::crash::report_reason(&t))
+        .and_then(|t| mimshel_core::crash::report_summary(&t))
         .unwrap_or_default();
     (count, newest)
 }

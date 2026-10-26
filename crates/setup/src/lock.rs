@@ -206,6 +206,9 @@ pub fn supervise(exe: &Path) -> i32 {
             }
         },
         crate::crash::panic_reason,
+        |pid, how| {
+            let _ = crate::crash::write_exit_report("lock-screen", pid, how, Some(&log_path()));
+        },
     )
 }
 
@@ -228,6 +231,7 @@ fn supervise_with(
     mut session_alive: impl FnMut() -> bool,
     mut retry: impl FnMut(u32, &str),
     mut report: impl FnMut(u32) -> Option<String>,
+    mut record: impl FnMut(u32, &str),
 ) -> i32 {
     let mut restarts = 0u32;
     loop {
@@ -248,7 +252,14 @@ fn supervise_with(
                 // message and place, so the log says why the screen fell.
                 let how = match report(pid) {
                     Some(detail) if code == 101 => format!("{how}: {detail}"),
-                    _ => how,
+                    _ => {
+                        // No panic report: leave an exit report, so the
+                        // crash shows in `mimshel crashes` and `doctor`.
+                        if mimshel_core::crash::is_crash(s.code(), s.signal()) {
+                            record(pid, &how);
+                        }
+                        how
+                    }
                 };
                 (code, how)
             }
@@ -262,10 +273,18 @@ fn supervise_with(
     }
 }
 
+/// `~/.local/state/mimshel/lock.log`.
+fn log_path() -> std::path::PathBuf {
+    mimshel_core::names::dir_in(&home().join(".local/state")).join("lock.log")
+}
+
 /// Журнал блокировки: `~/.local/state/mimshel/lock.log`.
 pub fn log(msg: &str) {
-    let dir = mimshel_core::names::dir_in(&home().join(".local/state"));
-    let path = dir.join("lock.log");
+    let path = log_path();
+    let dir = path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -300,6 +319,7 @@ mod tests {
             || true,
             |n, _| retries = n,
             |_| None,
+            |_, _| {},
         );
         assert_eq!((result, attempts, retries), (0, 151, 150));
     }
@@ -319,6 +339,7 @@ mod tests {
             || true,
             |_, how| reasons.push(how.to_string()),
             |pid| (pid == 4242).then(|| "«bad credentials» в lock_ui.rs:55".to_string()),
+            |_, _| {},
         );
         assert_eq!(result, 0);
         assert_eq!(
@@ -340,6 +361,7 @@ mod tests {
             || true,
             |_, how| reasons.push(how.to_string()),
             |_| None,
+            |_, _| {},
         );
         assert_eq!(result, 0);
         assert_eq!(reasons, ["упала (паника)"]);
@@ -367,7 +389,38 @@ mod tests {
             || false,
             |_, _| panic!("сеанс завершён — перезапуск не нужен"),
             |_| None,
+            |_, _| {},
         );
         assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn crashes_without_a_panic_report_are_recorded() {
+        // SIGABRT (6), then a panic that has its report, then SIGTERM (15,
+        // a stop on purpose), then a normal unlock: only the abort gets an
+        // exit report.
+        let mut recorded: Vec<(u32, String)> = Vec::new();
+        let mut runs = 0;
+        let result = supervise_with(
+            || {
+                runs += 1;
+                let raw = match runs {
+                    1 => 6,
+                    2 => 101 << 8,
+                    3 => 15,
+                    _ => 0,
+                };
+                Ok((std::process::ExitStatus::from_raw(raw), 100 + runs))
+            },
+            || true,
+            |_, _| {},
+            |pid| (pid == 102).then(|| "«boom» в lock_ui.rs:1".to_string()),
+            |pid, how| recorded.push((pid, how.to_string())),
+        );
+        assert_eq!(result, 0);
+        assert_eq!(
+            recorded,
+            [(101, "завершилась аварийно (SIGABRT)".to_string())]
+        );
     }
 }

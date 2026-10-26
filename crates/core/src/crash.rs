@@ -124,6 +124,54 @@ impl Report<'_> {
     }
 }
 
+/// A crash without a panic (a signal, an exit code): the guard writes this
+/// report itself — there is no backtrace, but the log lines just before the
+/// exit often show what was going on.
+pub struct ExitReport<'a> {
+    pub version: &'a str,
+    /// Component id (`service`).
+    pub id: &'a str,
+    pub at: &'a str,
+    pub pid: u32,
+    /// Plain-Russian reason, as in the guard's log.
+    pub reason: &'a str,
+    /// The last lines of the component's log before the exit.
+    pub log_tail: &'a str,
+}
+
+impl ExitReport<'_> {
+    /// The full text of the report.
+    pub fn text(&self) -> String {
+        format!(
+            "Mimshel {version} — отчёт о сбое\n\
+             компонент: {ru} ({id})\n\
+             время (UTC): {at}\n\
+             процесс: {pid}\n\
+             причина: {reason}\n\
+             (паники не было — стека вызовов нет)\n\
+             \n\
+             журнал перед сбоем:\n{tail}",
+            version = self.version,
+            id = self.id,
+            at = self.at,
+            pid = self.pid,
+            reason = self.reason,
+            tail = self.log_tail,
+            ru = component(self.id),
+        )
+    }
+}
+
+/// The short reason of any report, as the guard logs it: the `причина:`
+/// line of an [`ExitReport`], or `упала (паника): «message» в file:line`
+/// for a panic [`Report`].
+pub fn report_summary(text: &str) -> Option<String> {
+    if let Some(reason) = text.lines().find_map(|l| l.strip_prefix("причина: ")) {
+        return Some(reason.to_string());
+    }
+    report_reason(text).map(|detail| format!("{}: {detail}", exit_reason(Some(101), None)))
+}
+
 /// The «message» в file:line from a report text (the column is dropped
 /// for brevity). Pure — read by the guard and `doctor`.
 pub fn report_reason(text: &str) -> Option<String> {
@@ -381,5 +429,46 @@ mod tests {
         assert_eq!(component("terminal"), "терминал");
         assert_eq!(component("folder"), "Проводник");
         assert_eq!(component("anything"), "команда mimshel");
+    }
+
+    #[test]
+    fn exit_report_and_summary_of_both_kinds() {
+        let text = ExitReport {
+            version: "0.0.2-alpha",
+            id: "service",
+            at: "2026-10-26_17-28-43",
+            pid: 13778,
+            reason: "завершилась аварийно (SIGABRT)",
+            log_tail: "Служба готова за 0.9 с\n",
+        }
+        .text();
+        for want in [
+            "компонент: служба (service)",
+            "процесс: 13778",
+            "причина: завершилась аварийно (SIGABRT)",
+            "журнал перед сбоем:\nСлужба готова",
+        ] {
+            assert!(text.contains(want), "no {want} in:\n{text}");
+        }
+        assert_eq!(
+            report_summary(&text).as_deref(),
+            Some("завершилась аварийно (SIGABRT)")
+        );
+        let panic = Report {
+            version: "0.0.2-alpha",
+            id: "service",
+            at: "2026-10-26_17-28-43",
+            pid: 1,
+            thread: "main",
+            message: "boom",
+            location: "src/ui.rs:10:5",
+            backtrace: "",
+        }
+        .text();
+        assert_eq!(
+            report_summary(&panic).as_deref(),
+            Some("упала (паника): «boom» в src/ui.rs:10")
+        );
+        assert_eq!(report_summary("мусор"), None);
     }
 }

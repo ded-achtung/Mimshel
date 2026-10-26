@@ -74,6 +74,17 @@ pub fn run() -> ! {
             quick_failures = 0;
             continue;
         }
+        // No panic report (a signal, an exit code): write one here, with the
+        // last lines of the log, so `mimshel crashes` and `doctor` see it.
+        let report = report.or_else(|| match &child {
+            Ok((_, pid)) => mimshel_setup::crash::write_exit_report(
+                "service",
+                *pid,
+                &reason,
+                log_path().as_deref(),
+            ),
+            Err(_) => None,
+        });
         // The restarted service will explain the crash to the user.
         crate::crash::note_last_crash("service", &reason, report.as_deref());
         quick_failures = if lived >= STABLE {

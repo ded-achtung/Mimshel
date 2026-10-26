@@ -63,7 +63,7 @@ fn write_report(id: &str, info: &PanicHookInfo) {
     if std::fs::write(&path, text.as_bytes()).is_err() {
         return;
     }
-    prune(&dir);
+    mimshel_setup::crash::prune(&dir);
     let detail = common::report_reason(&text).unwrap_or_else(|| "«паника»".into());
     eprintln!(
         "[сбой] {}: паника {detail} — отчёт: {}",
@@ -91,28 +91,6 @@ fn location(info: &PanicHookInfo) -> String {
     match info.location() {
         Some(l) => format!("{}:{}:{}", l.file(), l.line(), l.column()),
         None => "неизвестно".into(),
-    }
-}
-
-/// Keep at most [`common::KEEP_REPORTS`] newest: the name starts with the
-/// time, so age is the name order.
-fn prune(dir: &Path) {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.ends_with(".txt") && common::stamp_seconds(n).is_some())
-                .collect()
-        })
-        .unwrap_or_default();
-    names.sort();
-    while names.len() > common::KEEP_REPORTS {
-        let Some(oldest) = names.first().cloned() else {
-            break;
-        };
-        let _ = std::fs::remove_file(dir.join(&oldest));
-        names.remove(0);
     }
 }
 
@@ -355,19 +333,9 @@ fn listing_line(path: &Path) -> String {
     let reason = std::fs::read_to_string(path)
         .ok()
         .as_deref()
-        .map(panic_reason)
+        .and_then(common::report_summary)
         .unwrap_or_else(|| common::exit_reason(Some(101), None));
     common::listing_line(at, id, &reason, &path.display().to_string())
-}
-
-/// The reason from a report text — short, as in the guard's log:
-/// `упала (паника): «сообщение» в файл:строка`.
-fn panic_reason(text: &str) -> String {
-    let base = common::exit_reason(Some(101), None);
-    match common::report_reason(text) {
-        Some(detail) => format!("{base}: {detail}"),
-        None => base,
-    }
 }
 
 /// A report file name -> (time, component, pid). The time is the first 19
@@ -426,7 +394,7 @@ mod tests {
         }
         // A file that is not a report is left alone.
         std::fs::write(dir.join("notes.txt"), "keep").unwrap();
-        prune(&dir);
+        mimshel_setup::crash::prune(&dir);
         let mut left: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
