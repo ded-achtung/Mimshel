@@ -34,7 +34,7 @@ pub const MARKER: &str = "# mimshel: login screen look (mimshel apply greeter); 
 
 /// The one root step, run as `sudo sh -c ROOT_SCRIPT sh ARG…`. A constant:
 /// user data arrives only through the arguments. Args: staged wallpaper,
-/// marker, staged conf, then (source, target) pairs for themes/cursors.
+/// The copies keep symlinks inside cursor themes but are owned by root.
 /// `cp -a` keeps symlinks inside cursor themes as they are. Every copy
 /// destination is checked before `rm -rf`: it must be under
 /// /usr/local/share/themes/ or /usr/local/share/icons/ and contain no `..`.
@@ -70,7 +70,9 @@ pub const ROOT_SCRIPT: &str = concat!(
     "            ;;\n",
     "    esac\n",
     "    rm -rf \"$2\"\n",
-    "    cp -a \"$1\" \"$2\"\n",
+    // Not `cp -a`: that keeps the user as owner, and the greeter would run
+    // with files the user can change. Symlinks and modes are kept.
+    "    cp -dR --preserve=mode,timestamps \"$1\" \"$2\"\n",
     "    chmod -R a+rX \"$2\"\n",
     "    printf '%s\\n' \"$2\" >> \"$MANIFEST\"\n",
     "    shift 2\n",
