@@ -42,6 +42,7 @@ const HELP: &str = "\
                         что найдёт окно «Поиск» по этому тексту
   mimshel test-clipboard  какие файлы в буфере обмена (для «Вставить» на столе)
   mimshel watch           следить за ярлыками и печатать, что появилось и пропало
+  mimshel doctor --report [ПАПКА]  собрать обезличенный отчёт (по умолчанию — дома)
   mimshel doctor [--fix]  проверить, что всё на месте; --fix — починить
   mimshel crashes [last]  отчёты о сбоях: время, часть, причина (новые первыми;
                         last — последний отчёт целиком)
@@ -100,6 +101,53 @@ fn main() {
             exit_on_error(ui::run(None))
         }
         Some("daemon") => guard::run(),
+        Some("doctor") if (args.len() == 2 || args.len() == 3) && args[1] == "--report" => {
+            let dir = args
+                .get(2)
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from));
+            let result = dir
+                .ok_or_else(|| std::io::Error::other("нет HOME: укажите папку"))
+                .and_then(|dir| {
+                    let path = ui::config_path();
+                    let valid = |p: &std::path::Path| {
+                        std::fs::read_to_string(p)
+                            .ok()
+                            .filter(|text| mimshel_core::config::toml_error(text).is_none())
+                    };
+                    // Read without migrating, creating or repairing the user's configuration.
+                    let text = path.as_deref().and_then(valid).or_else(|| {
+                        path.as_ref()
+                            .and_then(|p| ui::config_store(p.clone()).good)
+                            .as_deref()
+                            .and_then(valid)
+                    });
+                    let cfg = text
+                        .as_deref()
+                        .map(mimshel_core::config::Config::from_toml)
+                        .unwrap_or_default();
+                    mimshel_setup::report::make(&dir, &cfg, path.as_deref())
+                });
+            match result {
+                Ok(report) => {
+                    println!(
+                        "Отчёт: {}\nРазмер: {} байт\nВнутри:",
+                        report.path.display(),
+                        report.size
+                    );
+                    for file in report.files {
+                        println!("  {file}");
+                    }
+                    println!(
+                        "Перед отправкой кому-либо обязательно просмотрите содержимое архива!"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Не удалось собрать отчёт: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("doctor") if args.len() == 1 || (args.len() == 2 && args[1] == "--fix") => {
             std::process::exit(setup::doctor(args.len() == 2))
         }

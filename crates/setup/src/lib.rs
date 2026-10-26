@@ -14,5 +14,6 @@ pub mod lock;
 pub mod parts;
 pub mod paths;
 pub mod png_icons;
+pub mod report;
 mod sys;
 pub mod terminal;
