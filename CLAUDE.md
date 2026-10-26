@@ -49,6 +49,10 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 - macOS: Human Interface Guidelines, поведение Sonoma
 
 ### Решения, которые уже приняты
+- **Wayland is POSTPONED (the user's decision, later on 2026-10-26):** first finish the current
+  X11 project — other people have started using Mimshel (an outside i18n PR). Phase 0 is done
+  (GO, numbers in `docs/wayland-plan.md`); resume with phase 1 when the user says so. Until then
+  everything below about X11 + xfwm4 is the working setup.
 - **Wayland — the user's decision of 2026-10-26** (overrides "only X11" and "xfwm4 draws the
   windows, we don't write a window manager" below): Mimshel gets its own Wayland compositor on
   **Smithay**, GPU rendering with **OpenGL ES** and a macOS-like **layer model**, a **frame budget**

@@ -56,3 +56,5 @@
 **Roadmap review (2026-10-25):** what to do, postpone or drop after the audit — see `docs/roadmap-review.md`.
 
 **Wayland (2026-10-26):** own compositor on Smithay — decision, phases and the X11→Wayland mapping in `docs/wayland-plan.md`.
+
+**Wayland postponed (2026-10-26):** finish the X11 project first; phase 0 results are kept in `docs/wayland-plan.md`.
