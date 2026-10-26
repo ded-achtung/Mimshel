@@ -55,12 +55,12 @@ pub struct AboutUi {
 }
 
 impl AboutUi {
-    pub fn new() -> AboutUi {
+    pub fn new(lang: mimshel_core::i18n::Language) -> AboutUi {
         AboutUi {
             win: None,
             info: None,
             dirty: false,
-            language: mimshel_core::i18n::Language::Ru,
+            language: lang,
         }
     }
 

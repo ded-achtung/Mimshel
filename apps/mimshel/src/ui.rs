@@ -466,7 +466,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         folders,
         menubar,
         notify,
-        about: crate::about_ui::AboutUi::new(),
+        about: crate::about_ui::AboutUi::new(config.language),
         tx: tx.clone(),
     };
     ui.search.set_language(config.language);
