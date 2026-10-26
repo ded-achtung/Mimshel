@@ -135,6 +135,14 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
         "look" if name == "gtk_theme" || name == "cursor_theme" => vec!["look"],
         // Строка меню: и панель Xfce, и знак меню ставит apply menubar.
         "menubar" => vec!["menubar"],
+        // The terminal is a separate process: it reads the setting when a
+        // window opens, so there is nothing to restart.
+        "terminal" => {
+            println!(
+                "Новые окна терминала возьмут настройку сами — уже открытые нужно открыть заново."
+            );
+            return 0;
+        }
         _ => vec!["service"],
     };
     run_apply(&config, &parts)

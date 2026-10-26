@@ -10,6 +10,7 @@
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
@@ -161,6 +162,20 @@ pub fn terminal_command(config: &Config) -> Vec<String> {
         cmd[0] = crate::guard::own_exe().display().to_string();
     }
     cmd
+}
+
+/// Run a command detached from us: stdio to null, its own process group, and
+/// a thread waits for it to exit — otherwise finished children would stay
+/// zombies in a long-running process (the daemon, a terminal window).
+pub fn spawn_detached(mut cmd: Command) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut child = cmd.spawn()?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// Запустить программу: на видеокарте NVIDIA, если так выбрано в настройках

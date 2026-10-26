@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
+use mimshel_core::config::Osc52;
 use mimshel_core::input::{Key, KeyPress, latin};
 use mimshel_dbus::menu_export::MenuSpec;
 use mimshel_render::Canvas;
@@ -88,14 +89,9 @@ pub fn run(dir: Option<PathBuf>, command: Option<Vec<String>>) -> i32 {
 
 /// Open a web address in the default browser (detached).
 fn open_url(url: &str) {
-    use std::os::unix::process::CommandExt;
-    let _ = std::process::Command::new("xdg-open")
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn();
+    let mut cmd = std::process::Command::new("xdg-open");
+    cmd.arg(url);
+    let _ = crate::ui::spawn_detached(cmd);
 }
 
 /// The system monospace font (`fc-match monospace`), else DejaVu Sans Mono.
@@ -174,6 +170,8 @@ struct Tabs {
     next_id: u64,
     cell: (u32, u32),
     tx: Sender<Wake>,
+    /// Whether programs may put text into the clipboard (OSC 52).
+    osc52: Osc52,
     /// Tab label font (regular, not monospace) — loaded the first time
     /// there are two tabs.
     ui_fonts: Option<Fonts>,
@@ -209,6 +207,7 @@ impl Tabs {
             dir,
             command,
             Palette::default(),
+            self.osc52,
             move || {
                 let _ = wake.send(Wake::Term(id));
             },
@@ -673,13 +672,7 @@ impl Window {
                 if let Some(dir) = session.cwd() {
                     c.arg(dir);
                 }
-                use std::os::unix::process::CommandExt;
-                let _ = c
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .process_group(0)
-                    .spawn();
+                let _ = crate::ui::spawn_detached(c);
             }
             Cmd::NewTab => self.new_tab()?,
             Cmd::CloseTab => return Ok(self.close_tab(self.tabs.active)),
@@ -988,6 +981,7 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         next_id: 0,
         cell,
         tx: tx.clone(),
+        osc52: crate::ui::load_config().osc52,
         ui_fonts: None,
         hover: None,
         sb_active: false,
@@ -1104,6 +1098,7 @@ mod tests {
             next_id: 0,
             cell: glyphs.cell,
             tx,
+            osc52: Osc52::Allow,
             ui_fonts: None,
             hover: None,
             sb_active: false,
@@ -1144,6 +1139,7 @@ mod tests {
             next_id: 0,
             cell: glyphs.cell,
             tx,
+            osc52: Osc52::Allow,
             ui_fonts: None,
             hover: None,
             sb_active: false,

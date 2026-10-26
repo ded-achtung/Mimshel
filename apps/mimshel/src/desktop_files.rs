@@ -5,7 +5,7 @@
 //! — в отдельных потоках; перемены в папке служба увидит через слежение.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
@@ -420,20 +420,12 @@ pub fn spawn(args: &[&str], dir: Option<&Path>) {
         return;
     };
     let mut cmd = Command::new(program);
-    cmd.args(rest)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args(rest);
     if let Some(dir) = dir {
         cmd.current_dir(dir);
     }
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    match cmd.spawn() {
-        // Дожидаемся в отдельном потоке, чтобы не копились «зомби».
-        Ok(mut child) => {
-            std::thread::spawn(move || child.wait());
-        }
-        Err(e) => eprintln!("Не запустить {program}: {e}"),
+    if let Err(e) = crate::ui::spawn_detached(cmd) {
+        eprintln!("Не запустить {program}: {e}");
     }
 }
 

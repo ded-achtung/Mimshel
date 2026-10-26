@@ -21,10 +21,21 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
+use mimshel_core::config::Osc52;
 use tiny_skia::Pixmap;
 
 use crate::glyphs::Glyphs;
 use crate::palette::Palette;
+
+/// OSC 52 payloads above this many bytes are ignored: any program in the
+/// terminal (including a remote one over SSH) can write to the clipboard,
+/// so the data must not be unbounded.
+const OSC52_MAX: usize = 1024 * 1024;
+
+/// Accept a clipboard store from a program (setting + size limit)?
+fn accept_osc52(osc52: Osc52, text: &str) -> bool {
+    osc52 == Osc52::Allow && text.len() <= OSC52_MAX
+}
 
 /// Что сеанс сообщает окну.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,8 +72,10 @@ pub struct Session {
     events: Receiver<Event>,
     cell: (u32, u32),
     size: (usize, usize),
-    /// Палитра — для ответов на «какой у тебя цвет» (OSC 10/11/4).
+    /// Palette — for «what colour are you» answers (OSC 10/11/4).
     palette: Palette,
+    /// Whether programs may put text into the clipboard (OSC 52).
+    osc52: Osc52,
     /// Shell process id — to find its current folder.
     shell_pid: u32,
 }
@@ -76,6 +89,7 @@ impl Session {
         dir: Option<PathBuf>,
         command: Option<Vec<String>>,
         palette: Palette,
+        osc52: Osc52,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Session> {
         let mut env = std::collections::HashMap::new();
@@ -113,6 +127,7 @@ impl Session {
             cell,
             size: (cols, rows),
             palette,
+            osc52,
             shell_pid,
         })
     }
@@ -134,7 +149,13 @@ impl Session {
                 }
                 Event::Title(t) => out.push(TermEvent::Title(t)),
                 Event::ResetTitle => out.push(TermEvent::ResetTitle),
-                Event::ClipboardStore(_, text) => out.push(TermEvent::Copy(text)),
+                // A program asks to store clipboard text: honour the setting
+                // and the size limit (or anything, even over SSH, owns it).
+                Event::ClipboardStore(_, text) => {
+                    if accept_osc52(self.osc52, &text) {
+                        out.push(TermEvent::Copy(text));
+                    }
+                }
                 // Читать буфер обмена программе не даём (ядро и так не просит,
                 // пока OSC 52 только на копирование) — на всякий случай пусто.
                 Event::ClipboardLoad(..) => {}
@@ -422,8 +443,16 @@ mod tests {
     /// Настоящий сеанс: оболочка печатает — сетка это видит, OSC 52 доходит.
     #[test]
     fn shell_output_and_osc52() {
-        let mut s =
-            Session::spawn((40, 5), (8, 18), None, None, Palette::default(), || {}).unwrap();
+        let mut s = Session::spawn(
+            (40, 5),
+            (8, 18),
+            None,
+            None,
+            Palette::default(),
+            Osc52::Allow,
+            || {},
+        )
+        .unwrap();
         s.input(b"printf 'privet\\033]52;c;0J/RgNC40LLQtdGC\\a'; echo\r".to_vec());
         let start = Instant::now();
         let mut copied = None;
@@ -441,5 +470,59 @@ mod tests {
         assert_eq!((pm.width(), pm.height()), (400, 120));
         s.resize((60, 8));
         assert_eq!(s.screen_lines(), 8);
+    }
+
+    #[test]
+    fn osc52_size_limit_and_setting() {
+        let big = "x".repeat(OSC52_MAX + 1);
+        assert!(accept_osc52(Osc52::Allow, "small"));
+        assert!(accept_osc52(Osc52::Allow, &"x".repeat(OSC52_MAX)));
+        assert!(!accept_osc52(Osc52::Allow, &big));
+        assert!(!accept_osc52(Osc52::Off, "small"));
+    }
+
+    /// Setting off: the OSC 52 request reaches the session but never
+    /// becomes a clipboard copy.
+    #[test]
+    fn osc52_off_ignores_clipboard_store() {
+        let mut s = Session::spawn(
+            (40, 5),
+            (8, 18),
+            None,
+            None,
+            Palette::default(),
+            Osc52::Off,
+            || {},
+        )
+        .unwrap();
+        // The marker must come only from the command's output, so it cannot
+        // be already on screen in the echoed line as typed: `DO''NE` is
+        // concatenated to `DONE` by the shell, but the echo shows the quotes.
+        // The `\n` after the OSC puts the marker on a line of its own.
+        s.input(b"printf 'privet\\033]52;c;0J/RgNC40LLQtdGC\\a\\n'; echo DO''NE\r".to_vec());
+        let start = Instant::now();
+        let mut done = false;
+        while start.elapsed() < Duration::from_secs(5) && !done {
+            for e in s.poll() {
+                if let TermEvent::Copy(t) = e {
+                    panic!("OSC 52 ignored the setting: {t}");
+                }
+            }
+            s.select_all();
+            done = s
+                .selection_text()
+                .is_some_and(|t| t.lines().any(|l| l.trim() == "DONE"));
+            if !done {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        assert!(done, "the marker never appeared on the screen");
+        // One more poll: the clipboard event is queued before the marker
+        // reaches the grid, but it can arrive just after we saw the marker.
+        for e in s.poll() {
+            if let TermEvent::Copy(t) = e {
+                panic!("OSC 52 ignored the setting: {t}");
+            }
+        }
     }
 }

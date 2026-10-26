@@ -37,6 +37,9 @@ pub struct Config {
     pub png_icons: bool,
     /// Команда терминала для программ с `Terminal=true`; программа идёт после неё.
     pub terminal: Vec<String>,
+    /// Terminal: whether programs may put text into the clipboard (OSC 52,
+    /// the `terminal.osc52` setting).
+    pub osc52: Osc52,
     /// Сетка окна «Программы»: столбцы, строки и размер иконки.
     pub apps_columns: usize,
     pub apps_rows: usize,
@@ -111,6 +114,7 @@ impl Default for Config {
             // Our own terminal (`mimshel terminal -e PROGRAM`) — the user's
             // decision 2026-10-25; before that kitty (Xfce Terminal lacks OSC 52).
             terminal: vec!["mimshel".into(), "terminal".into(), "-e".into()],
+            osc52: Osc52::Allow,
             apps_columns: 7,
             apps_rows: 4,
             apps_icon: 72,
@@ -209,6 +213,32 @@ impl DockHide {
         ]
         .into_iter()
         .find(|h| h.name() == s)
+    }
+}
+
+/// Whether programs in the terminal may put text into the clipboard
+/// (OSC 52: Claude Code, tmux, vim over SSH).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Osc52 {
+    /// As before: allow.
+    Allow,
+    /// Ignore requests from programs.
+    Off,
+}
+
+impl Osc52 {
+    /// The word used in the settings file.
+    pub fn name(self) -> &'static str {
+        match self {
+            Osc52::Allow => "allow",
+            Osc52::Off => "off",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Osc52> {
+        [Osc52::Allow, Osc52::Off]
+            .into_iter()
+            .find(|o| o.name() == s)
     }
 }
 
@@ -313,6 +343,9 @@ impl Config {
         }
         if let Some(v) = list("apps", "terminal").filter(|v| !v.is_empty()) {
             c.terminal = v;
+        }
+        if let Some(v) = text("terminal", "osc52").and_then(|v| Osc52::parse(&v)) {
+            c.osc52 = v;
         }
         if let Some(v) = num("menubar", "height").filter(|&v| v >= 16) {
             c.menubar_height = v;
@@ -492,6 +525,11 @@ dgpu = {dgpu}
 no_dgpu = {no_dgpu}
 # Названия программ в строке меню, окне «Программы» и доке: ярлык = «Новое имя».
 rename = {rename}
+
+[terminal]
+# Отвечать на OSC 52 (программы в терминале кладут текст в буфер обмена —
+# Claude Code, tmux, vim по SSH): \"allow\" — разрешать, \"off\" — игнорировать.
+osc52 = {osc52}
 ",
             font = s(&self.font),
             theme = s(&self.icon_theme),
@@ -515,6 +553,7 @@ rename = {rename}
             idle = self.lock_idle,
             screen_off = self.lock_screen_off,
             terminal = list(&self.terminal),
+            osc52 = s(self.osc52.name()),
             hide_apps = list(&self.hide_apps),
             dgpu = list(&self.dgpu_apps),
             no_dgpu = list(&self.no_dgpu_apps),
@@ -847,6 +886,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ),
     ("apps.terminal", "команда терминала через пробел"),
     (
+        "terminal.osc52",
+        "программам класть текст в буфер обмена из терминала (OSC 52): allow или off",
+    ),
+    (
         "apps.hide",
         "программы, скрытые из окон «Программы» и «Поиск», через запятую",
     ),
@@ -937,6 +980,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
         "apps.terminal" if !input.is_empty() => {
             Ok(Value::Array(input.split_whitespace().collect()))
         }
+        "terminal.osc52" => words(&["allow", "off"]),
         _ if SETTINGS.iter().any(|s| s.0 == key) => Err("пустое значение".into()),
         _ => Err(format!("нет настройки {key}")),
     }
@@ -1090,6 +1134,34 @@ mod tests {
             Config::from_toml(text).terminal,
             ["terminal.desktop", "", " spaced "]
         );
+    }
+
+    #[test]
+    fn osc52_allow_or_off() {
+        assert_eq!(Config::default().osc52, Osc52::Allow);
+        assert!(Config::default().to_toml().contains("osc52 = \"allow\""));
+        // Round trip: the default file passes validation, values read back.
+        assert!(toml_error(&Config::default().to_toml()).is_none());
+        for (text, want) in [
+            ("[terminal]\nosc52 = \"allow\"", Osc52::Allow),
+            ("[terminal]\nosc52 = \"off\"", Osc52::Off),
+        ] {
+            assert!(toml_error(text).is_none(), "{text}");
+            assert_eq!(Config::from_toml(text).osc52, want, "{text}");
+        }
+        for text in [
+            "[terminal]\nosc52 = \"ask\"",
+            "[terminal]\nosc52 = true",
+            "[terminal]\nosc52 = 1",
+        ] {
+            assert!(toml_error(text).is_some(), "{text}");
+            assert_eq!(Config::from_toml(text).osc52, Osc52::Allow, "{text}");
+        }
+        assert_eq!(
+            setting_value("terminal.osc52", "off").unwrap().as_str(),
+            Some("off")
+        );
+        assert!(setting_value("terminal.osc52", "ask").is_err());
     }
 
     #[test]

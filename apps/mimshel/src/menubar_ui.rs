@@ -1366,17 +1366,9 @@ fn run(command: &[String]) {
         return;
     };
     let mut cmd = Command::new(program);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    match cmd.spawn() {
-        // Дожидаемся в отдельном потоке, чтобы не копились «зомби».
-        Ok(mut child) => {
-            std::thread::spawn(move || child.wait());
-        }
-        Err(e) => eprintln!("Не удалось выполнить «{}»: {e}", command.join(" ")),
+    cmd.args(args);
+    if let Err(e) = crate::ui::spawn_detached(cmd) {
+        eprintln!("Не удалось выполнить «{}»: {e}", command.join(" "));
     }
 }
 
