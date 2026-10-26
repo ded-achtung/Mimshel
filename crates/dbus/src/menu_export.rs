@@ -9,9 +9,10 @@
 
 use std::collections::HashMap;
 
-use zbus::blocking::Connection;
-use zbus::interface;
+use zbus::blocking::{Connection, MessageIterator};
+use zbus::message::Type as MessageType;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{MatchRule, interface};
 
 /// Where the menu lives on the bus.
 const PATH: &str = "/MenuBar";
@@ -179,7 +180,9 @@ pub struct ExportedMenu {
 }
 
 /// Publish `menus` (top-level items) for X11 window `window` and tell the
-/// registrar. A click calls `on_click(id)` (from the bus thread).
+/// registrar — now and every time it reappears (the service restarts with
+/// an empty registrar; without this the menu was lost until the window was
+/// reopened). A click calls `on_click(id)` (from the bus thread).
 pub fn export(
     window: u32,
     menus: Vec<MenuSpec>,
@@ -194,6 +197,34 @@ pub fn export(
             on_click: Box::new(on_click),
         },
     )?;
+    let rule = MatchRule::builder()
+        .msg_type(MessageType::Signal)
+        .sender("org.freedesktop.DBus")?
+        .interface("org.freedesktop.DBus")?
+        .member("NameOwnerChanged")?
+        .add_arg(crate::registrar::NAME)?
+        .build();
+    // Subscribe before the first attempt, so a registrar that appears in
+    // between is not missed. No registrar yet (service not running) is fine.
+    let owners = MessageIterator::for_match_rule(rule, &conn, Some(16))?;
+    let _ = register(&conn, window);
+    let watch = conn.clone();
+    std::thread::spawn(move || {
+        for msg in owners.flatten() {
+            let Ok((_name, _old, new)) = msg.body().deserialize::<(String, String, String)>()
+            else {
+                continue;
+            };
+            if !new.is_empty() {
+                let _ = register(&watch, window);
+            }
+        }
+    });
+    Ok(ExportedMenu { _conn: conn })
+}
+
+/// Tell the registrar where the menu of `window` is.
+fn register(conn: &Connection, window: u32) -> zbus::Result<()> {
     conn.call_method(
         Some(crate::registrar::NAME),
         crate::registrar::PATH,
@@ -201,7 +232,7 @@ pub fn export(
         "RegisterWindow",
         &(window, ObjectPath::try_from(PATH)?),
     )?;
-    Ok(ExportedMenu { _conn: conn })
+    Ok(())
 }
 
 #[cfg(test)]

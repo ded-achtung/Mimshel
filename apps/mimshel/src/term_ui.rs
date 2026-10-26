@@ -999,7 +999,9 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         });
     }
     win.show(&d)?;
-    // Menu at the top; without the service (registrar) — simply no menu.
+    // Menu at the top: shown once the service's registrar is there, and
+    // re-registered whenever the service restarts. Fails only without a
+    // session bus.
     let menu_tx = tx.clone();
     let _menu = match mimshel_dbus::menu_export::export(win.id(), menus(), move |id| {
         let _ = menu_tx.send(Wake::Menu(id));
