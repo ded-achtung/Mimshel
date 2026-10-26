@@ -107,6 +107,10 @@ pub(crate) enum Msg {
     Folder(Box<crate::folder_ui::FolderMsg>),
     /// Открыть папку в окне (команда `mimshel folder`, двойной щелчок на столе).
     OpenFolder(PathBuf),
+    /// Hot reload (v2): re-read the config file and redraw the
+    /// daemon UI in the new language / wallpaper, without exiting.
+    /// Sent by the `reload` socket command and by the config watcher.
+    Reload,
     /// Показать «Об этом компьютере» (команда `about` через сокет).
     ShowAbout,
     /// Сведения для «Об этом компьютере» собраны.
@@ -138,6 +142,7 @@ impl Msg {
             Msg::Desktop(_) => "стол".into(),
             Msg::Folder(_) => "окно папки".into(),
             Msg::OpenFolder(_) => "открыть папку".into(),
+            Msg::Reload => "перезагрузка настроек".into(),
             Msg::ShowAbout | Msg::About(_) => "об этом компьютере".into(),
             Msg::DropFinished { .. } => "перенос".into(),
         }
@@ -222,6 +227,15 @@ pub fn ask_daemon_folder(path: &std::path::Path) -> bool {
     crate::ipc::socket_path()
         .and_then(UnixStream::connect)
         .and_then(|mut s| s.write_all(format!("folder {}\n", path.display()).as_bytes()))
+        .is_ok()
+}
+
+/// Просит службу перечитать настройки и перерисоваться (v2 hot reload).
+/// `false` — службы нет.
+pub fn ask_daemon_reload() -> bool {
+    crate::ipc::socket_path()
+        .and_then(UnixStream::connect)
+        .and_then(|mut s| s.write_all(b"reload\n"))
         .is_ok()
 }
 
@@ -313,6 +327,33 @@ pub fn run(once: Option<Panel>) -> Result<()> {
 
     if daemon {
         listen(tx.clone())?;
+        // Hot reload watcher (v2): if the config file is edited by hand
+        // (not via `mimshel set`, which also sends `reload` over the
+        // socket), the daemon picks it up within ~2 s without exiting.
+        // Reload itself only reads the file, so it cannot retrigger.
+        {
+            let watch_tx = tx.clone();
+            let watch_path = config_path();
+            std::thread::spawn(move || {
+                let mut last = watch_path
+                    .as_ref()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .and_then(|m| m.modified().ok());
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let now = watch_path
+                        .as_ref()
+                        .and_then(|p| std::fs::metadata(p).ok())
+                        .and_then(|m| m.modified().ok());
+                    if now != last {
+                        last = now;
+                        if watch_tx.send(Msg::Reload).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
         // У виртуальной клавиатуры после входа одна раскладка (урок 18): одно
         // нажатие от программы — и значок раскладки пропадал. Вернуть все;
         // строка меню сама заметит смену клавиатуры.
@@ -699,6 +740,41 @@ impl Ui<'_> {
         Ok(())
     }
 
+    /// Hot reload (v2): re-read config, switch language (and wallpaper)
+    /// in every daemon component, and mark them dirty. The main loop
+    /// calls `flush()` right after this message, so the bar, dock,
+    /// desktop, folder windows and next-opened popups redraw in the
+    /// new language without the daemon exiting (PID unchanged).
+    /// Already-open terminal windows and already-open popups keep
+    /// their old wording until reopened (see docs/i18n.md).
+    fn reload(&mut self) -> Result<()> {
+        let config = load_config();
+        let lang = config.language;
+        eprintln!("Reloaded language: {}", lang.name());
+        self.search.set_language(lang);
+        self.apps_panel.set_language(lang);
+        if let Some(dock) = &mut self.dock {
+            dock.set_language(lang);
+        }
+        if let Some(menubar) = &mut self.menubar {
+            menubar.set_language(lang);
+        }
+        if let Some(notify) = &mut self.notify {
+            notify.set_language(lang);
+        }
+        if let Some(desktop) = &mut self.desktop {
+            desktop.set_language(self.display, lang, &config.wallpaper);
+        }
+        if let Some(folders) = &mut self.folders {
+            folders.set_language(lang);
+        }
+        self.terminal = terminal_command(&config);
+        if self.shown.is_some() {
+            self.redraw()?;
+        }
+        Ok(())
+    }
+
     fn set_apps(&mut self, all: Vec<App>) -> Result<()> {
         // Новые программы могли принести свои значки.
         self.icons.refresh();
@@ -722,6 +798,7 @@ impl Ui<'_> {
 
     fn message(&mut self, msg: Msg) -> Result<()> {
         match msg {
+            Msg::Reload => self.reload(),
             Msg::Toggle(panel) => self.toggle(panel),
             Msg::Apps(apps) => self.set_apps(apps),
             Msg::Fonts(fonts) => {

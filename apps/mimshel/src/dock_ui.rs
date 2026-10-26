@@ -135,6 +135,13 @@ impl DockUi {
         }
     }
 
+    /// Hot reload (v2): switch language without restarting the daemon.
+    /// The dock is redrawn on the next flush.
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.dock.set_language(lang);
+        self.dirty = true;
+    }
+
     pub fn set_apps(&mut self, d: &Display, apps: Vec<App>) {
         self.dock.set_apps(apps);
         self.refresh_windows(d);

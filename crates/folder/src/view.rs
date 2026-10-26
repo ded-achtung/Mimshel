@@ -1098,6 +1098,7 @@ impl FolderView {
                 let noun = match self.language.resolve() {
                     mimshel_core::i18n::Language::En => "folder",
                     mimshel_core::i18n::Language::Zh => "文件夹",
+                    mimshel_core::i18n::Language::ZhTw => "資料夾",
                     _ => "папка",
                 };
                 format!("«{}»  |  {}", one.name, noun)
@@ -1114,6 +1115,9 @@ impl FolderView {
                     ),
                     mimshel_core::i18n::Language::Zh => {
                         format!("已选: {n} 个项目: {}", size_with_bytes(size))
+                    }
+                    mimshel_core::i18n::Language::ZhTw => {
+                        format!("已選取：{n} 個項目：{}", size_with_bytes(size))
                     }
                     _ => format!(
                         "Выделено: {n} {}: {}",
@@ -1164,12 +1168,14 @@ impl FolderView {
                 match self.language.resolve() {
                     mimshel_core::i18n::Language::En => "Folder is empty",
                     mimshel_core::i18n::Language::Zh => "文件夹为空",
+                    mimshel_core::i18n::Language::ZhTw => "資料夾是空的",
                     _ => "Папка пуста",
                 }
             } else {
                 match self.language.resolve() {
                     mimshel_core::i18n::Language::En => "Nothing found",
                     mimshel_core::i18n::Language::Zh => "未找到",
+                    mimshel_core::i18n::Language::ZhTw => "找不到任何項目",
                     _ => "Ничего не найдено",
                 }
             };
@@ -1462,6 +1468,8 @@ fn count_word(lang: mimshel_core::i18n::Language, n: usize, kind: &str) -> Strin
         }
         (mimshel_core::i18n::Language::Zh, "folder") => "个文件夹".into(),
         (mimshel_core::i18n::Language::Zh, _) => "个文件".into(),
+        (mimshel_core::i18n::Language::ZhTw, "folder") => "個資料夾".into(),
+        (mimshel_core::i18n::Language::ZhTw, _) => "個檔案".into(),
         _ => plural(
             n,
             if kind == "folder" {

@@ -156,6 +156,24 @@ pub struct DesktopUi {
 }
 
 impl DesktopUi {
+    /// Hot reload (v2): switch language and, if it changed, wallpaper
+    /// without restarting the daemon. The desktop is fully redrawn on
+    /// the next flush; a new wallpaper is painted by the painter thread
+    /// and applied when its DesktopMsg arrives.
+    pub fn set_language(
+        &mut self,
+        d: &Display,
+        lang: mimshel_core::i18n::Language,
+        wallpaper: &str,
+    ) {
+        self.language = lang;
+        self.full_dirty = true;
+        if wallpaper != self.wallpaper {
+            self.wallpaper = wallpaper.to_string();
+            self.load_wallpaper(d);
+        }
+    }
+
     pub fn new(d: &Display, config: &Config, tx: Sender<Msg>) -> Result<DesktopUi> {
         let window = d.create_desktop()?;
         // Xfwm4 обновляет _NET_WORKAREA при изменении резервов Dock/панелей.

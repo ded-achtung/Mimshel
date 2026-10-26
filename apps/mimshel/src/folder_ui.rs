@@ -146,6 +146,18 @@ impl FolderUi {
         .inspect(|ui| scan_phones(ui.tx.clone()))
     }
 
+    /// Hot reload (v2): switch language without restarting the daemon.
+    /// Places are rebuilt and every open folder window is marked dirty,
+    /// so the next flush redraws sidebar, title and status bar.
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
+        self.update_places();
+        for w in &mut self.windows {
+            w.view.set_language(lang);
+            w.dirty = true;
+        }
+    }
+
     /// Значки окна папки — заранее: первое окно открывается без задержки.
     pub fn preload(&self, icons: &mut Icons) {
         mimshel_folder::view::preload(icons, &self.places);

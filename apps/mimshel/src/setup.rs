@@ -124,6 +124,17 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     if !apply {
         return 0;
     }
+    // Hot reload (v2): language and wallpaper switch without restarting
+    // the daemon, the session or the machine. If no daemon is running,
+    // the setting simply takes effect on the next login.
+    if section == "look" && (name == "language" || name == "wallpaper") {
+        if crate::ui::ask_daemon_reload() {
+            println!("Служба перечитала настройки (без перезапуска)");
+        } else {
+            println!("Служба не запущена — настройки применятся при следующем запуске");
+        }
+        return 0;
+    }
     let config = load_config();
     // Что применить: часть, которую переключили, или прежнюю программу, чьи
     // настройки поменялись (Plank, панель Xfce). Служба перезапускается всегда.

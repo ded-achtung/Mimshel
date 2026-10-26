@@ -106,8 +106,12 @@ impl Client {
     }
 }
 
-/// Команда службе: окно (`search`, `apps`), `folder ПУТЬ` или `about`.
+/// Команда службе: окно (`search`, `apps`), `folder ПУТЬ`, `about`
+/// или `reload` (v2 hot reload: перечитать настройки без перезапуска).
 fn command(text: &str) -> Option<Msg> {
+    if text.trim() == "reload" {
+        return Some(Msg::Reload);
+    }
     if text.trim() == "about" {
         return Some(Msg::ShowAbout);
     }

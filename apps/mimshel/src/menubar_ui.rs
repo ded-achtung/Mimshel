@@ -120,6 +120,16 @@ pub struct MenubarUi {
 }
 
 impl MenubarUi {
+    /// Hot reload (v2): switch language without restarting the daemon.
+    /// The bar is redrawn on the next flush; an already-open popup keeps
+    /// its old wording until it is closed and reopened (its menu was
+    /// built at open time).
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
+        self.dirty = true;
+        self.popup_dirty = true;
+    }
+
     pub fn new(d: &Display, config: &Config, apps: Vec<App>, tx: Sender<Msg>) -> Result<MenubarUi> {
         let (sw, _) = d.screen_size();
         let mut ui = MenubarUi {

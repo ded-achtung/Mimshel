@@ -468,6 +468,7 @@ impl Center {
         match self.language.resolve() {
             mimshel_core::i18n::Language::En => "No notifications",
             mimshel_core::i18n::Language::Zh => "没有通知",
+            mimshel_core::i18n::Language::ZhTw => "沒有通知",
             _ => "Нет уведомлений",
         }
     }

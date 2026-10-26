@@ -26,8 +26,9 @@ pub struct Config {
     pub font: String,
     /// Тема иконок.
     pub icon_theme: String,
-    /// Interface language: `auto` (default, follow system locale), `en`,
-    /// `ru` or `zh`. See `crate::i18n`. Resolved via `language.resolve()`.
+    /// Interface language: `en` (default in v2), `ru`, `zh`, `zh_TW`,
+    /// or `auto` (explicit opt-in: follow system locale). See `crate::i18n`.
+    /// Resolved via `language.resolve()`.
     pub language: Language,
     /// Тема окон и программ (GTK и xfwm4), курсор и обои: `space`, `waves`,
     /// `aurora` — свои, нарисованные программой, или путь к картинке.
@@ -111,7 +112,7 @@ impl Default for Config {
         Config {
             font: "Inter".into(),
             icon_theme: "Colloid-mimshel".into(),
-            language: Language::Auto,
+            language: Language::En,
             gtk_theme: "Colloid-Dark".into(),
             cursor_theme: "Colloid-cursors".into(),
             wallpaper: "space".into(),
@@ -503,7 +504,7 @@ apps_panel = {p_apps}
 # свои, нарисованные программой, или путь к картинке). Применить: mimshel apply look wallpaper
 font = {font}
 icon_theme = {theme}
-# Interface language: en, ru, zh or auto (default: system locale).
+# Interface language: en, ru, zh, zh_TW or auto (default: en).
 language = {language}
 gtk_theme = {gtk_theme}
 cursor_theme = {cursor_theme}
@@ -878,7 +879,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("look.icon_theme", "тема иконок"),
     (
         "look.language",
-        "language: en, ru, zh or auto (default: system locale)",
+        "language: en, ru, zh, zh_TW or auto (default: en)",
     ),
     (
         "look.gtk_theme",
@@ -983,7 +984,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 Ok(Value::from(input))
             }
         }
-        "look.language" => words(&["en", "ru", "zh", "auto"]),
+        "look.language" => words(&["en", "ru", "zh", "zh_TW", "auto"]),
         "look.scale" => match input.replace(',', ".").as_str() {
             "auto" => Ok(Value::from("auto")),
             v => match v.parse::<f64>() {
