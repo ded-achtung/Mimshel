@@ -67,6 +67,7 @@ pub enum ControlAction {
 
 pub struct ControlPanel {
     pub state: ControlState,
+    pub language: mimshel_core::i18n::Language,
     pub hover: Option<Tile>,
     /// The slider being dragged.
     dragging: Option<Tile>,
@@ -107,9 +108,14 @@ impl ControlPanel {
     pub fn new(state: ControlState) -> ControlPanel {
         ControlPanel {
             state,
+            language: mimshel_core::i18n::Language::Ru,
             hover: None,
             dragging: None,
         }
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -336,17 +342,20 @@ impl ControlPanel {
         let (net_icon, net_name) = if s.network.wifi.is_some() {
             ("network-wireless-symbolic", "Wi-Fi")
         } else {
-            ("network-wired-symbolic", "Сеть")
+            (
+                "network-wired-symbolic",
+                mimshel_core::i18n::t(self.language, "control.network"),
+            )
         };
         let net_status = match (&s.network.wifi, s.network.connection.as_str()) {
-            (Some(false), _) => "Выключен".to_string(),
-            (_, "") => "Не подключено".to_string(),
+            (Some(false), _) => mimshel_core::i18n::t(self.language, "control.off").to_string(),
+            (_, "") => mimshel_core::i18n::t(self.language, "control.not_connected").to_string(),
             (_, c) => c.to_string(),
         };
         let bt_status = match s.bluetooth {
-            Some(true) => "Включён",
-            Some(false) => "Выключен",
-            None => "Недоступен",
+            Some(true) => mimshel_core::i18n::t(self.language, "control.on"),
+            Some(false) => mimshel_core::i18n::t(self.language, "control.off"),
+            None => mimshel_core::i18n::t(self.language, "control.unavailable"),
         };
         let rows = [
             (Tile::Network, net_icon, net_name, net_status, net_on),
@@ -387,8 +396,18 @@ impl ControlPanel {
             if s.dnd { ON } else { OFF },
         );
         icon(&mut pm, "weather-clear-night-symbolic", cx, cy);
-        for (text, style, y) in [("Не", &NAME, cy + 24.0), ("беспокоить", &NAME, cy + 40.0)]
-        {
+        for (text, style, y) in [
+            (
+                mimshel_core::i18n::t(self.language, "control.dnd1"),
+                &NAME,
+                cy + 24.0,
+            ),
+            (
+                mimshel_core::i18n::t(self.language, "control.dnd2"),
+                &NAME,
+                cy + 40.0,
+            ),
+        ] {
             let tw = fonts.measure(text, style);
             fonts.draw(&mut pm, text, style, cx - tw / 2.0, y, None);
         }
@@ -396,9 +415,13 @@ impl ControlPanel {
         // Sliders: display, sound.
         for (t, top) in self.sliders() {
             let (name, v, ic) = match (t, &s.display, &s.sound) {
-                (Tile::Display, Some(b), _) => ("Дисплей", *b, "display-brightness-symbolic"),
+                (Tile::Display, Some(b), _) => (
+                    mimshel_core::i18n::t(self.language, "control.display"),
+                    *b,
+                    "display-brightness-symbolic",
+                ),
                 (_, _, Some(sound)) => (
-                    "Звук",
+                    mimshel_core::i18n::t(self.language, "control.sound"),
                     if sound.muted { 0 } else { sound.volume },
                     sound.icon(),
                 ),

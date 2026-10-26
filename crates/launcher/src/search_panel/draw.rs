@@ -140,7 +140,14 @@ impl SearchPanel {
 
         if self.result_count() == 0 {
             let y = top + (row_h - DIM.line_height()) / 2.0;
-            fonts.draw(&mut pm, "Ничего не найдено", &DIM, name_x, y, Some(name_w));
+            fonts.draw(
+                &mut pm,
+                mimshel_core::i18n::t(self.language, "panel.nothing_found"),
+                &DIM,
+                name_x,
+                y,
+                Some(name_w),
+            );
             return pm;
         }
 

@@ -768,6 +768,7 @@ impl Ui<'_> {
         if let Some(folders) = &mut self.folders {
             folders.set_language(lang);
         }
+        self.about.set_language(lang);
         self.terminal = terminal_command(&config);
         if self.shown.is_some() {
             self.redraw()?;

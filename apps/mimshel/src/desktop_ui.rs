@@ -1039,7 +1039,8 @@ impl DesktopUi {
 
     /// Окно «Обои» посередине экрана; миниатюры рисуются в фоне.
     fn open_picker(&mut self, d: &Display) -> Result<()> {
-        let picker = WallpaperPicker::new(WALLPAPERS, &self.wallpaper);
+        let mut picker = WallpaperPicker::new(WALLPAPERS, &self.wallpaper);
+        picker.set_language(self.language);
         let (w, h) = picker.size();
         let (sw, sh) = d.screen_size();
         let x = (i32::from(sw) - w as i32) / 2;

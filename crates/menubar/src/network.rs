@@ -161,6 +161,7 @@ pub enum NetworkAction {
 
 pub struct NetworkPanel {
     pub state: NetState,
+    pub language: mimshel_core::i18n::Language,
     pub hover: Option<NetRow>,
 }
 
@@ -226,7 +227,15 @@ struct Layout {
 
 impl NetworkPanel {
     pub fn new(state: NetState) -> NetworkPanel {
-        NetworkPanel { state, hover: None }
+        NetworkPanel {
+            state,
+            language: mimshel_core::i18n::Language::Ru,
+            hover: None,
+        }
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
     }
 
     fn layout(&self) -> Layout {
@@ -237,14 +246,14 @@ impl NetworkPanel {
         let mut rows = Vec::new();
         let mut note = None;
         if s.wired.is_some() {
-            captions.push((y, "Проводная сеть"));
+            captions.push((y, mimshel_core::i18n::t(self.language, "net.wired")));
             y += CAPTION;
             wired = Some(y);
             y += ROW;
         }
         match s.wifi {
             Some(true) => {
-                captions.push((y, "Сети Wi-Fi"));
+                captions.push((y, mimshel_core::i18n::t(self.language, "net.wifi_networks")));
                 y += CAPTION;
                 for i in 0..s.networks.len().min(MAX_ROWS) {
                     rows.push((y, i));
@@ -254,20 +263,20 @@ impl NetworkPanel {
                     note = Some((
                         y,
                         if s.scanning {
-                            "Поиск сетей…"
+                            mimshel_core::i18n::t(self.language, "net.searching")
                         } else {
-                            "Сетей рядом не найдено"
+                            mimshel_core::i18n::t(self.language, "net.no_networks")
                         },
                     ));
                     y += ROW;
                 }
             }
             Some(false) => {
-                note = Some((y, "Wi-Fi выключен"));
+                note = Some((y, mimshel_core::i18n::t(self.language, "net.wifi_off")));
                 y += ROW;
             }
             None if s.wired.is_none() => {
-                note = Some((y, "Нет сетевых устройств"));
+                note = Some((y, mimshel_core::i18n::t(self.language, "net.no_devices")));
                 y += ROW;
             }
             None => {}
@@ -399,7 +408,7 @@ impl NetworkPanel {
         let title = if s.wifi.is_some() {
             "Wi-Fi"
         } else {
-            "Сеть"
+            mimshel_core::i18n::t(self.language, "net.network")
         };
         fonts.draw(&mut pm, title, &BOLD, X0, line_y(PAD, TITLE, &BOLD), None);
         if let Some(on) = s.wifi {
@@ -437,12 +446,12 @@ impl NetworkPanel {
         if let (Some(top), Some((connected, name))) = (l.wired, &s.wired) {
             dot(&mut pm, top, *connected);
             let label = if name.is_empty() {
-                "Кабель не подключён"
+                mimshel_core::i18n::t(self.language, "net.cable_unplugged")
             } else {
                 name.as_str()
             };
             let status = if *connected {
-                "Подключено"
+                mimshel_core::i18n::t(self.language, "net.connected")
             } else {
                 ""
             };
@@ -484,7 +493,7 @@ impl NetworkPanel {
             }
             let busy = s.busy.as_deref() == Some(n.ssid.as_str());
             let status = if busy {
-                "Подключение…"
+                mimshel_core::i18n::t(self.language, "net.connecting")
             } else {
                 ""
             };
@@ -530,7 +539,7 @@ impl NetworkPanel {
         }
         fonts.draw(
             &mut pm,
-            "Настройки сети…",
+            mimshel_core::i18n::t(self.language, "net.settings"),
             &TEXT,
             X0,
             line_y(l.settings, ROW, &TEXT),

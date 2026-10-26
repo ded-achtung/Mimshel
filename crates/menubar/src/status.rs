@@ -171,32 +171,45 @@ pub struct Battery {
 }
 
 impl Battery {
-    /// Состояние словами.
+    /// Состояние словами (русский по умолчанию — старые вызовы и тесты).
     pub fn state_text(&self) -> String {
-        let time = self.time.as_deref().map(human_time);
+        self.state_text_lang(mimshel_core::i18n::Language::Ru)
+    }
+
+    /// Состояние словами на языке `lang`.
+    pub fn state_text_lang(&self, lang: mimshel_core::i18n::Language) -> String {
+        let time = self.time.as_deref().map(|v| human_time_lang(v, lang));
+        let tr = |k: &'static str| mimshel_core::i18n::t(lang, k);
         match (self.state.as_str(), time) {
-            ("fully-charged", _) => "Полностью заряжен".into(),
-            ("charging", Some(t)) => format!("Заряжается, до полного {t}"),
-            ("charging", None) => "Заряжается".into(),
-            ("discharging", Some(t)) => format!("От аккумулятора, осталось {t}"),
-            ("discharging", None) => "От аккумулятора".into(),
-            ("pending-charge", _) => "От сети, не заряжается".into(),
-            ("empty", _) => "Разряжен".into(),
-            _ => "Состояние неизвестно".into(),
+            ("fully-charged", _) => tr("battery.fully_charged").into(),
+            ("charging", Some(t)) => tr("battery.charging_full").replace("{t}", &t),
+            ("charging", None) => tr("battery.charging").into(),
+            ("discharging", Some(t)) => tr("battery.on_battery_left").replace("{t}", &t),
+            ("discharging", None) => tr("battery.on_battery").into(),
+            ("pending-charge", _) => tr("battery.plugged_not_charging").into(),
+            ("empty", _) => tr("battery.empty").into(),
+            _ => tr("battery.unknown").into(),
         }
     }
 }
 
-/// «2,5 hours» / «40,0 minutes» → «2,5 ч» / «40 мин».
+/// «2,5 hours» / «40,0 minutes» → «2,5 ч» / «40 мин» (русский по умолчанию).
 fn human_time(t: &str) -> String {
+    human_time_lang(t, mimshel_core::i18n::Language::Ru)
+}
+
+fn human_time_lang(t: &str, lang: mimshel_core::i18n::Language) -> String {
     let mut it = t.split_whitespace();
     let (Some(n), Some(unit)) = (it.next(), it.next()) else {
         return t.to_string();
     };
+    let tr = |k: &'static str| mimshel_core::i18n::t(lang, k);
     match unit {
-        u if u.starts_with("hour") => format!("{n} ч"),
-        u if u.starts_with("minute") => format!("{} мин", n.split([',', '.']).next().unwrap_or(n)),
-        u if u.starts_with("second") => "меньше минуты".into(),
+        u if u.starts_with("hour") => tr("battery.time_hour").replace("{n}", n),
+        u if u.starts_with("minute") => {
+            tr("battery.time_min").replace("{n}", n.split([',', '.']).next().unwrap_or(n))
+        }
+        u if u.starts_with("second") => tr("battery.less_than_minute").into(),
         _ => t.to_string(),
     }
 }

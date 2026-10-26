@@ -128,6 +128,18 @@ impl MenubarUi {
         self.language = lang;
         self.dirty = true;
         self.popup_dirty = true;
+        if let Some(p) = &mut self.control_panel {
+            p.set_language(lang);
+        }
+        if let Some(p) = &mut self.network_panel {
+            p.set_language(lang);
+        }
+        if let Some(p) = &mut self.bluetooth_panel {
+            p.set_language(lang);
+        }
+        if let Some(p) = &mut self.sound_panel {
+            p.set_language(lang);
+        }
     }
 
     pub fn new(d: &Display, config: &Config, apps: Vec<App>, tx: Sender<Msg>) -> Result<MenubarUi> {
@@ -809,14 +821,18 @@ impl MenubarUi {
         };
         let entries = vec![
             entry(
-                &format!("Аккумулятор: {} %", b.percent),
+                &format!(
+                    "{}: {} %",
+                    mimshel_core::i18n::t(self.language, "battery.title"),
+                    b.percent
+                ),
                 Cmd::Info,
                 false,
                 false,
             ),
-            entry(&b.state_text(), Cmd::Info, false, false),
+            entry(&b.state_text_lang(self.language), Cmd::Info, false, false),
             entry(
-                "Настройки энергосбережения…",
+                mimshel_core::i18n::t(self.language, "battery.power_settings"),
                 Cmd::PowerSettings,
                 false,
                 true,
@@ -868,13 +884,14 @@ impl MenubarUi {
         let _ = self.control.try_send(ControlRequest::Refresh);
         let _ = self.audio.send(Audio::Refresh);
         self.backlight = status::read_backlight();
-        let panel = ControlPanel::new(ControlState {
+        let mut panel = ControlPanel::new(ControlState {
             network: self.network.clone(),
             bluetooth: self.bluetooth_on(),
             dnd: self.dnd,
             display: self.backlight.as_ref().map(Backlight::percent),
             sound: self.sound.clone(),
         });
+        panel.set_language(self.language);
         let size = panel.size();
         self.control_panel = Some(panel);
         self.show_popup(d, Part::Control, x, size)
@@ -938,7 +955,8 @@ impl MenubarUi {
         let mut state = self.net_state.clone().unwrap_or_default();
         state.scanning = true;
         let _ = self.net.send(NetCmd::Scan);
-        let panel = NetworkPanel::new(state);
+        let mut panel = NetworkPanel::new(state);
+        panel.set_language(self.language);
         let size = panel.size();
         self.network_panel = Some(panel);
         self.show_popup(d, part, x, size)
@@ -974,7 +992,8 @@ impl MenubarUi {
         if let Some(bt) = &self.bt {
             bt.send(BtCmd::Scan(true));
         }
-        let panel = BluetoothPanel::new(state);
+        let mut panel = BluetoothPanel::new(state);
+        panel.set_language(self.language);
         let size = panel.size();
         self.bluetooth_panel = Some(panel);
         self.show_popup(d, part, x, size)
@@ -1019,7 +1038,8 @@ impl MenubarUi {
         let Some(sound) = self.sound.clone() else {
             return Ok(());
         };
-        let panel = SoundPanel::new(sound);
+        let mut panel = SoundPanel::new(sound);
+        panel.set_language(self.language);
         let size = panel.size();
         self.sound_panel = Some(panel);
         self.show_popup(d, Part::Volume, x, size)
@@ -1148,8 +1168,18 @@ impl MenubarUi {
             return Ok(());
         }
         let entries = vec![
-            entry("Свернуть", Cmd::Minimize, false, false),
-            entry("Закрыть окно", Cmd::CloseWindow, false, false),
+            entry(
+                mimshel_core::i18n::t(self.language, "menu.minimize"),
+                Cmd::Minimize,
+                false,
+                false,
+            ),
+            entry(
+                mimshel_core::i18n::t(self.language, "term.close_window"),
+                Cmd::CloseWindow,
+                false,
+                false,
+            ),
         ];
         self.open_menu(d, fonts, Part::App, "app".into(), x, entries)
     }
