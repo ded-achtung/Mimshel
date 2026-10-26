@@ -5,9 +5,10 @@
 //! Наружу — [`NotifyEvent`] через `notify`; внутрь — [`NotifyServer::closed`]
 //! и [`NotifyServer::action`] (служба шлёт программе сигналы).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use zbus::blocking::Connection;
 use zbus::interface;
@@ -15,6 +16,22 @@ use zbus::zvariant::{OwnedValue, Value};
 
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
+
+/// Bytes kept for `app_name`, `app_icon`, `desktop_entry` and the
+/// `image-path` hint: long strings from programs would pile up in history.
+const MAX_NAME: usize = 256;
+/// Bytes kept for the summary and the body.
+const MAX_SUMMARY: usize = 1024;
+const MAX_BODY: usize = 8192;
+/// Action key–label pairs kept (`take(MAX_ACTIONS)`).
+const MAX_ACTIONS: usize = 8;
+/// Images are drawn at a 32-point icon (96 px even at 3x scale), so a
+/// 256-px cap leaves generous headroom while keeping every stored copy small.
+const MAX_IMAGE_SIDE: u32 = 256;
+/// More notifications than this within `RATE_WINDOW`: the extra ones are
+/// dropped (an id is still returned, per the spec).
+const RATE_LIMIT: usize = 20;
+const RATE_WINDOW: Duration = Duration::from_secs(1);
 
 /// Картинка уведомления, присланная данными: ширина, высота, RGBA без
 /// умножения на прозрачность.
@@ -94,6 +111,171 @@ type Sink = Arc<Mutex<Box<dyn Fn(NotifyEvent) + Send>>>;
 struct Server {
     next_id: Arc<AtomicU32>,
     notify: Sink,
+    /// Rate limiter for incoming notifications.
+    rate: Mutex<RateLimit>,
+}
+
+/// Lets through at most `limit` notifications per `window`; the rest are
+/// dropped (a flood must not grind the daemon down).
+struct RateLimit {
+    /// Arrival times of the let-through ones, oldest first.
+    times: VecDeque<Instant>,
+    limit: usize,
+    window: Duration,
+}
+
+impl RateLimit {
+    fn new(limit: usize, window: Duration) -> Self {
+        RateLimit {
+            times: VecDeque::new(),
+            limit,
+            window,
+        }
+    }
+
+    /// `true` — show this one; `false` — drop it (an id is still returned).
+    fn allow(&mut self, now: Instant) -> bool {
+        while self
+            .times
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= self.window)
+        {
+            self.times.pop_front();
+        }
+        if self.times.len() >= self.limit {
+            return false;
+        }
+        self.times.push_back(now);
+        true
+    }
+}
+
+/// `s` cut to at most `max` bytes, on a char boundary.
+fn truncate(mut s: String, max: usize) -> String {
+    if s.len() > max {
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
+/// Smaller copy of `img` with the longer side at most `max` pixels (box
+/// average of the covered pixels, like the dock previews, with the colour
+/// weighted by alpha — the data is not premultiplied, so plain averaging
+/// would darken transparent edges); small enough images are kept as they are.
+fn downscale(img: Image, max: u32) -> Image {
+    let (w, h) = (img.width, img.height);
+    let big = w.max(h);
+    if big <= max {
+        return img;
+    }
+    let ow = ((w * max + big / 2) / big).max(1);
+    let oh = ((h * max + big / 2) / big).max(1);
+    let mut rgba = vec![0u8; (ow * oh * 4) as usize];
+    for oy in 0..oh {
+        let y0 = oy * h / oh;
+        let y1 = (((oy + 1) * h / oh).max(y0 + 1)).min(h);
+        for ox in 0..ow {
+            let x0 = ox * w / ow;
+            let x1 = (((ox + 1) * w / ow).max(x0 + 1)).min(w);
+            let mut sum = [0u64; 4];
+            let mut n = 0u64;
+            for sy in y0..y1 {
+                let row = &img.rgba[(sy * w + x0) as usize * 4..(sy * w + x1) as usize * 4];
+                for px in row.as_chunks::<4>().0 {
+                    let a = u64::from(px[3]);
+                    for (c, v) in px.iter().enumerate().take(3) {
+                        sum[c] += u64::from(*v) * a;
+                    }
+                    sum[3] += a;
+                    n += 1;
+                }
+            }
+            let out = &mut rgba[(oy * ow + ox) as usize * 4..][..4];
+            for (c, v) in out.iter_mut().enumerate().take(3) {
+                *v = sum[c].checked_div(sum[3]).unwrap_or(0) as u8;
+            }
+            out[3] = (sum[3] / n) as u8;
+        }
+    }
+    Image {
+        width: ow,
+        height: oh,
+        rgba,
+    }
+}
+
+impl Server {
+    /// The notification to show, or `None` if this one is dropped by the rate
+    /// limit. Strings and images are cut to sane sizes so history stays small.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        &self,
+        app_name: String,
+        app_icon: String,
+        summary: String,
+        body: String,
+        actions: Vec<String>,
+        hints: HashMap<String, OwnedValue>,
+        expire_timeout: i32,
+        now: Instant,
+    ) -> Option<Notification> {
+        if !self
+            .rate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .allow(now)
+        {
+            return None;
+        }
+        let hint = |k: &str| hints.get(k).and_then(|v| v.try_clone().ok());
+        let text = |k: &str| hint(k).and_then(|v| String::try_from(v).ok());
+        // An image sent as data: bounded to 2048x2048 while parsing, then
+        // shrunk to what the UI actually draws.
+        let image = ["image-data", "image_data", "icon_data"]
+            .iter()
+            .find_map(|k| hint(k).and_then(image_from))
+            .map(|img| downscale(img, MAX_IMAGE_SIDE));
+        // An image sent as a path is used like the icon when there is none.
+        let app_icon = if app_icon.is_empty() {
+            text("image-path")
+                .or_else(|| text("image_path"))
+                .unwrap_or_default()
+        } else {
+            app_icon
+        };
+        Some(Notification {
+            // The caller sets the real id (replaces or the next one).
+            id: 0,
+            app_name: truncate(app_name, MAX_NAME),
+            app_icon: truncate(app_icon, MAX_NAME),
+            // Cut the raw text before stripping: a client may send megabytes,
+            // and markup only shrinks the text, so a 4x headroom is plenty
+            // for the final exact trim below.
+            summary: truncate(
+                strip_markup(&truncate(summary, MAX_SUMMARY * 4)),
+                MAX_SUMMARY,
+            ),
+            body: truncate(strip_markup(&truncate(body, MAX_BODY * 4)), MAX_BODY),
+            actions: actions
+                .chunks(2)
+                .filter_map(|c| Some((c.first()?.clone(), c.get(1)?.clone())))
+                .take(MAX_ACTIONS)
+                .collect(),
+            image,
+            desktop_entry: text("desktop-entry").map(|e| truncate(e, MAX_NAME)),
+            urgency: hint("urgency")
+                .and_then(|v| u8::try_from(v).ok())
+                .unwrap_or(1),
+            expire_timeout,
+            transient: hint("transient")
+                .and_then(|v| bool::try_from(v).ok())
+                .unwrap_or(false),
+        })
+    }
 }
 
 #[interface(name = "org.freedesktop.Notifications")]
@@ -125,40 +307,19 @@ impl Server {
         } else {
             self.next_id.fetch_add(1, Ordering::Relaxed)
         };
-        let hint = |k: &str| hints.get(k).and_then(|v| v.try_clone().ok());
-        let text = |k: &str| hint(k).and_then(|v| String::try_from(v).ok());
-        let image = ["image-data", "image_data", "icon_data"]
-            .iter()
-            .find_map(|k| hint(k).and_then(image_from));
-        // Картинка файлом — как иконка, если своей иконки нет.
-        let app_icon = if app_icon.is_empty() {
-            text("image-path")
-                .or_else(|| text("image_path"))
-                .unwrap_or_default()
-        } else {
-            app_icon
-        };
-        let n = Notification {
-            id,
+        if let Some(n) = self.build(
             app_name,
             app_icon,
-            summary: strip_markup(&summary),
-            body: strip_markup(&body),
-            actions: actions
-                .chunks(2)
-                .filter_map(|c| Some((c.first()?.clone(), c.get(1)?.clone())))
-                .collect(),
-            image,
-            desktop_entry: text("desktop-entry"),
-            urgency: hint("urgency")
-                .and_then(|v| u8::try_from(v).ok())
-                .unwrap_or(1),
+            summary,
+            body,
+            actions,
+            hints,
             expire_timeout,
-            transient: hint("transient")
-                .and_then(|v| bool::try_from(v).ok())
-                .unwrap_or(false),
-        };
-        (self.notify.lock().unwrap_or_else(|p| p.into_inner()))(NotifyEvent::Show(n));
+            Instant::now(),
+        ) {
+            let n = Notification { id, ..n };
+            (self.notify.lock().unwrap_or_else(|p| p.into_inner()))(NotifyEvent::Show(n));
+        }
         id
     }
 
@@ -239,6 +400,7 @@ pub fn start(notify: impl Fn(NotifyEvent) + Send + 'static) -> zbus::Result<Noti
         Server {
             next_id: Arc::new(AtomicU32::new(1)),
             notify: Arc::new(Mutex::new(Box::new(notify))),
+            rate: Mutex::new(RateLimit::new(RATE_LIMIT, RATE_WINDOW)),
         },
     )?;
     let reply =
@@ -326,5 +488,203 @@ mod tests {
         let img = image_from(OwnedValue::try_from(v).unwrap()).unwrap();
         assert_eq!((img.width, img.height), (2, 1));
         assert_eq!(img.rgba, [255, 0, 0, 255, 0, 255, 0, 255]);
+    }
+
+    /// A server whose notifications a test can inspect.
+    fn test_server() -> (Server, Arc<Mutex<Vec<Notification>>>) {
+        let got: Arc<Mutex<Vec<Notification>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&got);
+        let server = Server {
+            next_id: Arc::new(AtomicU32::new(1)),
+            notify: Arc::new(Mutex::new(Box::new(move |e| {
+                if let NotifyEvent::Show(n) = e {
+                    sink.lock().unwrap_or_else(|p| p.into_inner()).push(n);
+                }
+            }))),
+            rate: Mutex::new(RateLimit::new(RATE_LIMIT, RATE_WINDOW)),
+        };
+        (server, got)
+    }
+
+    fn text_hint(hints: &mut HashMap<String, OwnedValue>, key: &str, value: &str) {
+        hints.insert(
+            key.to_string(),
+            OwnedValue::try_from(Value::from(value.to_string())).unwrap(),
+        );
+    }
+
+    fn image_hint(w: i32, h: i32, data: Vec<u8>) -> OwnedValue {
+        let v: Value = StructureBuilder::new()
+            .add_field(w)
+            .add_field(h)
+            .add_field(w * 4)
+            .add_field(true)
+            .add_field(8i32)
+            .add_field(4i32)
+            .add_field(data)
+            .build()
+            .unwrap()
+            .into();
+        OwnedValue::try_from(v).unwrap()
+    }
+
+    #[test]
+    fn truncates_long_fields_on_char_boundaries() {
+        let (server, _got) = test_server();
+        let mut hints = HashMap::new();
+        text_hint(&mut hints, "desktop-entry", &"d".repeat(300));
+        // With an empty icon the image-path hint becomes the icon.
+        text_hint(&mut hints, "image-path", &"p".repeat(300));
+        let n = server
+            .build(
+                "у".repeat(300), // 2 bytes per char
+                String::new(),
+                "s".repeat(2000),
+                "b".repeat(9000),
+                Vec::new(),
+                hints,
+                -1,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(n.app_name, "у".repeat(MAX_NAME / 2));
+        assert_eq!(n.app_name.len(), MAX_NAME);
+        assert_eq!(n.app_icon, "p".repeat(MAX_NAME));
+        assert_eq!(n.summary.len(), MAX_SUMMARY);
+        assert_eq!(n.body.len(), MAX_BODY);
+        assert_eq!(n.desktop_entry, Some("d".repeat(MAX_NAME)));
+        // Short strings pass through.
+        assert_eq!(truncate("short".into(), MAX_NAME), "short");
+    }
+
+    #[test]
+    fn caps_actions_at_eight_pairs() {
+        let (server, _got) = test_server();
+        let actions: Vec<String> = (0..20)
+            .flat_map(|i| [format!("k{i}"), format!("v{i}")])
+            .collect();
+        let n = server
+            .build(
+                "a".into(),
+                String::new(),
+                "s".into(),
+                String::new(),
+                actions,
+                HashMap::new(),
+                -1,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(n.actions.len(), MAX_ACTIONS);
+        assert_eq!(n.actions[0], ("k0".to_string(), "v0".to_string()));
+        assert_eq!(
+            n.actions[MAX_ACTIONS - 1],
+            ("k7".to_string(), "v7".to_string())
+        );
+    }
+
+    #[test]
+    fn downscale_averages_pixels() {
+        // Black and white columns average to grey.
+        let img = Image {
+            width: 2,
+            height: 1,
+            rgba: vec![0, 0, 0, 255, 255, 255, 255, 255],
+        };
+        let out = downscale(img, 1);
+        assert_eq!((out.width, out.height), (1, 1));
+        assert_eq!(out.rgba, vec![127, 127, 127, 255]);
+        // Transparent black next to opaque white: the colour is weighted by
+        // alpha, so the result stays white at half alpha — not grey.
+        let img = Image {
+            width: 2,
+            height: 1,
+            rgba: vec![0, 0, 0, 0, 255, 255, 255, 255],
+        };
+        let out = downscale(img, 1);
+        assert_eq!(out.rgba, vec![255, 255, 255, 127]);
+        // A fully transparent block keeps alpha 0 (no division by zero).
+        let img = Image {
+            width: 2,
+            height: 2,
+            rgba: [9, 9, 9, 0].repeat(4),
+        };
+        let out = downscale(img, 1);
+        assert_eq!(out.rgba, vec![0, 0, 0, 0]);
+        // Small enough images are kept as they are.
+        let img = Image {
+            width: 100,
+            height: 50,
+            rgba: vec![7; 100 * 50 * 4],
+        };
+        let out = downscale(img, MAX_IMAGE_SIDE);
+        assert_eq!((out.width, out.height), (100, 50));
+        assert_eq!(out.rgba, vec![7; 100 * 50 * 4]);
+    }
+
+    #[test]
+    fn downscales_incoming_images_to_the_drawn_size() {
+        let (server, _got) = test_server();
+        // Solid red 512x256 -> 256x128, colour kept.
+        let red: Vec<u8> = [255, 0, 0, 255].repeat(512 * 256);
+        let mut hints = HashMap::new();
+        hints.insert("image-data".to_string(), image_hint(512, 256, red));
+        let n = server
+            .build(
+                "a".into(),
+                String::new(),
+                "s".into(),
+                String::new(),
+                Vec::new(),
+                hints,
+                -1,
+                Instant::now(),
+            )
+            .unwrap();
+        let img = n.image.unwrap();
+        assert_eq!((img.width, img.height), (256, 128));
+        assert!(
+            img.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px == &[255, 0, 0, 255])
+        );
+        assert!(img.rgba.len() <= (MAX_IMAGE_SIDE * MAX_IMAGE_SIDE * 4) as usize);
+    }
+
+    #[test]
+    fn rate_limit_drops_excess_but_returns_ids() {
+        let (server, got) = test_server();
+        for i in 0..(RATE_LIMIT + 5) {
+            let id = server.notify(
+                format!("app{i}"),
+                0,
+                String::new(),
+                "s".into(),
+                String::new(),
+                Vec::new(),
+                HashMap::new(),
+                -1,
+            );
+            assert_eq!(id, i as u32 + 1, "an id even for dropped ones");
+        }
+        assert_eq!(
+            got.lock().unwrap_or_else(|p| p.into_inner()).len(),
+            RATE_LIMIT
+        );
+    }
+
+    #[test]
+    fn rate_limit_window_slides() {
+        let mut rate = RateLimit::new(3, RATE_WINDOW);
+        let t0 = Instant::now();
+        for i in 0..3 {
+            assert!(rate.allow(t0 + Duration::from_millis(100 * i)), "{i}");
+        }
+        assert!(!rate.allow(t0 + Duration::from_millis(399)));
+        // A second after the first arrival it expires — room again.
+        assert!(rate.allow(t0 + RATE_WINDOW));
+        assert!(!rate.allow(t0 + RATE_WINDOW));
     }
 }
