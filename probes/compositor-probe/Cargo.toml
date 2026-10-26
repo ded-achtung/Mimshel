@@ -1,0 +1,11 @@
+[package]
+name = "compositor-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend", "desktop", "renderer_gl", "use_system_lib"] }
+x11rb = "0.13"
