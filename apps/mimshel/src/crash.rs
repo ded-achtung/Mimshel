@@ -242,7 +242,9 @@ pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons) {
                 actions: Vec::new(),
                 image: None,
                 desktop_entry: None,
-                urgency: 1,
+                // Critical: shown even while the UI still assumes Do Not
+                // Disturb at startup, and kept until clicked.
+                urgency: 2,
                 expire_timeout: 0, // never expires on its own: a crash must be seen
                 transient: false,
             }),
@@ -509,7 +511,7 @@ mod tests {
         );
         assert_eq!(
             service_failure_at(None, None, Some(6), pid).0,
-            "аварийное завершение (SIGABRT)"
+            "завершилась аварийно (SIGABRT)"
         );
         assert_eq!(
             service_failure_at(None, None, Some(42), pid).0,
