@@ -49,6 +49,14 @@ i3lock-color) и склеен скриптом `macos-look` (см. ниже). Ц
 - macOS: Human Interface Guidelines, поведение Sonoma
 
 ### Решения, которые уже приняты
+- **Wayland — the user's decision of 2026-10-26** (overrides "only X11" and "xfwm4 draws the
+  windows, we don't write a window manager" below): Mimshel gets its own Wayland compositor on
+  **Smithay**, GPU rendering with **OpenGL ES** and a macOS-like **layer model**, a **frame budget**
+  (~2–3 ms per frame) measured from day one, no `unsafe` in our code, X11 apps via XWayland. The
+  compositor stays small; the shell (today's service) stays a separate process. **No X11 window
+  manager is written.** X11 + Xfce remains the working session until the new one is better; the
+  switch is a second login-screen session. Plan, phases and the X11→Wayland mapping:
+  `docs/wayland-plan.md`. **Phase 0 first:** a standalone performance probe decides go/no-go.
 - **Только X11, не Wayland.** У пользователя Houdini и др. программы на X11; X11 стабильнее.
 - **Окна рисует xfwm4** (Xfce). Свой оконный менеджер не пишем.
 - **Не GTK.** GTK 5 уберёт X11 (последняя версия сейчас GTK 4.24; GTK 6 не существует).
