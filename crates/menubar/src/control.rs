@@ -1,7 +1,8 @@
 //! Пункт управления, как в macOS Sonoma: плитки под значком в строке меню.
 //! Слева — «Сеть» и «Bluetooth» (кружок синий, когда включено), справа —
-//! «Не беспокоить», ниже — «Звук» с ползунком. Чего нет в системе (Wi-Fi,
-//! адаптера Bluetooth), то показывается как недоступное. Здесь состояние,
+//! «Не беспокоить», ниже — «Дисплей» (brightness) and «Звук» sliders. Чего нет
+//! в системе (Wi-Fi, адаптера Bluetooth), то показывается как недоступное;
+//! no backlight (a desktop) or no sound — no slider. Здесь состояние,
 //! мышь и рисование; включать и выключать — дело службы.
 
 use mimshel_core::input::Key;
@@ -29,6 +30,8 @@ pub struct ControlState {
     /// `None` — адаптера нет, иначе включён ли.
     pub bluetooth: Option<bool>,
     pub dnd: bool,
+    /// Screen brightness, percent; `None` — no backlight.
+    pub display: Option<u32>,
     pub sound: Option<Sound>,
 }
 
@@ -38,7 +41,10 @@ pub enum Tile {
     Network,
     Bluetooth,
     Dnd,
-    Slider,
+    /// The brightness slider.
+    Display,
+    /// The volume slider.
+    Volume,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +56,8 @@ pub enum ControlAction {
     SetBluetooth(bool),
     SetDnd(bool),
     SetVolume(u32),
+    /// Screen brightness, percent.
+    SetBrightness(u32),
     NetworkSettings,
     /// Открыть список устройств Bluetooth (щелчок по названию плитки).
     OpenBluetooth,
@@ -60,7 +68,8 @@ pub enum ControlAction {
 pub struct ControlPanel {
     pub state: ControlState,
     pub hover: Option<Tile>,
-    dragging: bool,
+    /// The slider being dragged.
+    dragging: Option<Tile>,
 }
 
 const WIDTH: f32 = 300.0;
@@ -69,7 +78,8 @@ const GAP: f32 = 8.0;
 const LEFT_W: f32 = 168.0;
 const ROW: f32 = 50.0;
 const TOP_H: f32 = 2.0 * ROW + 12.0;
-const SOUND_H: f32 = 66.0;
+/// Height of a slider tile (brightness, volume).
+const SLIDER_H: f32 = 66.0;
 const R: f32 = 15.0;
 const TILE_R: f32 = 14.0;
 
@@ -98,26 +108,42 @@ impl ControlPanel {
         ControlPanel {
             state,
             hover: None,
-            dragging: false,
+            dragging: None,
         }
     }
 
     pub fn size(&self) -> (u32, u32) {
-        let h = PAD
-            + TOP_H
-            + if self.state.sound.is_some() {
-                GAP + SOUND_H
-            } else {
-                0.0
-            }
-            + PAD;
+        let h = PAD + TOP_H + self.sliders().len() as f32 * (GAP + SLIDER_H) + PAD;
         (WIDTH as u32, h as u32)
     }
 
-    /// Ползунок звука: края дорожки и середина по высоте.
-    fn track() -> (f32, f32, f32) {
-        let top = PAD + TOP_H + GAP;
-        (PAD + 14.0, WIDTH - PAD - 14.0, top + SOUND_H - 20.0)
+    /// The sliders shown, top to bottom, with the top of each tile: display
+    /// first, then sound (as in macOS).
+    fn sliders(&self) -> Vec<(Tile, f32)> {
+        let mut out = Vec::new();
+        let mut top = PAD + TOP_H + GAP;
+        for (tile, shown) in [
+            (Tile::Display, self.state.display.is_some()),
+            (Tile::Volume, self.state.sound.is_some()),
+        ] {
+            if shown {
+                out.push((tile, top));
+                top += SLIDER_H + GAP;
+            }
+        }
+        out
+    }
+
+    /// A slider's track: left and right ends and the middle height.
+    fn track(top: f32) -> (f32, f32, f32) {
+        (PAD + 14.0, WIDTH - PAD - 14.0, top + SLIDER_H - 20.0)
+    }
+
+    fn track_of(&self, tile: Tile) -> Option<(f32, f32, f32)> {
+        self.sliders()
+            .into_iter()
+            .find(|(t, _)| *t == tile)
+            .map(|(_, top)| Self::track(top))
     }
 
     pub fn tile_at(&self, x: f32, y: f32) -> Option<Tile> {
@@ -137,16 +163,37 @@ impl ControlPanel {
         ) {
             return Some(Tile::Dnd);
         }
-        if self.state.sound.is_some() && inside(PAD, PAD + TOP_H + GAP, WIDTH - 2.0 * PAD, SOUND_H)
-        {
-            return Some(Tile::Slider);
-        }
-        None
+        self.sliders()
+            .into_iter()
+            .find(|(_, top)| inside(PAD, *top, WIDTH - 2.0 * PAD, SLIDER_H))
+            .map(|(t, _)| t)
     }
 
-    fn volume_at(x: f32) -> u32 {
-        let (x0, x1, _) = Self::track();
+    /// Percent under `x` on a slider's track.
+    fn percent_at(x: f32, (x0, x1, _): (f32, f32, f32)) -> u32 {
         ((x - x0) / (x1 - x0) * 100.0).round().clamp(0.0, 100.0) as u32
+    }
+
+    /// Move slider `tile` to `x`.
+    fn slide(&mut self, tile: Tile, x: f32) -> ControlAction {
+        let Some(track) = self.track_of(tile) else {
+            return ControlAction::Nothing;
+        };
+        let v = Self::percent_at(x, track);
+        match tile {
+            Tile::Display => self.set_brightness(v),
+            _ => self.set_volume(v),
+        }
+    }
+
+    fn set_brightness(&mut self, v: u32) -> ControlAction {
+        match &mut self.state.display {
+            Some(d) if *d != v => {
+                *d = v;
+                ControlAction::SetBrightness(v)
+            }
+            _ => ControlAction::Nothing,
+        }
     }
 
     fn set_volume(&mut self, v: u32) -> ControlAction {
@@ -162,7 +209,7 @@ impl ControlPanel {
     }
 
     pub fn dragging(&self) -> bool {
-        self.dragging
+        self.dragging.is_some()
     }
 
     /// Правый край кружка со значком у плиток слева (с запасом для пальца).
@@ -201,24 +248,27 @@ impl ControlPanel {
                 s.dnd = !s.dnd;
                 ControlAction::SetDnd(s.dnd)
             }
-            Some(Tile::Slider) => {
-                let (x0, x1, cy) = Self::track();
-                if (cy - 14.0..cy + 14.0).contains(&y) && (x0 - 10.0..x1 + 10.0).contains(&x) {
-                    self.dragging = true;
-                    self.set_volume(Self::volume_at(x))
-                } else {
-                    ControlAction::Nothing
+            Some(t @ (Tile::Display | Tile::Volume)) => match self.track_of(t) {
+                Some((x0, x1, cy))
+                    if (cy - 14.0..cy + 14.0).contains(&y)
+                        && (x0 - 10.0..x1 + 10.0).contains(&x) =>
+                {
+                    self.dragging = Some(t);
+                    self.slide(t, x)
                 }
-            }
+                _ => ControlAction::Nothing,
+            },
             None => ControlAction::Nothing,
         }
     }
 
     pub fn motion(&mut self, x: f32, y: f32) -> ControlAction {
-        if self.dragging {
-            return self.set_volume(Self::volume_at(x));
+        if let Some(t) = self.dragging {
+            return self.slide(t, x);
         }
-        let hover = self.tile_at(x, y).filter(|t| *t != Tile::Slider);
+        let hover = self
+            .tile_at(x, y)
+            .filter(|t| !matches!(t, Tile::Display | Tile::Volume));
         if hover == self.hover {
             return ControlAction::Nothing;
         }
@@ -227,7 +277,7 @@ impl ControlPanel {
     }
 
     pub fn release(&mut self) {
-        self.dragging = false;
+        self.dragging = None;
     }
 
     pub fn key(&mut self, key: Key) -> ControlAction {
@@ -343,14 +393,21 @@ impl ControlPanel {
             fonts.draw(&mut pm, text, style, cx - tw / 2.0, y, None);
         }
 
-        // Звук.
-        if let Some(sound) = &s.sound {
-            let top = PAD + TOP_H + GAP;
-            tile(&mut pm, PAD, top, WIDTH - 2.0 * PAD, SOUND_H, false);
-            fonts.draw(&mut pm, "Звук", &NAME, PAD + 14.0, top + 10.0, None);
-            let (x0, x1, cy) = Self::track();
+        // Sliders: display, sound.
+        for (t, top) in self.sliders() {
+            let (name, v, ic) = match (t, &s.display, &s.sound) {
+                (Tile::Display, Some(b), _) => ("Дисплей", *b, "display-brightness-symbolic"),
+                (_, _, Some(sound)) => (
+                    "Звук",
+                    if sound.muted { 0 } else { sound.volume },
+                    sound.icon(),
+                ),
+                _ => continue,
+            };
+            tile(&mut pm, PAD, top, WIDTH - 2.0 * PAD, SLIDER_H, false);
+            fonts.draw(&mut pm, name, &NAME, PAD + 14.0, top + 10.0, None);
+            let (x0, x1, cy) = Self::track(top);
             fill(&mut pm, rounded(x0, cy - 10.0, x1 - x0, 20.0, 10.0), TRACK);
-            let v = if sound.muted { 0 } else { sound.volume };
             let kx = x0 + 20.0 + (x1 - x0 - 20.0) * v as f32 / 100.0;
             fill(&mut pm, rounded(x0, cy - 10.0, kx - x0, 20.0, 10.0), FILL);
             fill(
@@ -358,7 +415,7 @@ impl ControlPanel {
                 circle(kx - 10.0, cy, 9.0),
                 [0xff, 0xff, 0xff, 0xff],
             );
-            icon(&mut pm, sound.icon(), x0 + 12.0, cy);
+            icon(&mut pm, ic, x0 + 12.0, cy);
         }
         pm
     }
@@ -377,6 +434,7 @@ mod tests {
             },
             bluetooth: None,
             dnd: false,
+            display: None,
             sound: Some(Sound {
                 volume: 40,
                 muted: false,
@@ -402,7 +460,7 @@ mod tests {
             ControlAction::SetDnd(true)
         );
         assert!(p.state.dnd);
-        let (x0, x1, cy) = ControlPanel::track();
+        let (x0, x1, cy) = p.track_of(Tile::Volume).unwrap();
         assert_eq!(p.press(x1, cy), ControlAction::SetVolume(100));
         assert_eq!(p.motion(x0 - 30.0, cy), ControlAction::SetVolume(0));
         p.release();
@@ -444,5 +502,37 @@ mod tests {
         st.sound = None;
         let small = ControlPanel::new(st);
         assert!(small.size().1 < p.size().1);
+    }
+
+    #[test]
+    fn brightness_slider_above_sound() {
+        let mut st = state();
+        st.display = Some(80);
+        let mut p = ControlPanel::new(st);
+        let without = ControlPanel::new(state());
+        assert_eq!(p.size().1 as f32, without.size().1 as f32 + GAP + SLIDER_H);
+        let (bx0, bx1, by) = p.track_of(Tile::Display).unwrap();
+        let (_, _, vy) = p.track_of(Tile::Volume).unwrap();
+        assert!(by < vy, "display above sound");
+        assert_eq!(p.tile_at(bx0 + 5.0, by), Some(Tile::Display));
+        // Press and drag: brightness follows, sound does not move.
+        assert_eq!(p.press(bx1, by), ControlAction::SetBrightness(100));
+        assert!(p.dragging());
+        let mid = bx0 + (bx1 - bx0) / 2.0;
+        assert_eq!(p.motion(mid, vy), ControlAction::SetBrightness(50));
+        assert_eq!(p.motion(mid, vy), ControlAction::Nothing, "same value");
+        p.release();
+        assert_eq!(p.state.display, Some(50));
+        assert_eq!(p.state.sound.as_ref().unwrap().volume, 40);
+        // No backlight and no sound: no sliders at all.
+        let mut st = state();
+        st.sound = None;
+        let bare = ControlPanel::new(st);
+        assert_eq!(bare.size().1 as f32, PAD + TOP_H + PAD);
+        // Renders at the computed size with both sliders.
+        let mut fonts = Fonts::new("Inter");
+        let mut icons = Icons::with_dirs("none", vec![], vec![]);
+        let pm = p.render(&mut fonts, &mut icons);
+        assert_eq!((pm.width(), pm.height()), p.size());
     }
 }

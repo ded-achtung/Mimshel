@@ -310,6 +310,49 @@ fn battery_time(state: &str, now: u64, full: u64, power: u64) -> Option<String> 
     })
 }
 
+/// Screen backlight from `/sys/class/backlight/DEVICE`: raw values, as the
+/// kernel gives them (`max_brightness` differs per driver: 255, 65535…).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Backlight {
+    /// Device name for logind's `SetBrightness("backlight", device, value)`.
+    pub device: String,
+    pub value: u32,
+    pub max: u32,
+}
+
+impl Backlight {
+    /// Brightness in percent, rounded.
+    pub fn percent(&self) -> u32 {
+        if self.max == 0 {
+            return 0;
+        }
+        ((u64::from(self.value) * 100 + u64::from(self.max) / 2) / u64::from(self.max)) as u32
+    }
+
+    /// Raw value for `percent`. Never 0: a dark screen cannot be brought
+    /// back with the slider you can no longer see — at least 1 % (and 1).
+    pub fn value_for(&self, percent: u32) -> u32 {
+        let floor = (self.max / 100).max(1).min(self.max);
+        let v = u64::from(self.max) * u64::from(percent.min(100)) / 100;
+        (v as u32).max(floor)
+    }
+}
+
+/// Which backlight device to use when there are several (hybrid graphics,
+/// ACPI next to the GPU driver): like systemd and GNOME — `firmware` first,
+/// then `platform`, then `raw`; same type — the first name in order.
+pub fn pick_backlight<'a>(devices: &[(&'a str, &str)]) -> Option<&'a str> {
+    let rank = |t: &str| match t {
+        "firmware" => 0,
+        "platform" => 1,
+        "raw" => 2,
+        _ => 3,
+    };
+    let mut sorted: Vec<_> = devices.iter().filter(|(_, t)| rank(t) < 3).collect();
+    sorted.sort_by_key(|(name, t)| (rank(t), *name));
+    sorted.first().map(|(name, _)| *name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +547,53 @@ mod tests {
             "fully-charged"
         );
         assert_eq!(sys_battery(&[SysBattery::default()], None), None);
+    }
+
+    #[test]
+    fn backlight_percent_and_floor() {
+        let b = Backlight {
+            device: "amdgpu_bl1".into(),
+            value: 65535,
+            max: 65535,
+        };
+        assert_eq!(b.percent(), 100);
+        assert_eq!(b.value_for(50), 32767);
+        // Never fully dark: 0 % is 1 % of the range.
+        assert_eq!(b.value_for(0), 655);
+        assert_eq!(b.value_for(250), 65535);
+        let small = Backlight {
+            device: "acpi_video0".into(),
+            value: 3,
+            max: 7,
+        };
+        assert_eq!(small.percent(), 43);
+        assert_eq!(small.value_for(0), 1);
+        assert_eq!(
+            Backlight {
+                max: 0,
+                ..small.clone()
+            }
+            .percent(),
+            0
+        );
+    }
+
+    #[test]
+    fn backlight_device_choice() {
+        assert_eq!(pick_backlight(&[("amdgpu_bl1", "raw")]), Some("amdgpu_bl1"));
+        assert_eq!(
+            pick_backlight(&[
+                ("nvidia_0", "raw"),
+                ("intel_backlight", "raw"),
+                ("acpi_video0", "firmware"),
+            ]),
+            Some("acpi_video0")
+        );
+        assert_eq!(
+            pick_backlight(&[("nvidia_0", "raw"), ("intel_backlight", "raw")]),
+            Some("intel_backlight")
+        );
+        assert_eq!(pick_backlight(&[("x", "unknown")]), None);
+        assert_eq!(pick_backlight(&[]), None);
     }
 }

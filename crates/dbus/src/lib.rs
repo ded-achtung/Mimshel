@@ -1,7 +1,9 @@
 //! Связь с другими программами через D-Bus: трей (StatusNotifierItem и меню
-//! значков DBusMenu), глобальное меню программ, уведомления и Bluetooth (BlueZ).
+//! значков DBusMenu), глобальное меню программ, уведомления, Bluetooth (BlueZ)
+//! and screen brightness (logind).
 
 pub mod appmenu;
+pub mod backlight;
 pub mod bluetooth;
 pub mod menu;
 pub mod menu_export;

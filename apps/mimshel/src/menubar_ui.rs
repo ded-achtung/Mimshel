@@ -12,13 +12,14 @@ use std::time::{Duration, Instant};
 use mimshel_apps::App;
 use mimshel_core::config::Config;
 use mimshel_core::keyboard::layout_label;
+use mimshel_dbus::backlight::Brightness;
 use mimshel_dbus::bluetooth::{Bluetooth, BtCmd, BtState};
 use mimshel_dbus::{
     AppMenu, AppMenuCmd, AppMenuUpdate, GtkPaths, MenuItem, Source, Tray, TrayCmd, TrayItem,
     TrayUpdate,
 };
 use mimshel_icons::Icons;
-use mimshel_menubar::status::{Battery, Sound};
+use mimshel_menubar::status::{Backlight, Battery, Sound};
 use mimshel_menubar::{
     AppleItem, Bar, BluetoothAction, BluetoothPanel, CalendarAction, CalendarPanel, ControlAction,
     ControlPanel, ControlState, NetState, NetworkAction, NetworkPanel, Part, SoundAction,
@@ -68,6 +69,10 @@ pub struct MenubarUi {
     apple: Vec<AppleItem>,
     sound: Option<Sound>,
     battery: Option<Battery>,
+    /// Screen backlight, re-read whenever the Control Center opens (the
+    /// brightness keys change it behind our back).
+    backlight: Option<Backlight>,
+    brightness: Brightness,
     dnd: bool,
     audio: Sender<Audio>,
     control: SyncSender<ControlRequest>,
@@ -125,6 +130,8 @@ impl MenubarUi {
             apple: apple_menu(&apple_menu_file()),
             sound: None,
             battery: None,
+            backlight: None,
+            brightness: Brightness::start(),
             dnd: false,
             audio: status::audio_worker(tx.clone()),
             control: status::control_worker(tx.clone()),
@@ -814,10 +821,12 @@ impl MenubarUi {
     fn open_control(&mut self, d: &Display, x: f32) -> Result<()> {
         let _ = self.control.try_send(ControlRequest::Refresh);
         let _ = self.audio.send(Audio::Refresh);
+        self.backlight = status::read_backlight();
         let panel = ControlPanel::new(ControlState {
             network: self.network.clone(),
             bluetooth: self.bluetooth_on(),
             dnd: self.dnd,
+            display: self.backlight.as_ref().map(Backlight::percent),
             sound: self.sound.clone(),
         });
         let size = panel.size();
@@ -849,6 +858,13 @@ impl MenubarUi {
             }
             ControlAction::SetVolume(v) => {
                 self.change_volume(d, v)?;
+                self.popup_dirty = true;
+            }
+            ControlAction::SetBrightness(percent) => {
+                if let Some(b) = &mut self.backlight {
+                    b.value = b.value_for(percent);
+                    self.brightness.set(&b.device, b.value);
+                }
                 self.popup_dirty = true;
             }
             ControlAction::OpenNetwork => {

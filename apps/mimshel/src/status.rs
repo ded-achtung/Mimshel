@@ -15,7 +15,8 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use mimshel_menubar::status::{
-    Battery, Sound, SysBattery, parse_app_sounds, parse_default_state, parse_sinks, sys_battery,
+    Backlight, Battery, Sound, SysBattery, parse_app_sounds, parse_default_state, parse_sinks,
+    pick_backlight, sys_battery,
 };
 use mimshel_menubar::{NetState, parse_known, parse_wifi_list, parse_wired};
 
@@ -198,6 +199,38 @@ pub fn read_network() -> mimshel_menubar::Network {
         wired,
         wifi,
     }
+}
+
+/// The screen backlight, if the machine has one (laptops; desktops with an
+/// external monitor usually do not). Cheap: three small sysfs reads.
+pub fn read_backlight() -> Option<Backlight> {
+    let base = Path::new("/sys/class/backlight");
+    let devices: Vec<(String, String)> = std::fs::read_dir(base)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let kind = std::fs::read_to_string(e.path().join("type")).ok()?;
+            Some((name, kind.trim().to_string()))
+        })
+        .collect();
+    let refs: Vec<(&str, &str)> = devices
+        .iter()
+        .map(|(n, t)| (n.as_str(), t.as_str()))
+        .collect();
+    let device = pick_backlight(&refs)?;
+    let num = |file: &str| -> Option<u32> {
+        std::fs::read_to_string(base.join(device).join(file))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    Some(Backlight {
+        device: device.to_string(),
+        value: num("brightness")?,
+        max: num("max_brightness").filter(|&m| m > 0)?,
+    })
 }
 
 /// Bluetooth: `None` — адаптера нет; иначе включён ли (по rfkill в /sys —
