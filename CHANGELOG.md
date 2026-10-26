@@ -4,6 +4,54 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 
 ## [Unreleased]
 
+## [v0.0.3-alpha] — 2026-10-26
+
+Third alpha: a security audit worked through, crash reports, and a few things people asked for.
+Tested on the same laptop (Tanshi X669, EndeavourOS, Xfce 4.20, X11).
+
+### New
+
+- **Crash reports.** Any part of Mimshel that fails leaves a report in
+  `~/.local/state/mimshel/crashes/`: for a panic the message, place and backtrace; for a signal
+  (SIGSEGV, SIGABRT, the OOM killer's SIGKILL) the reason and the last 30 log lines. The service
+  comes back by itself and shows «Mimshel перезапустился после сбоя» with the reason; after
+  5 quick crashes a dialog explains it and how to go back to Xfce. `mimshel crashes [last]`
+  lists them, `mimshel doctor` reports crashes of the last week. Normal restarts (an update,
+  `mimshel apply`) are not counted as crashes.
+- **`mimshel doctor --report`** — one archive for a bug report: system info, all `doctor`
+  checks, the config, the last 500 log lines and the crash reports, with the home path, user
+  name, host name and Wi-Fi names removed. Attach it to a GitHub issue after looking inside.
+- **Brightness slider** «Дисплей» in the Control Center, through systemd-logind — no root.
+- **Login screen styling:** `mimshel apply greeter` gives LightDM's slick-greeter Mimshel's
+  wallpaper, theme, cursor and font (asks for the sudo password once; `mimshel restore` undoes it).
+- **Phones and cameras** (MTP/PTP) in the file manager's Devices.
+- Terminal: `terminal.osc52 = "allow" | "off"` controls whether programs may set the clipboard.
+
+### Security (from an external audit)
+
+- The installer builds the Colloid themes from **pinned, reviewed commits** and checks them;
+  the offline archive carries the same pins and a SHA-256 file.
+- **Restoring settings is all or nothing:** a failure halfway no longer leaves half-deleted
+  Xfce/Plank settings.
+- The lock screen keeps the password in **one zeroizing buffer** and no longer leaves a copy in
+  the PAM library's conversation.
+- Notifications are bounded (text sizes, at most 8 actions, images downscaled, at most 20 per
+  second); OSC 52 clipboard writes are limited to 1 MiB.
+- CI: actions pinned by SHA (`actions/checkout` v7.0.1), dependency audit with `cargo-deny`
+  (RustSec advisories, licenses, sources), Dependabot.
+- README: what an X11 lock screen can and cannot protect against.
+
+### Fixed
+
+- The terminal's menu in the top bar no longer disappears when the service restarts.
+- The installer ignores a stale `offline/vendor` instead of failing the build.
+- Detached programs started from the terminal no longer stay as zombies.
+
+### Changed
+
+- With Mimshel's own file manager, the Thunar daemon is no longer started at login (~130 MB);
+  Thunar still starts on demand (e.g. the dock's «empty trash»).
+
 ## [v0.0.2-alpha] — 2026-10-25
 
 Second alpha. Tested daily on a real laptop (Tanshi X669: Ryzen 9 7940H, Radeon 780M + RTX 4070,

@@ -1,7 +1,7 @@
 # NEXT — ближайшие шаги
 
 **Обновлено:** 2026-10-25  
-**Текущая точка:** `v0.0.2-alpha` (25.10.2026), рабочая ветка `master`.
+**Текущая точка:** `v0.0.3-alpha` (26.10.2026), рабочая ветка `master`.
 **Название проекта:** Mimshel (Мимшел); команда `mimshel` (прежняя `shell` — ссылка).
 
 Этот файл — живой список следующей работы. Пункты здесь не означают, что они уже реализованы или подтверждены тестированием.
@@ -58,3 +58,5 @@
 **Wayland (2026-10-26):** own compositor on Smithay — decision, phases and the X11→Wayland mapping in `docs/wayland-plan.md`.
 
 **Wayland postponed (2026-10-26):** finish the X11 project first; phase 0 results are kept in `docs/wayland-plan.md`.
+
+**v0.0.4-alpha (planned):** UI languages from the outside PR #4 by ra1nzzz (en/ru/zh/zh_TW, English default, hot reload) once the wallpaper part is fixed; on the maintainer's laptop set `look.language = "ru"` right after merging.
