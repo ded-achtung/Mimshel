@@ -247,6 +247,11 @@ pub const OLD_PANEL_OFF: &[&[&str]] = &[
 /// То же для рабочего стола Xfce (xfdesktop), когда стол рисует Mimshel.
 pub const DESKTOP_OFF: &[&str] = &["true", "mimshel-no-desktop"];
 pub const OLD_DESKTOP_OFF: &[&[&str]] = &[&["true", "shell-no-desktop"]];
+/// The Thunar daemon's session line, when Mimshel has its own file manager.
+pub const THUNAR_DAEMON: &[&str] = &["Thunar", "--daemon"];
+/// And what it becomes: Thunar still starts on demand through D-Bus
+/// (`org.xfce.FileManager`, e.g. the dock's "empty trash").
+pub const THUNAR_OFF: &[&str] = &["true", "mimshel-no-thunar"];
 
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()

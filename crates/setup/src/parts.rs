@@ -14,7 +14,8 @@ use mimshel_core::config::{Config, DockHide};
 
 use crate::paths::{APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
 use crate::sys::{
-    DESKTOP_OFF, MANAGED_MARK, OLD_DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF, is_managed,
+    DESKTOP_OFF, MANAGED_MARK, OLD_DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF, THUNAR_DAEMON,
+    THUNAR_OFF, is_managed,
 };
 use crate::sys::{
     home, keyboard_ok, kill, pgrep, read, remove, run, running, spawn, write_if_changed, xget_list,
@@ -438,10 +439,29 @@ impl Plan<'_> {
                 &format!("{FOLDER_DESKTOP}.desktop"),
                 "inode/directory",
             ]);
+            // The Thunar daemon kept ~130 MB from login for nothing: like the
+            // panel, its session line becomes an empty command. D-Bus still
+            // starts Thunar when something asks for it (empty trash).
+            if let Some(i) = session_slot(THUNAR_DAEMON) {
+                xset_array(
+                    "xfce4-session",
+                    &format!("{SESSION}/Client{i}_Command"),
+                    "string",
+                    THUNAR_OFF,
+                );
+            }
+            // A running Thunar is left alone: `thunar -q` would also close
+            // windows a person opened. From the next login it is not started.
         } else {
             println!("▶ Окна папок — Thunar");
             remove(&file);
             run(&["xdg-mime", "default", "thunar.desktop", "inode/directory"]);
+            if let Some(i) = session_slot(THUNAR_OFF) {
+                xreset("xfce4-session", &format!("{SESSION}/Client{i}_Command"));
+            }
+            if !running("Thunar") {
+                self.later(&["Thunar", "--daemon"]);
+            }
         }
         if crate::sys::which("update-desktop-database").is_some() {
             run(&[

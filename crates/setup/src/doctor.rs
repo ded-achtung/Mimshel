@@ -8,7 +8,7 @@ use std::path::Path;
 use mimshel_core::config::Config;
 
 use crate::paths::{APPLE_MENU, APPS_SHORTCUT, Paths, SHORTCUTS, shortcut_command};
-use crate::sys::{DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF};
+use crate::sys::{DESKTOP_OFF, OLD_PANEL_OFF, PANEL_OFF, THUNAR_DAEMON, THUNAR_OFF};
 use crate::sys::{
     bus_owner, home, in_desktop_session, keyboard_ok, output, output_any, parent, pgrep, read,
     running, succeeds, xget, xget_list,
@@ -363,6 +363,14 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "рабочий стол — xfdesktop запущен",
             running("xfdesktop"),
             "mimshel apply desktop",
+        );
+    }
+    if cfg.folders {
+        add(
+            "folders",
+            "Проводник свой: Thunar не держится в памяти с входа",
+            panel_session_slot(THUNAR_OFF) && !panel_session_slot(THUNAR_DAEMON),
+            "mimshel apply folders",
         );
     }
     add(
