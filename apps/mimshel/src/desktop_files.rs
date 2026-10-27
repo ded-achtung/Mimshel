@@ -118,23 +118,23 @@ fn launch_untrusted(path: PathBuf) {
             .string("Exec")
             .unwrap_or_default();
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        let question = format!(
-            "«{}» — ярлык программы, а не документ.\n\
-             Он выполнит команду:\n\n<tt>{}</tt>\n\n\
-             Запускайте, только если доверяете тому, откуда он взялся.",
-            pango_escape(&name),
-            pango_escape(&exec),
-        );
+        let lang = mimshel_core::i18n::language_from_config();
+        let question = mimshel_core::i18n::t(lang, "desktop.launch_text")
+            .replace("{name}", &pango_escape(&name))
+            .replace("{exec}", &pango_escape(&exec));
         if !mimshel_setup::actions::confirm(
-            "Запустить ярлык?",
+            mimshel_core::i18n::t(lang, "desktop.launch_title"),
             &question,
-            "Запустить",
+            mimshel_core::i18n::t(lang, "desktop.launch_ok"),
             "dialog-warning",
         ) {
             return;
         }
         if let Err(e) = mark_executable(&path) {
-            error(&format!("Ярлык не помечен выполняемым: {e}"));
+            error(
+                &mimshel_core::i18n::t(lang, "desktop.launcher_not_executable")
+                    .replace("{e}", &e.to_string()),
+            );
             return;
         }
         spawn(&["gio", "launch", &path.display().to_string()], None);
@@ -163,7 +163,13 @@ pub fn trash(item: &Item) {
 
 /// Новая папка «Новая папка» (или «Новая папка 2»…). Возвращает путь.
 pub fn new_folder(dir: &Path) -> Option<PathBuf> {
-    let path = free_name(dir, "Новая папка");
+    let path = free_name(
+        dir,
+        mimshel_core::i18n::t(
+            mimshel_core::i18n::language_from_config(),
+            "folder.new_folder",
+        ),
+    );
     match std::fs::create_dir(&path) {
         Ok(()) => Some(path),
         Err(e) => {
@@ -175,7 +181,13 @@ pub fn new_folder(dir: &Path) -> Option<PathBuf> {
 
 /// Новый пустой текстовый файл «Новый документ.txt» (или «… 2.txt»).
 pub fn new_text_file(dir: &Path) -> Option<PathBuf> {
-    let path = free_name(dir, "Новый документ.txt");
+    let path = free_name(
+        dir,
+        mimshel_core::i18n::t(
+            mimshel_core::i18n::language_from_config(),
+            "desktop.new_text_file_name",
+        ),
+    );
     match std::fs::File::create_new(&path) {
         Ok(_) => Some(path),
         Err(e) => {
@@ -188,17 +200,36 @@ pub fn new_text_file(dir: &Path) -> Option<PathBuf> {
 /// Переименовать файл в той же папке. Ошибка — словами для окна.
 pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
     if new.is_empty() || matches!(new, "." | "..") || new.contains('/') {
-        return Err("Недопустимое имя файла.".into());
+        return Err(mimshel_core::i18n::t(
+            mimshel_core::i18n::language_from_config(),
+            "desktop.rename_invalid",
+        )
+        .into());
     }
-    let dir = path.parent().ok_or("нет папки")?;
+    let dir = path.parent().ok_or(mimshel_core::i18n::t(
+        mimshel_core::i18n::language_from_config(),
+        "desktop.rename_no_dir",
+    ))?;
     let target = dir.join(new);
     if target == path {
         return Ok(target);
     }
     match std::fs::symlink_metadata(&target) {
-        Ok(_) => return Err(format!("«{new}» уже есть в этой папке.")),
+        Ok(_) => {
+            return Err(mimshel_core::i18n::t(
+                mimshel_core::i18n::language_from_config(),
+                "desktop.rename_exists",
+            )
+            .replace("{new}", new));
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("Не проверить имя назначения: {e}")),
+        Err(e) => {
+            return Err(mimshel_core::i18n::t(
+                mimshel_core::i18n::language_from_config(),
+                "desktop.rename_check_failed",
+            )
+            .replace("{e}", &e.to_string()));
+        }
     }
     // std::fs::rename может заменить файл, созданный между проверкой и переименованием.
     // GNU mv с none-fail не заменяет назначения даже при гонке.
@@ -207,12 +238,22 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf, String> {
         .arg(path)
         .arg(&target)
         .status()
-        .map_err(|e| format!("Не удалось переименовать: {e}"))?;
+        .map_err(|e| {
+            mimshel_core::i18n::t(
+                mimshel_core::i18n::language_from_config(),
+                "desktop.rename_failed",
+            )
+            .replace("{e}", &e.to_string())
+        })?;
     if !status.success()
         || std::fs::symlink_metadata(path).is_ok()
         || std::fs::symlink_metadata(&target).is_err()
     {
-        return Err("Переименование не выполнено: имя занято или файл недоступен.".into());
+        return Err(mimshel_core::i18n::t(
+            mimshel_core::i18n::language_from_config(),
+            "desktop.rename_not_done",
+        )
+        .into());
     }
     Ok(target)
 }
@@ -243,20 +284,37 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
         // доступа «свободным именем», а отсутствие источника — успехом.
         match std::fs::symlink_metadata(dest) {
             Ok(_) => {
-                errors.push(format!(
-                    "Файл назначения {} уже существует.",
-                    dest.display()
-                ));
+                errors.push(
+                    mimshel_core::i18n::t(
+                        mimshel_core::i18n::language_from_config(),
+                        "desktop.transfer_exists",
+                    )
+                    .replace("{dest}", &dest.display().to_string()),
+                );
                 continue;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                errors.push(format!("Не проверить {}: {e}", dest.display()));
+                errors.push(
+                    mimshel_core::i18n::t(
+                        mimshel_core::i18n::language_from_config(),
+                        "desktop.transfer_check_failed",
+                    )
+                    .replace("{dest}", &dest.display().to_string())
+                    .replace("{e}", &e.to_string()),
+                );
                 continue;
             }
         }
         if let Err(e) = std::fs::symlink_metadata(src) {
-            errors.push(format!("Не прочитать {}: {e}", src.display()));
+            errors.push(
+                mimshel_core::i18n::t(
+                    mimshel_core::i18n::language_from_config(),
+                    "desktop.transfer_read_failed",
+                )
+                .replace("{src}", &src.display().to_string())
+                .replace("{e}", &e.to_string()),
+            );
             continue;
         }
         let mut cmd = Command::new(if moving { "mv" } else { "cp" });
@@ -279,9 +337,13 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
             && (!moving || std::fs::symlink_metadata(src).is_err());
         if !ok || !actually_done {
             let name = src.file_name().unwrap_or_default().to_string_lossy();
-            errors.push(format!(
-                "Не удалось перенести «{name}»: файл назначения занят или недоступен."
-            ));
+            errors.push(
+                mimshel_core::i18n::t(
+                    mimshel_core::i18n::language_from_config(),
+                    "desktop.transfer_failed",
+                )
+                .replace("{name}", &*name),
+            );
         }
     }
     errors
@@ -410,7 +472,13 @@ pub fn error(text: &str) {
         &[
             "zenity",
             "--error",
-            "--title=Рабочий стол",
+            &format!(
+                "--title={}",
+                mimshel_core::i18n::t(
+                    mimshel_core::i18n::language_from_config(),
+                    "desktop.error_title"
+                )
+            ),
             &format!("--text={text}"),
         ],
         None,

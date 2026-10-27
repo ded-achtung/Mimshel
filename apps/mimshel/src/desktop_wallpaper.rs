@@ -114,8 +114,20 @@ pub(crate) fn pick_file(tx: Sender<Msg>) {
             .args(start)
             .args([
                 "--file-selection",
-                "--title=Картинка для обоев",
-                "--file-filter=Картинки | *.png *.jpg *.jpeg *.svg *.webp *.PNG *.JPG *.JPEG",
+                &format!(
+                    "--title={}",
+                    mimshel_core::i18n::t(
+                        mimshel_core::i18n::language_from_config(),
+                        "wallpaper.pick_title"
+                    )
+                ),
+                &format!(
+                    "--file-filter={} | *.png *.jpg *.jpeg *.svg *.webp *.PNG *.JPG *.JPEG",
+                    mimshel_core::i18n::t(
+                        mimshel_core::i18n::language_from_config(),
+                        "wallpaper.pick_filter"
+                    )
+                ),
             ])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
