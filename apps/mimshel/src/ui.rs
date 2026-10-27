@@ -434,7 +434,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         // Up after a crash — tell the user through our own banners, or
         // through notify-send when notifications belong to Xfce (once;
         // last-crash is removed when read).
-        crate::crash::announce_restart(notify.as_mut(), &mut icons);
+        crate::crash::announce_restart(notify.as_mut(), &mut icons, config.language);
     }
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {

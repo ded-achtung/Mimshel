@@ -19,8 +19,6 @@ use crate::notify_ui::NotifyUi;
 /// The id of the restart notification: our own, so it can never collide
 /// with the ids `NotifyServer` hands out over D-Bus (it counts from 1).
 const INTERNAL_ID: u32 = u32::MAX;
-/// The summary of the restart notification, wherever it is shown.
-const RESTART_SUMMARY: &str = "Mimshel перезапустился после сбоя";
 
 /// Install the panic hook: writes a report into
 /// `~/.local/state/mimshel/crashes` and one line to stderr (which lands
@@ -193,7 +191,7 @@ pub fn note_last_crash(id: &str, reason: &str, report: Option<&Path>) {
 /// our own notification UI the banner goes straight to it; without one
 /// (`parts.notify` = xfce) the same text goes through `notify-send`. The
 /// file is removed either way, so the message shows once.
-pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons) {
+pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons, lang: mimshel_core::i18n::Language) {
     let Some(path) = last_crash_path() else {
         return;
     };
@@ -207,7 +205,11 @@ pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons) {
     if !crash.fresh(epoch_now()) {
         return;
     }
-    let body = format!("{}\nПодробности: mimshel crashes", crash.reason);
+    let body = format!(
+        "{}\n{}",
+        crash.reason,
+        mimshel_core::i18n::t(lang, "notify.crash_details")
+    );
     match notify {
         Some(notify) => notify.notify_event(
             icons,
@@ -215,7 +217,7 @@ pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons) {
                 id: INTERNAL_ID,
                 app_name: "Mimshel".into(),
                 app_icon: "dialog-error".into(),
-                summary: RESTART_SUMMARY.into(),
+                summary: mimshel_core::i18n::t(lang, "notify.crash_title").into(),
                 body,
                 actions: Vec::new(),
                 image: None,
@@ -227,15 +229,22 @@ pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons) {
                 transient: false,
             }),
         ),
-        None => notify_send(&body),
+        None => notify_send(&body, lang),
     }
 }
 
 /// No own notification UI (xfce4-notifyd shows banners instead): the same
 /// text through `notify-send`, critical urgency so it stays.
-fn notify_send(body: &str) {
+fn notify_send(body: &str, lang: mimshel_core::i18n::Language) {
     let mut cmd = std::process::Command::new("notify-send");
-    cmd.args(["-a", "Mimshel", "-u", "critical", RESTART_SUMMARY, body]);
+    cmd.args([
+        "-a",
+        "Mimshel",
+        "-u",
+        "critical",
+        mimshel_core::i18n::t(lang, "notify.crash_title"),
+        body,
+    ]);
     if let Err(e) = crate::ui::spawn_detached(cmd) {
         eprintln!("Не удалось показать уведомление о сбое: {e}");
     }
@@ -249,13 +258,34 @@ pub fn service_failure(status: &ExitStatus, pid: u32) -> (String, Option<PathBuf
     service_failure_at(report_dir(), status.code(), status.signal(), pid)
 }
 
+/// Language-aware variant: the guard passes the config language so the
+/// stored reason (and hence the restart banner) is already translated.
+pub fn service_failure_lang(
+    status: &ExitStatus,
+    pid: u32,
+    lang: mimshel_core::i18n::Language,
+) -> (String, Option<PathBuf>) {
+    use std::os::unix::process::ExitStatusExt;
+    service_failure_at_lang(report_dir(), status.code(), status.signal(), pid, lang)
+}
+
 fn service_failure_at(
     dir: Option<PathBuf>,
     code: Option<i32>,
     signal: Option<i32>,
     pid: u32,
 ) -> (String, Option<PathBuf>) {
-    let mut reason = common::exit_reason(code, signal);
+    service_failure_at_lang(dir, code, signal, pid, mimshel_core::i18n::Language::Ru)
+}
+
+fn service_failure_at_lang(
+    dir: Option<PathBuf>,
+    code: Option<i32>,
+    signal: Option<i32>,
+    pid: u32,
+    lang: mimshel_core::i18n::Language,
+) -> (String, Option<PathBuf>) {
+    let mut reason = common::exit_reason_lang(lang, code, signal);
     let mut report = None;
     if code == Some(101)
         && let Some(dir) = dir

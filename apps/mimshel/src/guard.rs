@@ -56,7 +56,8 @@ pub fn run() -> ! {
             }
             Ok((s, pid)) => {
                 use std::os::unix::process::ExitStatusExt;
-                let (reason, report) = crate::crash::service_failure(s, *pid);
+                let lang = mimshel_core::i18n::language_from_config();
+                let (reason, report) = crate::crash::service_failure_lang(s, *pid, lang);
                 (
                     reason,
                     report,
@@ -96,7 +97,7 @@ pub fn run() -> ! {
             log(&format!(
                 "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — больше не перезапускаю"
             ));
-            give_up(&reason);
+            give_up(&reason, mimshel_core::i18n::language_from_config());
         }
         // Чем чаще падает, тем дольше пауза: 1, 2, 3, 4 с.
         let pause = Duration::from_secs(u64::from(quick_failures));
@@ -111,12 +112,13 @@ pub fn run() -> ! {
 /// Five quick crashes in a row — there will be no dock or menu bar, and
 /// the user must be told why: a dialog with the reason, detached from the
 /// guard (zenity, xmessage as the fallback, else just the log).
-fn give_up(reason: &str) -> ! {
+fn give_up(reason: &str, lang: mimshel_core::i18n::Language) -> ! {
     let text = format!(
-        "Mimshel остановлен — служба падала {GIVE_UP} раз подряд.\n\
-         Последняя причина: {reason}\n\
-         Подробности: mimshel crashes\n\
-         Вернуть панель Xfce: mimshel restore"
+        "{}\n{} {reason}\n{}\n{}",
+        mimshel_core::i18n::t(lang, "crash.give_up_head"),
+        mimshel_core::i18n::t(lang, "crash.give_up_reason"),
+        mimshel_core::i18n::t(lang, "notify.crash_details"),
+        mimshel_core::i18n::t(lang, "crash.give_up_restore")
     );
     let mut shown = false;
     for (program, args) in [

@@ -77,8 +77,10 @@ impl NotifyUi {
 
     pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
         self.language = lang;
+        self.banners.language = lang;
         if let Some(center) = &mut self.center {
             center.language = lang;
+            center.list.language = lang;
         }
     }
 

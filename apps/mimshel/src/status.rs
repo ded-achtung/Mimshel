@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use mimshel_menubar::status::{
-    Backlight, Battery, Sound, SysBattery, parse_app_sounds, parse_default_state, parse_sinks,
+    Backlight, Battery, Sound, SysBattery, parse_app_sounds_lang, parse_default_state, parse_sinks,
     pick_backlight, sys_battery,
 };
 use mimshel_menubar::{NetState, parse_known, parse_wifi_list, parse_wired};
@@ -64,7 +64,12 @@ pub fn read_sound() -> Option<Sound> {
         .to_string();
     let (volume, muted) = parse_default_state(&list, &default)?;
     let apps = output("pactl", &["list", "sink-inputs"])
-        .map(|t| parse_app_sounds(&t))
+        .map(|t| {
+            mimshel_menubar::status::parse_app_sounds_lang(
+                &t,
+                mimshel_core::i18n::language_from_config(),
+            )
+        })
         .unwrap_or_default();
     Some(Sound {
         volume,

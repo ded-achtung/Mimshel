@@ -116,6 +116,27 @@ impl Language {
     }
 }
 
+/// Language from the on-disk config file (`[look] language = ...`),
+/// falling back to English. Used by processes that run outside the
+/// daemon (guard, `mimshel action`, sound watcher) and therefore do not
+/// already have a resolved language in hand.
+pub fn language_from_config() -> Language {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.config/mimshel/config.toml");
+    if let Ok(text) = std::fs::read_to_string(path) {
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(v) = line.strip_prefix("language") {
+                let v = v.trim().trim_start_matches('=').trim().trim_matches('"');
+                if let Some(lang) = Language::parse(v) {
+                    return lang;
+                }
+            }
+        }
+    }
+    Language::En
+}
+
 /// Translate `key` for a resolved language.
 ///
 /// Unknown keys fall back to the key itself (never an empty string), so a
@@ -440,6 +461,23 @@ pub fn t(lang: Language, key: &str) -> &str {
         ),
         "notify.clear" => ("Clear", "Очистить", "清除", "清除"),
         "lock.enter_password" => ("Enter password", "Введите пароль", "输入密码", "輸入密碼"),
+        // --- v5: previously hardcoded Russian GUI strings ---
+        "notify.crash_title" => ("Mimshel restarted after a crash", "Mimshel перезапустился после сбоя", "Mimshel 崩溃后已重启", "Mimshel 當機後已重新啟動"),
+        "notify.crash_details" => ("Details: mimshel crashes", "Подробности: mimshel crashes", "详情：mimshel crashes", "詳情：mimshel crashes"),
+        "crash.give_up_head" => ("Mimshel stopped — the service crashed 5 times in a row.", "Mimshel остановлен — служба падала 5 раз подряд.", "Mimshel 已停止——服务连续崩溃 5 次。", "Mimshel 已停止——服務連續當機 5 次。"),
+        "crash.give_up_reason" => ("Last reason:", "Последняя причина:", "最近原因：", "最近原因："),
+        "crash.give_up_restore" => ("Restore the Xfce panel: mimshel restore", "Вернуть панель Xfce: mimshel restore", "恢复 Xfce 面板：mimshel restore", "還原 Xfce 面板：mimshel restore"),
+        "dock.remove" => ("Remove", "Удалить", "移除", "移除"),
+        "folder.search_placeholder" => ("Search in folder", "Поиск в папке", "在文件夹中搜索", "在資料夾中搜尋"),
+        "menubar.sound_unnamed" => ("Unnamed", "Без названия", "未命名", "未命名"),
+        "action.about_title" => ("About This Computer", "Об этом компьютере", "关于这台电脑", "關於這台電腦"),
+        "action.restart_title" => ("Restart", "Перезагрузить", "重启", "重新啟動"),
+        "action.restart_text" => ("Do you really want to restart your computer?", "Вы действительно хотите перезагрузить компьютер?", "确实要重启计算机吗？", "確定要重新啟動電腦嗎？"),
+        "action.shutdown_title" => ("Shut Down", "Выключить", "关机", "關機"),
+        "action.shutdown_text" => ("Do you really want to shut down your computer?", "Вы действительно хотите выключить компьютер?", "确实要关闭计算机吗？", "確定要關閉電腦嗎？"),
+        "action.logout_title" => ("Log Out", "Завершить сеанс", "退出登录", "登出"),
+        "action.logout_text" => ("Close all programs and log out?", "Закрыть все программы и выйти из системы?", "关闭所有程序并退出登录吗？", "關閉所有程式並登出嗎？"),
+        "action.cancel" => ("Cancel", "Отменить", "取消", "取消"),
         // --- Generic file counts (folder status bar uses these words) ---
         // Note: the status bar still formats counts in code; these are the
         // nouns it should use. Full plural rules are a TODO (see docs/i18n.md).
@@ -512,6 +550,22 @@ pub const KEYS: &[&str] = &[
     "notify.settings",
     "notify.clear",
     "lock.enter_password",
+    "notify.crash_title",
+    "notify.crash_details",
+    "crash.give_up_head",
+    "crash.give_up_reason",
+    "crash.give_up_restore",
+    "dock.remove",
+    "folder.search_placeholder",
+    "menubar.sound_unnamed",
+    "action.about_title",
+    "action.restart_title",
+    "action.restart_text",
+    "action.shutdown_title",
+    "action.shutdown_text",
+    "action.logout_title",
+    "action.logout_text",
+    "action.cancel",
     "status.folders",
     "status.files",
     "status.free",

@@ -1389,7 +1389,7 @@ impl FolderView {
                 .as_ref()
                 .is_some_and(|(k, f)| *k == Input::Search && f.is_empty())
         {
-            fonts.draw(pm, "Поиск в папке", &PLACEHOLDER, tx + 2.0, ty, Some(room));
+            fonts.draw(pm, mimshel_core::i18n::t(self.language, "folder.search_placeholder"), &PLACEHOLDER, tx + 2.0, ty, Some(room));
         }
     }
 

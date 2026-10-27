@@ -70,14 +70,30 @@ pub struct Banner {
     pub shown_at: Instant,
 }
 
-/// Сколько прошло — подпись в углу карточки: «сейчас», «5 мин назад»,
-/// «2 ч назад».
-pub fn age_label(since: Instant, now: Instant) -> String {
+/// How long ago — the corner label on a banner, in the UI language.
+pub fn age_label(lang: mimshel_core::i18n::Language, since: Instant, now: Instant) -> String {
     let secs = now.saturating_duration_since(since).as_secs();
-    match secs {
-        0..60 => "сейчас".into(),
-        60..3600 => format!("{} мин назад", secs / 60),
-        _ => format!("{} ч назад", secs / 3600),
+    match lang.resolve() {
+        mimshel_core::i18n::Language::En => match secs {
+            0..60 => "now".into(),
+            60..3600 => format!("{} min ago", secs / 60),
+            _ => format!("{} hr ago", secs / 3600),
+        },
+        mimshel_core::i18n::Language::Zh => match secs {
+            0..60 => "刚刚".into(),
+            60..3600 => format!("{} 分钟前", secs / 60),
+            _ => format!("{} 小时前", secs / 3600),
+        },
+        mimshel_core::i18n::Language::ZhTw => match secs {
+            0..60 => "剛剛".into(),
+            60..3600 => format!("{} 分鐘前", secs / 60),
+            _ => format!("{} 小時前", secs / 3600),
+        },
+        _ => match secs {
+            0..60 => "сейчас".into(),
+            60..3600 => format!("{} мин назад", secs / 60),
+            _ => format!("{} ч назад", secs / 3600),
+        },
     }
 }
 
@@ -118,6 +134,7 @@ pub enum Hit {
 /// Стопка баннеров: новые — сверху.
 #[derive(Default)]
 pub struct Banners {
+    pub language: mimshel_core::i18n::Language,
     pub items: Vec<Banner>,
     /// Баннер под указателем (номер) и кнопка под ним.
     pub hover: Option<usize>,
@@ -351,7 +368,7 @@ impl Banners {
         }
         let text_w = WIDTH - TEXT_X - PAD;
         let mut y = top + PAD - 2.0;
-        let age = age_label(b.shown_at, Instant::now());
+        let age = age_label(self.language, b.shown_at, Instant::now());
         let now = age.as_str();
         let now_w = fonts.measure(now, &APP);
         let app = b.n.app_name.to_uppercase();
@@ -446,6 +463,7 @@ impl Center {
     /// Карточки из истории (иконки подобрала служба), в высоту не больше `max_h`.
     pub fn new(fonts: &mut Fonts, items: Vec<Banner>, max_h: f32) -> Center {
         let mut list = Banners {
+            language: mimshel_core::i18n::Language::Ru,
             items,
             hover: None,
             hover_button: None,
@@ -691,13 +709,20 @@ mod tests {
 
     #[test]
     fn age_labels() {
+        use mimshel_core::i18n::Language;
         let t = Instant::now();
-        assert_eq!(age_label(t, t + Duration::from_secs(5)), "сейчас");
+        assert_eq!(age_label(Language::Ru, t, t + Duration::from_secs(5)), "сейчас");
         assert_eq!(
-            age_label(t, t + Duration::from_secs(5 * 60 + 7)),
+            age_label(Language::Ru, t, t + Duration::from_secs(5 * 60 + 7)),
             "5 мин назад"
         );
-        assert_eq!(age_label(t, t + Duration::from_secs(2 * 3600)), "2 ч назад");
+        assert_eq!(age_label(Language::Ru, t, t + Duration::from_secs(2 * 3600)), "2 ч назад");
+        assert_eq!(age_label(Language::En, t, t + Duration::from_secs(5)), "now");
+        assert_eq!(
+            age_label(Language::En, t, t + Duration::from_secs(5 * 60 + 7)),
+            "5 min ago"
+        );
+        assert_eq!(age_label(Language::En, t, t + Duration::from_secs(2 * 3600)), "2 hr ago");
     }
 
     #[test]

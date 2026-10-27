@@ -86,6 +86,11 @@ pub fn parse_sinks(text: &str) -> Vec<Sink> {
 /// программы (по `application.name`, иначе по имени файла программы) — в одну
 /// строку, в порядке появления.
 pub fn parse_app_sounds(text: &str) -> Vec<AppSound> {
+    parse_app_sounds_lang(text, mimshel_core::i18n::Language::Ru)
+}
+
+/// Language-aware variant of `parse_app_sounds`.
+pub fn parse_app_sounds_lang(text: &str, lang: mimshel_core::i18n::Language) -> Vec<AppSound> {
     let mut out: Vec<AppSound> = Vec::new();
     for block in text.split("Sink Input #").skip(1) {
         let Some(index) = block
@@ -105,7 +110,7 @@ pub fn parse_app_sounds(text: &str) -> Vec<AppSound> {
         let name = prop("application.name")
             .or_else(|| prop("application.process.binary"))
             .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "Без названия".into());
+            .unwrap_or_else(|| mimshel_core::i18n::t(lang, "menubar.sound_unnamed").into());
         let volume = lines()
             .find(|l| l.starts_with("Volume:"))
             .and_then(parse_volume)
