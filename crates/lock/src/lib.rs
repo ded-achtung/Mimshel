@@ -44,6 +44,10 @@ pub struct Frame<'a> {
     /// Сколько символов пароля набрано (столько же точек ●).
     pub typed: usize,
     pub phase: Phase,
+    /// What went wrong, under the field in the `Wrong` phase: "wrong
+    /// password" or what PAM said (an account locked after failed tries,
+    /// an expired password). One line per `\n`, at most three.
+    pub message: &'a str,
 }
 
 /// Фон экрана блокировки размером `l.w`×`l.h`.
@@ -193,16 +197,19 @@ pub fn frame(l: &Layout, bg: &Pixmap, f: &Frame, fonts: &mut Fonts) -> Option<Pi
             color: [255, 255, 255, 208],
             weight: 400,
         };
-        let text = "Неверный пароль";
-        let w = fonts.measure(text, &wrong);
-        fonts.draw_pixels(
-            &mut pm,
-            text,
-            &wrong,
-            (l.w as f32 / 2.0 - w / 2.0).round(),
-            (l.pill_y + l.pill_h + round(30.0 * l.s)) as f32 - baseline_shift(&wrong),
-            None,
-        );
+        let top = (l.pill_y + l.pill_h + round(30.0 * l.s)) as f32 - baseline_shift(&wrong);
+        let room = l.w as f32 * 0.9;
+        for (i, line) in f.message.lines().take(3).enumerate() {
+            let w = fonts.measure(line, &wrong).min(room);
+            fonts.draw_pixels(
+                &mut pm,
+                line,
+                &wrong,
+                (l.w as f32 / 2.0 - w / 2.0).round(),
+                top + i as f32 * wrong.line_height(),
+                Some(room),
+            );
+        }
     }
     Some(pm)
 }
@@ -410,6 +417,7 @@ mod tests {
             placeholder: "Введите пароль",
             typed: 0,
             phase: Phase::Idle,
+            message: "Неверный пароль",
         };
         // Пиксель изменился относительно фона (нарисован текст или кольцо).
         let changed = |pm: &Pixmap, x: i64, y: i64| {

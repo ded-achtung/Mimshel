@@ -461,6 +461,31 @@ pub fn t(lang: Language, key: &str) -> &str {
         ),
         "notify.clear" => ("Clear", "Очистить", "清除", "清除"),
         "lock.enter_password" => ("Enter password", "Введите пароль", "输入密码", "輸入密碼"),
+        "lock.wrong_password" => ("Wrong password", "Неверный пароль", "密码错误", "密碼錯誤"),
+        "lock.too_many_tries" => (
+            "Too many attempts — wait and try again",
+            "Слишком много попыток — подождите и попробуйте снова",
+            "尝试次数过多，请稍后再试",
+            "嘗試次數過多，請稍後再試",
+        ),
+        "lock.password_expired" => (
+            "The password has expired — change it in a text console (Ctrl+Alt+F3)",
+            "Срок действия пароля истёк — смените его в текстовой консоли (Ctrl+Alt+F3)",
+            "密码已过期，请在文本控制台中修改（Ctrl+Alt+F3）",
+            "密碼已過期，請在文字主控台中變更（Ctrl+Alt+F3）",
+        ),
+        "lock.account_expired" => (
+            "The account has expired",
+            "Срок действия учётной записи истёк",
+            "账户已过期",
+            "帳號已過期",
+        ),
+        "lock.check_failed" => (
+            "The password could not be checked",
+            "Не удалось проверить пароль",
+            "无法验证密码",
+            "無法驗證密碼",
+        ),
         // --- v5: previously hardcoded Russian GUI strings ---
         "notify.crash_title" => (
             "Mimshel restarted after a crash",
@@ -689,6 +714,11 @@ pub const KEYS: &[&str] = &[
     "notify.settings",
     "notify.clear",
     "lock.enter_password",
+    "lock.wrong_password",
+    "lock.too_many_tries",
+    "lock.password_expired",
+    "lock.account_expired",
+    "lock.check_failed",
     "notify.crash_title",
     "notify.crash_details",
     "crash.give_up_head",

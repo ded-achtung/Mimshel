@@ -15,6 +15,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mimshel_core::config::Config;
+use mimshel_core::i18n::{Language, t};
 use mimshel_lock::{Frame, Layout, Phase};
 use mimshel_text::Fonts;
 use mimshel_x11::{Display, Event, Key, KeyPress, Popup};
@@ -29,6 +30,8 @@ const PAM_SERVICE: &str = "system-local-login";
 const VOLUME_STEP: &str = "5%";
 /// Сколько показывать «Неверный пароль».
 const WRONG_SHOW: Duration = Duration::from_millis(900);
+/// What PAM said (account locked, password expired) needs time to read.
+const PAM_SHOW: Duration = Duration::from_secs(8);
 /// Как часто проверять, что захват клавиатуры ещё наш.
 const REGRAB: Duration = Duration::from_secs(2);
 /// Предел длины пароля (точки всё равно влезают не все).
@@ -120,6 +123,10 @@ struct LockUi<'a> {
     password: Zeroizing<String>,
     phase: Phase,
     wrong_since: Option<Instant>,
+    /// The text under the field in the `Wrong` phase and how long it stays.
+    message: String,
+    message_for: Duration,
+    language: Language,
     time: String,
     date: String,
     minute: u64,
@@ -152,6 +159,9 @@ impl<'a> LockUi<'a> {
             password: Zeroizing::new(String::with_capacity(MAX_PASSWORD * 4)),
             phase: Phase::Idle,
             wrong_since: None,
+            message: String::new(),
+            message_for: WRONG_SHOW,
+            language: config.language.resolve(),
             time: String::new(),
             date: String::new(),
             minute: u64::MAX,
@@ -173,6 +183,7 @@ impl<'a> LockUi<'a> {
             placeholder: &self.placeholder,
             typed: self.password.chars().count(),
             phase: self.phase,
+            message: &self.message,
         };
         let Some(frame) = mimshel_lock::frame(&self.layout, &self.bg, &state, &mut self.fonts)
         else {
@@ -284,21 +295,31 @@ impl<'a> LockUi<'a> {
     }
 
     /// Проверить пароль. `Some(0)` — верный, экран закрывается; `None` —
-    /// неверный, остаёмся и показываем «Неверный пароль».
+    /// не прошёл: остаёмся и показываем почему («Неверный пароль» или
+    /// слова PAM).
     fn verify(&mut self) -> mimshel_x11::Result<Option<i32>> {
         self.phase = Phase::Verifying;
         self.redraw()?;
         self.display.sync()?;
-        let ok = authenticate(&self.user, &self.password);
+        let checked = authenticate(&self.user, &self.password, self.language);
         self.clear_password();
-        if ok {
-            log("пароль верный — разблокировано");
-            // Фокус — активному окну: иначе клавиатура осталась бы «нигде»
-            // (на время блокировки фокус уходил в корневое окно).
-            let _ = self.display.restore_focus();
-            self.popup.hide(&self.display)?;
-            return Ok(Some(0));
-        }
+        let failure = match checked {
+            Ok(()) => {
+                log("пароль верный — разблокировано");
+                // Фокус — активному окну: иначе клавиатура осталась бы «нигде»
+                // (на время блокировки фокус уходил в корневое окно).
+                let _ = self.display.restore_focus();
+                self.popup.hide(&self.display)?;
+                return Ok(Some(0));
+            }
+            Err(failure) => failure,
+        };
+        self.message_for = if failure.from_pam {
+            PAM_SHOW
+        } else {
+            WRONG_SHOW
+        };
+        self.message = failure.text;
         self.phase = Phase::Wrong;
         self.wrong_since = Some(Instant::now());
         self.redraw()?;
@@ -317,7 +338,10 @@ impl<'a> LockUi<'a> {
             self.update_clock();
             redraw = true;
         }
-        if self.phase == Phase::Wrong && self.wrong_since.is_some_and(|t| t.elapsed() >= WRONG_SHOW)
+        if self.phase == Phase::Wrong
+            && self
+                .wrong_since
+                .is_some_and(|t| t.elapsed() >= self.message_for)
         {
             self.phase = Phase::Idle;
             self.wrong_since = None;
@@ -387,9 +411,26 @@ fn clock() -> (String, String) {
 
 /// Answers PAM's questions with borrowed credentials. Unlike
 /// `pam::PasswordConv`, it keeps no copy of the password of its own.
+/// What PAM tells the user (pam_faillock: "The account is locked due to
+/// 3 failed logins"; pam_unix: the password has expired) is kept to be
+/// shown on the lock screen: without it a locked account looks like a
+/// wrong password forever.
 struct LockConv<'p> {
     user: &'p str,
     password: &'p str,
+    messages: Vec<String>,
+}
+
+impl LockConv<'_> {
+    fn keep(&mut self, msg: &CStr) {
+        let text = msg.to_string_lossy();
+        log(&format!("PAM: {text}"));
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if self.messages.len() < 3 {
+                self.messages.push(line.chars().take(160).collect());
+            }
+        }
+    }
 }
 
 impl pam::Conversation for LockConv<'_> {
@@ -401,21 +442,71 @@ impl pam::Conversation for LockConv<'_> {
     fn prompt_blind(&mut self, _msg: &CStr) -> Result<CString, ()> {
         CString::new(self.password).map_err(|_| ())
     }
-    fn info(&mut self, _msg: &CStr) {}
+    fn info(&mut self, msg: &CStr) {
+        self.keep(msg);
+    }
     fn error(&mut self, msg: &CStr) {
-        log(&format!("PAM: {}", msg.to_string_lossy()));
+        self.keep(msg);
     }
 }
 
+/// Why the screen stays locked: the text to show and whether it came
+/// from PAM (shown longer) or is the plain "wrong password".
+struct Failure {
+    text: String,
+    from_pam: bool,
+}
+
 /// Проверка пароля через PAM (цепочка та же, что при входе в систему).
-fn authenticate(user: &str, password: &str) -> bool {
-    match pam::Client::with_conversation(PAM_SERVICE, LockConv { user, password }) {
-        Ok(mut client) => client.authenticate().is_ok(),
+/// `pam::Client::authenticate` runs `pam_acct_mgmt` too: a correct
+/// password on a locked or expired account fails there.
+fn authenticate(user: &str, password: &str, lang: Language) -> Result<(), Failure> {
+    let conv = LockConv {
+        user,
+        password,
+        messages: Vec::new(),
+    };
+    let mut client = match pam::Client::with_conversation(PAM_SERVICE, conv) {
+        Ok(client) => client,
         Err(e) => {
             // Не «неверный пароль», а сломалась сама проверка — в журнал.
             log(&format!("PAM не начал проверку: {e}"));
-            false
+            return Err(Failure {
+                text: t(lang, "lock.check_failed").to_string(),
+                from_pam: true,
+            });
         }
+    };
+    let code = match client.authenticate() {
+        Ok(()) => return Ok(()),
+        Err(e) => e.0,
+    };
+    log(&format!("PAM: проверка не прошла ({code:?})"));
+    Err(failure(code, &client.conversation().messages, lang))
+}
+
+/// The text for a failed check: PAM's own words when it said something,
+/// otherwise a sentence by the return code.
+fn failure(code: pam::PamReturnCode, messages: &[String], lang: Language) -> Failure {
+    use pam::PamReturnCode as C;
+    if !messages.is_empty() {
+        return Failure {
+            text: messages.join("\n"),
+            from_pam: true,
+        };
+    }
+    let (key, from_pam) = match code {
+        C::Auth_Err | C::User_Unknown | C::Cred_Insufficient | C::Perm_Denied => {
+            ("lock.wrong_password", false)
+        }
+        C::MaxTries => ("lock.too_many_tries", true),
+        C::New_Authtok_Reqd => ("lock.password_expired", true),
+        C::Acct_Expired => ("lock.account_expired", true),
+        _ => ("lock.check_failed", true),
+    };
+    Failure {
+        text: t(lang, key).to_string(),
+        from_pam,
     }
 }
 
@@ -466,6 +557,7 @@ pub fn snapshot(text: &str, file: &str) -> mimshel_x11::Result<()> {
         placeholder: &config.lock_placeholder,
         typed: typed.chars().count(),
         phase: if wrong { Phase::Wrong } else { Phase::Idle },
+        message: t(config.language.resolve(), "lock.wrong_password"),
     };
     let frame =
         mimshel_lock::frame(&layout, &bg, &state, &mut fonts).ok_or("экран не нарисован")?;
@@ -484,6 +576,7 @@ mod tests {
         let mut conv = LockConv {
             user: "ded",
             password: &password,
+            messages: Vec::new(),
         };
         let msg = CString::new("Password: ").unwrap();
         assert_eq!(conv.prompt_echo(&msg).unwrap().as_bytes(), b"ded");
@@ -495,8 +588,34 @@ mod tests {
         let mut bad = LockConv {
             user: "ded",
             password: "a\0b",
+            messages: Vec::new(),
         };
         assert!(bad.prompt_blind(&msg).is_err());
+    }
+
+    #[test]
+    fn pam_words_are_shown_instead_of_wrong_password() {
+        let mut conv = LockConv {
+            user: "ded",
+            password: "x",
+            messages: Vec::new(),
+        };
+        conv.error(c"The account is locked due to 3 failed logins.");
+        conv.info(c"(10 minutes left to unlock)\n");
+        conv.info(c"   ");
+        let shown = failure(pam::PamReturnCode::Auth_Err, &conv.messages, Language::En);
+        assert!(shown.from_pam);
+        assert_eq!(
+            shown.text,
+            "The account is locked due to 3 failed logins.\n(10 minutes left to unlock)"
+        );
+        // PAM said nothing: a plain wrong password, shown briefly.
+        let plain = failure(pam::PamReturnCode::Auth_Err, &[], Language::Ru);
+        assert!(!plain.from_pam);
+        assert_eq!(plain.text, "Неверный пароль");
+        let expired = failure(pam::PamReturnCode::New_Authtok_Reqd, &[], Language::En);
+        assert!(expired.from_pam);
+        assert!(expired.text.contains("expired"), "{}", expired.text);
     }
 
     #[test]
