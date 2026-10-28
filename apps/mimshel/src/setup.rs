@@ -126,8 +126,13 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     }
     // Hot reload (v2): language and wallpaper switch without restarting
     // the daemon, the session or the machine. If no daemon is running,
-    // the setting simply takes effect on the next login.
+    // the setting simply takes effect on the next login. The wallpaper
+    // also goes to xfdesktop and the lock screen first, as `apply
+    // wallpaper` does.
     if section == "look" && (name == "language" || name == "wallpaper") {
+        if name == "wallpaper" {
+            mimshel_setup::parts::apply_wallpaper(&load_config());
+        }
         if crate::ui::ask_daemon_reload() {
             println!("Служба перечитала настройки (без перезапуска)");
         } else {

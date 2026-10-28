@@ -68,6 +68,19 @@ struct Plan<'a> {
     later: Vec<Vec<String>>,
 }
 
+/// Set the wallpaper outside our own desktop without restarting the
+/// service: the xfdesktop backdrop on every monitor (the way back to
+/// `parts.desktop = "xfce"`) and the lock-screen background. The
+/// service's own desktop picks the new wallpaper up on a reload.
+pub fn apply_wallpaper(config: &Config) {
+    let plan = Plan {
+        config,
+        paths: Paths::new(),
+        later: Vec::new(),
+    };
+    plan.wallpaper();
+}
+
 /// Применить части (пустой список — все). Ошибка — только если нужна служба,
 /// а программы Mimshel нет: тогда ничего не трогаем, чтобы не остаться ни с чем.
 pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
