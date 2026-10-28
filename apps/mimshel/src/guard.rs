@@ -11,7 +11,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -22,8 +22,10 @@ const STABLE: Duration = Duration::from_secs(60);
 /// Столько падений подряд вскоре после запуска — сдаёмся (например, X закрылся
 /// при выходе из сеанса, и служба не может подключиться).
 const GIVE_UP: u32 = 5;
-/// Журнал больше этого при запуске сторожа начинается заново.
+/// Журнал больше этого начинается заново (the previous one is kept as
+/// `daemon.log.1`); checked at every service start and every minute.
 const LOG_LIMIT: u64 = 1024 * 1024;
+const LOG_CHECK: Duration = Duration::from_secs(60);
 
 pub fn run() -> ! {
     if crate::ui::daemon_running() {
@@ -43,6 +45,16 @@ pub fn run() -> ! {
         }
         Err(e) => log(&format!("не подключился к X ({e}) — слежу без него")),
     }
+    // The service writes into the log for the whole session; without a
+    // check while it runs, one long session grew the file without bound.
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(LOG_CHECK);
+            if let Some(path) = log_path() {
+                rotate_if_big(&path);
+            }
+        }
+    });
     let exe = own_exe();
     let mut quick_failures = 0;
     loop {
@@ -204,14 +216,22 @@ pub fn log_path() -> Option<PathBuf> {
 fn log_file() -> Option<File> {
     let path = log_path()?;
     std::fs::create_dir_all(path.parent()?).ok()?;
-    let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_LIMIT);
-    OpenOptions::new()
-        .create(true)
-        .append(!too_big)
-        .write(true)
-        .truncate(too_big)
-        .open(path)
-        .ok()
+    rotate_if_big(&path);
+    // Always append: the running service writes through its own copy of
+    // this handle, and with O_APPEND its writes land at the end even after
+    // the file was emptied under it.
+    OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// Keep the log under [`LOG_LIMIT`]: the old text goes to `daemon.log.1`
+/// and the file is emptied in place (the service keeps writing to it).
+fn rotate_if_big(path: &Path) {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > LOG_LIMIT) {
+        let _ = std::fs::copy(path, path.with_extension("log.1"));
+        if let Ok(f) = OpenOptions::new().write(true).open(path) {
+            let _ = f.set_len(0);
+        }
+    }
 }
 
 fn log(message: &str) {
