@@ -27,6 +27,48 @@ const GIVE_UP: u32 = 5;
 const LOG_LIMIT: u64 = 1024 * 1024;
 const LOG_CHECK: Duration = Duration::from_secs(60);
 
+/// How the service ended, as far as restarting goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// Another guard's service is already running.
+    AlreadyRunning,
+    /// Stopped on purpose: a new build deployed (TERM), the session ends (HUP).
+    Stopped,
+    /// A crash, or it did not start at all.
+    Crashed,
+}
+
+/// What the guard does next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Next {
+    Exit,
+    /// Start it again after this pause.
+    Restart(Duration),
+    /// Too many quick crashes in a row: tell the user and stop.
+    GiveUp,
+}
+
+/// The restart rules. `quick` counts crashes in a row soon after a start; a
+/// run that lasted [`STABLE`] starts the count anew, a stop on purpose
+/// clears it. The pause grows with the count: 1, 2, 3, 4 s.
+fn next_step(quick: &mut u32, ended: Ended, lived: Duration) -> Next {
+    match ended {
+        Ended::AlreadyRunning => Next::Exit,
+        Ended::Stopped => {
+            *quick = 0;
+            Next::Restart(Duration::ZERO)
+        }
+        Ended::Crashed => {
+            *quick = if lived >= STABLE { 1 } else { *quick + 1 };
+            if *quick >= GIVE_UP {
+                Next::GiveUp
+            } else {
+                Next::Restart(Duration::from_secs(u64::from(*quick)))
+            }
+        }
+    }
+}
+
 pub fn run() -> ! {
     if crate::ui::daemon_running() {
         eprintln!("Служба уже запущена.");
@@ -61,63 +103,63 @@ pub fn run() -> ! {
         let started = Instant::now();
         let child = spawn(&exe);
         let lived = started.elapsed();
-        let (reason, report, crashed) = match &child {
+        let (reason, report, ended) = match &child {
             Ok((s, _)) if s.code() == Some(ALREADY_RUNNING) => {
-                log("служба уже запущена другим сторожем — выхожу");
-                std::process::exit(0);
+                (String::new(), None, Ended::AlreadyRunning)
             }
             Ok((s, pid)) => {
                 use std::os::unix::process::ExitStatusExt;
                 let lang = mimshel_core::i18n::language_from_config();
                 let (reason, report) = crate::crash::service_failure_lang(s, *pid, lang);
-                (
-                    reason,
-                    report,
-                    mimshel_core::crash::is_crash(s.code(), s.signal()),
-                )
+                let ended = if mimshel_core::crash::is_crash(s.code(), s.signal()) {
+                    Ended::Crashed
+                } else {
+                    Ended::Stopped
+                };
+                (reason, report, ended)
             }
-            Err(e) => (format!("не запустилась: {e}"), None, true),
+            Err(e) => (format!("не запустилась: {e}"), None, Ended::Crashed),
         };
-        if !crashed {
-            // Stopped on purpose — deploying a build kills `daemon --child`
-            // with TERM, the session ends with HUP. A plain restart: no
-            // last-crash, no notification, and it does not count towards
-            // the give-up.
-            log(&format!("служба {reason} — запускаю снова"));
-            quick_failures = 0;
-            continue;
+        if ended == Ended::Crashed {
+            // No panic report (a signal, an exit code): write one here, with
+            // the last lines of the log, so `mimshel crashes` and `doctor` see it.
+            let report = report.or_else(|| match &child {
+                Ok((_, pid)) => mimshel_setup::crash::write_exit_report(
+                    "service",
+                    *pid,
+                    &reason,
+                    log_path().as_deref(),
+                ),
+                Err(_) => None,
+            });
+            // The restarted service will explain the crash to the user.
+            crate::crash::note_last_crash("service", &reason, report.as_deref());
         }
-        // No panic report (a signal, an exit code): write one here, with the
-        // last lines of the log, so `mimshel crashes` and `doctor` see it.
-        let report = report.or_else(|| match &child {
-            Ok((_, pid)) => mimshel_setup::crash::write_exit_report(
-                "service",
-                *pid,
-                &reason,
-                log_path().as_deref(),
-            ),
-            Err(_) => None,
-        });
-        // The restarted service will explain the crash to the user.
-        crate::crash::note_last_crash("service", &reason, report.as_deref());
-        quick_failures = if lived >= STABLE {
-            1
-        } else {
-            quick_failures + 1
-        };
-        if quick_failures >= GIVE_UP {
-            log(&format!(
-                "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — больше не перезапускаю"
-            ));
-            give_up(&reason, mimshel_core::i18n::language_from_config());
+        match next_step(&mut quick_failures, ended, lived) {
+            Next::Exit => {
+                log("служба уже запущена другим сторожем — выхожу");
+                std::process::exit(0);
+            }
+            // Stopped on purpose: a plain restart — no last-crash, no
+            // notification, and it does not count towards the give-up.
+            Next::Restart(pause) if ended == Ended::Stopped => {
+                log(&format!("служба {reason} — запускаю снова"));
+                std::thread::sleep(pause);
+            }
+            Next::Restart(pause) => {
+                log(&format!(
+                    "служба {reason} через {:.0?}, перезапуск через {pause:?}",
+                    lived
+                ));
+                std::thread::sleep(pause);
+            }
+            Next::GiveUp => {
+                log(&format!(
+                    "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — больше не перезапускаю"
+                ));
+                give_up(&reason, mimshel_core::i18n::language_from_config());
+            }
         }
-        // Чем чаще падает, тем дольше пауза: 1, 2, 3, 4 с.
-        let pause = Duration::from_secs(u64::from(quick_failures));
-        log(&format!(
-            "служба {reason} через {:.0?}, перезапуск через {pause:?}",
-            lived
-        ));
-        std::thread::sleep(pause);
     }
 }
 
@@ -251,4 +293,67 @@ fn now() -> String {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SOON: Duration = Duration::from_secs(2);
+
+    #[test]
+    fn gives_up_after_five_quick_crashes() {
+        let mut quick = 0;
+        for pause in 1..GIVE_UP {
+            assert_eq!(
+                next_step(&mut quick, Ended::Crashed, SOON),
+                Next::Restart(Duration::from_secs(u64::from(pause))),
+                "the pause grows with every quick crash"
+            );
+        }
+        assert_eq!(next_step(&mut quick, Ended::Crashed, SOON), Next::GiveUp);
+    }
+
+    #[test]
+    fn a_stable_run_starts_the_count_anew() {
+        let mut quick = 0;
+        for _ in 1..GIVE_UP {
+            next_step(&mut quick, Ended::Crashed, SOON);
+        }
+        // Worked for a while and then fell: an accident, not a broken start.
+        assert_eq!(
+            next_step(&mut quick, Ended::Crashed, STABLE),
+            Next::Restart(Duration::from_secs(1))
+        );
+        assert_eq!(quick, 1);
+    }
+
+    #[test]
+    fn a_stop_on_purpose_is_not_a_crash() {
+        let mut quick = 0;
+        for _ in 1..GIVE_UP {
+            next_step(&mut quick, Ended::Crashed, SOON);
+        }
+        // Deploying a build kills the service with TERM: restart at once,
+        // and the crashes before it no longer count.
+        assert_eq!(
+            next_step(&mut quick, Ended::Stopped, SOON),
+            Next::Restart(Duration::ZERO)
+        );
+        assert_eq!(quick, 0);
+        assert_eq!(
+            next_step(&mut quick, Ended::Crashed, SOON),
+            Next::Restart(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn a_second_guard_leaves() {
+        let mut quick = 3;
+        assert_eq!(
+            next_step(&mut quick, Ended::AlreadyRunning, SOON),
+            Next::Exit
+        );
+        assert_eq!(quick, 3);
+    }
 }
