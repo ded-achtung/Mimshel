@@ -193,7 +193,16 @@ pub fn supervise(exe: &Path) -> i32 {
         || {
             // The pid lets the guard attach the crash report (its file
             // name carries the pid) to the reason in the log.
-            let mut child = command(&exe.to_string_lossy()).arg("lock-screen").spawn()?;
+            // The key debug log prints every decoded key: in the lock
+            // screen that would be the password, written to lock.log.
+            let mut child = command(&exe.to_string_lossy())
+                .arg("lock-screen")
+                .env_remove(format!(
+                    "{}_DEBUG_KEYS",
+                    mimshel_core::names::APP.to_uppercase()
+                ))
+                .env_remove("SHELL_DEBUG_KEYS")
+                .spawn()?;
             let pid = child.id();
             let status = child.wait()?;
             Ok((status, pid))
