@@ -69,6 +69,14 @@ pub const ROOT_SCRIPT: &str = concat!(
     "            exit 1\n",
     "            ;;\n",
     "    esac\n",
+    // A theme of that name already there that we did not install (from a
+    // package or by hand) stays as it is: replacing it would delete it, and
+    // listing it would make `restore` delete it again.
+    "    if { [ -e \"$2\" ] || [ -L \"$2\" ]; } && ! { [ -f \"$MANIFEST\" ] && grep -qxF \"$2\" \"$MANIFEST\"; }; then\n",
+    "        echo \"mimshel greeter: $2 was not installed by Mimshel, left as it is\" >&2\n",
+    "        shift 2\n",
+    "        continue\n",
+    "    fi\n",
     "    rm -rf \"$2\"\n",
     // Not `cp -a`: that keeps the user as owner, and the greeter would run
     // with files the user can change. Symlinks and modes are kept.
@@ -1102,6 +1110,28 @@ mod script_tests {
         ];
         want.sort();
         assert_eq!(manifest(&r), want);
+    }
+
+    #[test]
+    fn script_keeps_a_theme_it_did_not_install() {
+        let r = Root::new("foreign");
+        std::fs::create_dir_all(r.p("etc/lightdm")).unwrap();
+        let (_, mut args) = stage_files(&r, &format!("{MARKER}\n[Greeter]\n"));
+        let src = theme_src(&r, "home/.themes/Colloid-Dark");
+        let dst = r.p("usr/local/share/themes/Colloid-Dark");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("theirs"), "x").unwrap();
+        args.push(src.display().to_string());
+        args.push(dst.display().to_string());
+        let out = r.run(&r.script(ROOT_SCRIPT), &args);
+        assert_ok(&out);
+        assert!(dst.join("theirs").is_file(), "the other theme stays");
+        assert!(!dst.join("index.theme").exists(), "nothing copied over it");
+        assert!(
+            !manifest(&r).contains(&dst.display().to_string()),
+            "restore must not delete it"
+        );
+        assert!(String::from_utf8_lossy(&out.stderr).contains("not installed by Mimshel"));
     }
 
     #[test]
