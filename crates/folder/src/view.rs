@@ -232,6 +232,10 @@ pub struct FolderView {
     /// Выделить, когда появится в списке (создан или переименован; после
     /// «назад» — папка, из которой вышли).
     pending_select: Option<PathBuf>,
+    /// Interface language for title/status/sidebar headings.
+    /// Default is Russian (upstream behaviour); the app layer sets it
+    /// from config via `set_language`.
+    language: mimshel_core::i18n::Language,
 }
 
 impl FolderView {
@@ -263,6 +267,7 @@ impl FolderView {
             typed: String::new(),
             typed_at: Instant::now(),
             pending_select: None,
+            language: mimshel_core::i18n::Language::Ru,
         }
     }
 
@@ -276,7 +281,10 @@ impl FolderView {
             Some(n) => n.to_string_lossy().into_owned(),
             None => self.dir.display().to_string(),
         };
-        format!("{name} - Проводник")
+        format!(
+            "{name} - {}",
+            mimshel_core::i18n::t(self.language, "app.file_manager")
+        )
     }
 
     /// Список папки уже прочитан.
@@ -298,6 +306,10 @@ impl FolderView {
         }
         self.places = places;
         true
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
     }
 
     pub fn set_special(&mut self, special: Vec<(PathBuf, &'static str)>) {
@@ -1048,9 +1060,13 @@ impl FolderView {
     /// Строка состояния, как у Thunar: «30 папок | 24 файла: 73,1 КиБ
     /// (74 846 байт) | Свободно: 42,8 ГиБ»; с выделением — что выделено.
     fn status(&self) -> String {
-        let free = self
-            .free
-            .map(|f| format!("  |  Свободно: {}", human_size(f)));
+        let free = self.free.map(|f| {
+            format!(
+                "  |  {}: {}",
+                mimshel_core::i18n::t(self.language, "status.free"),
+                human_size(self.language, f)
+            )
+        });
         let items = self.selected_items();
         let line = match &items[..] {
             [] => {
@@ -1065,29 +1081,57 @@ impl FolderView {
                 if folders > 0 {
                     parts.push(format!(
                         "{folders} {}",
-                        plural(folders, ["папка", "папки", "папок"])
+                        count_word(self.language, folders, "folder")
                     ));
                 }
                 if !files.is_empty() || folders == 0 {
                     let n = files.len();
                     parts.push(format!(
                         "{n} {}: {}",
-                        plural(n, ["файл", "файла", "файлов"]),
-                        size_with_bytes(size)
+                        count_word(self.language, n, "file"),
+                        size_with_bytes(self.language, size)
                     ));
                 }
                 parts.join("  |  ")
             }
-            [one] if one.kind == Kind::Folder => format!("«{}»  |  папка", one.name),
-            [one] => format!("«{}»  |  {}", one.name, size_with_bytes(one.size)),
+            [one] if one.kind == Kind::Folder => {
+                let noun = match self.language.resolve() {
+                    mimshel_core::i18n::Language::En => "folder",
+                    mimshel_core::i18n::Language::Zh => "文件夹",
+                    mimshel_core::i18n::Language::ZhTw => "資料夾",
+                    _ => "папка",
+                };
+                format!("«{}»  |  {}", one.name, noun)
+            }
+            [one] => format!(
+                "«{}»  |  {}",
+                one.name,
+                size_with_bytes(self.language, one.size)
+            ),
             many => {
                 let size: u64 = many.iter().map(|i| i.size).sum();
                 let n = many.len();
-                format!(
-                    "Выделено: {n} {}: {}",
-                    plural(n, ["объект", "объекта", "объектов"]),
-                    size_with_bytes(size)
-                )
+                match self.language.resolve() {
+                    mimshel_core::i18n::Language::En => format!(
+                        "Selected: {n} {}: {}",
+                        if n == 1 { "item" } else { "items" },
+                        size_with_bytes(self.language, size)
+                    ),
+                    mimshel_core::i18n::Language::Zh => {
+                        format!("已选: {n} 个项目: {}", size_with_bytes(self.language, size))
+                    }
+                    mimshel_core::i18n::Language::ZhTw => {
+                        format!(
+                            "已選取：{n} 個項目：{}",
+                            size_with_bytes(self.language, size)
+                        )
+                    }
+                    _ => format!(
+                        "Выделено: {n} {}: {}",
+                        plural(n, ["объект", "объекта", "объектов"]),
+                        size_with_bytes(self.language, size)
+                    ),
+                }
             }
         };
         line + free.as_deref().unwrap_or("")
@@ -1128,9 +1172,19 @@ impl FolderView {
         let (cx, cy, cw, ch) = self.content();
         if self.loaded && self.items.is_empty() {
             let text = if self.search.is_empty() {
-                "Папка пуста"
+                match self.language.resolve() {
+                    mimshel_core::i18n::Language::En => "Folder is empty",
+                    mimshel_core::i18n::Language::Zh => "文件夹为空",
+                    mimshel_core::i18n::Language::ZhTw => "資料夾是空的",
+                    _ => "Папка пуста",
+                }
             } else {
-                "Ничего не найдено"
+                match self.language.resolve() {
+                    mimshel_core::i18n::Language::En => "Nothing found",
+                    mimshel_core::i18n::Language::Zh => "未找到",
+                    mimshel_core::i18n::Language::ZhTw => "找不到任何項目",
+                    _ => "Ничего не найдено",
+                }
             };
             let tw = fonts.measure(text, &EMPTY);
             fonts.draw(
@@ -1236,7 +1290,7 @@ impl FolderView {
             match row {
                 SideRow::Heading(section) => fonts.draw(
                     pm,
-                    section.title(),
+                    section.title_lang(self.language),
                     &HEADING,
                     10.0,
                     y + (HEADING_H - HEADING.line_height()) / 2.0 + 2.0,
@@ -1335,7 +1389,7 @@ impl FolderView {
                 .as_ref()
                 .is_some_and(|(k, f)| *k == Input::Search && f.is_empty())
         {
-            fonts.draw(pm, "Поиск в папке", &PLACEHOLDER, tx + 2.0, ty, Some(room));
+            fonts.draw(pm, mimshel_core::i18n::t(self.language, "folder.search_placeholder"), &PLACEHOLDER, tx + 2.0, ty, Some(room));
         }
     }
 
@@ -1400,6 +1454,41 @@ fn redraw_if(changed: bool) -> Action {
     }
 }
 
+/// Count noun for a folder/file count in `lang`.
+/// en: 1 folder / N folders; zh: N 个文件夹 (no plural); ru: upstream plural().
+fn count_word(lang: mimshel_core::i18n::Language, n: usize, kind: &str) -> String {
+    let lang = lang.resolve();
+    match (lang, kind) {
+        (mimshel_core::i18n::Language::En, "folder") => {
+            if n == 1 {
+                "folder".into()
+            } else {
+                "folders".into()
+            }
+        }
+        (mimshel_core::i18n::Language::En, _) => {
+            if n == 1 {
+                "file".into()
+            } else {
+                "files".into()
+            }
+        }
+        (mimshel_core::i18n::Language::Zh, "folder") => "个文件夹".into(),
+        (mimshel_core::i18n::Language::Zh, _) => "个文件".into(),
+        (mimshel_core::i18n::Language::ZhTw, "folder") => "個資料夾".into(),
+        (mimshel_core::i18n::Language::ZhTw, _) => "個檔案".into(),
+        _ => plural(
+            n,
+            if kind == "folder" {
+                ["папка", "папки", "папок"]
+            } else {
+                ["файл", "файла", "файлов"]
+            },
+        )
+        .to_string(),
+    }
+}
+
 /// Слово по числу: 1 папка, 3 папки, 5 папок.
 fn plural(n: usize, [one, few, many]: [&'static str; 3]) -> &'static str {
     match (n % 10, n % 100) {
@@ -1410,37 +1499,65 @@ fn plural(n: usize, [one, few, many]: [&'static str; 3]) -> &'static str {
 }
 
 /// Размер словами, как у Thunar: «73,1 КиБ».
-fn human_size(bytes: u64) -> String {
+fn human_size(lang: mimshel_core::i18n::Language, bytes: u64) -> String {
+    let lang = lang.resolve();
     if bytes < 1024 {
-        return format!(
-            "{bytes} {}",
-            plural(bytes as usize, ["байт", "байта", "байт"])
-        );
+        let word = match lang {
+            mimshel_core::i18n::Language::En => {
+                if bytes == 1 {
+                    "byte"
+                } else {
+                    "bytes"
+                }
+            }
+            mimshel_core::i18n::Language::Zh => "字节",
+            mimshel_core::i18n::Language::ZhTw => "位元組",
+            _ => plural(bytes as usize, ["байт", "байта", "байт"]),
+        };
+        return format!("{bytes} {word}");
     }
-    let units = ["КиБ", "МиБ", "ГиБ", "ТиБ"];
+    let units = match lang {
+        mimshel_core::i18n::Language::Ru => ["КиБ", "МиБ", "ГиБ", "ТиБ"],
+        _ => ["KiB", "MiB", "GiB", "TiB"],
+    };
     let mut value = bytes as f64 / 1024.0;
     let mut unit = 0;
     while value >= 1024.0 && unit < units.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
-    format!("{value:.1} {}", units[unit]).replace('.', ",")
+    let text = format!("{value:.1} {}", units[unit]);
+    match lang {
+        mimshel_core::i18n::Language::Ru => text.replace('.', ","),
+        _ => text,
+    }
 }
 
 /// «73,1 КиБ (74 846 байт)»; меньше килобайта — просто байты.
-fn size_with_bytes(bytes: u64) -> String {
+fn size_with_bytes(lang: mimshel_core::i18n::Language, bytes: u64) -> String {
     if bytes < 1024 {
-        return human_size(bytes);
+        return human_size(lang, bytes);
     }
+    let lang = lang.resolve();
+    let sep = match lang {
+        mimshel_core::i18n::Language::Ru => '\u{a0}',
+        _ => ',',
+    };
+    let word = match lang {
+        mimshel_core::i18n::Language::En => "bytes",
+        mimshel_core::i18n::Language::Zh => "字节",
+        mimshel_core::i18n::Language::ZhTw => "位元組",
+        _ => "байт",
+    };
     let digits = bytes.to_string();
     let mut grouped = String::new();
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            grouped.push('\u{a0}');
+            grouped.push(sep);
         }
         grouped.push(c);
     }
-    format!("{} ({grouped} байт)", human_size(bytes))
+    format!("{} ({grouped} {word})", human_size(lang, bytes))
 }
 
 /// Прямоугольник рамки между точкой начала и указателем.
@@ -1610,8 +1727,36 @@ mod tests {
         assert!(v.status().starts_with("«файл1.txt»  |  1000 байт"));
         v.selected = vec![1, 2];
         assert!(v.status().starts_with("Выделено: 2 объекта: 2,0 КиБ"));
-        assert_eq!(human_size(500), "500 байт");
-        assert_eq!(human_size(74_846), "73,1 КиБ");
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::Ru, 500),
+            "500 байт"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::Ru, 74_846),
+            "73,1 КиБ"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::En, 500),
+            "500 bytes"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::En, 74_846),
+            "73.1 KiB"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::Zh, 74_846),
+            "73.1 KiB"
+        );
+        assert_eq!(
+            human_size(mimshel_core::i18n::Language::ZhTw, 74_846),
+            "73.1 KiB"
+        );
+        v.set_language(mimshel_core::i18n::Language::En);
+        v.selected = vec![];
+        assert_eq!(
+            v.status(),
+            "1 folder  |  3 files: 2.9 KiB (3,000 bytes)  |  Free: 42.8 GiB"
+        );
     }
 
     #[test]

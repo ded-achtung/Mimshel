@@ -38,6 +38,7 @@ pub enum SoundAction {
 
 pub struct SoundPanel {
     pub sound: Sound,
+    pub language: mimshel_core::i18n::Language,
     pub hover: Option<Row>,
     /// Какой ползунок тащат: общий (`Row::Slider`) или программы.
     dragging: Option<Row>,
@@ -87,9 +88,14 @@ impl SoundPanel {
     pub fn new(sound: Sound) -> SoundPanel {
         SoundPanel {
             sound,
+            language: mimshel_core::i18n::Language::Ru,
             hover: None,
             dragging: None,
         }
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
     }
 
     fn slider_top() -> f32 {
@@ -272,9 +278,16 @@ impl SoundPanel {
 
         // «Звук» и проценты.
         let ty = PAD + ((TITLE - BOLD.line_height()) / 2.0).round();
-        fonts.draw(&mut pm, "Звук", &BOLD, TRACK_X0, ty, None);
+        fonts.draw(
+            &mut pm,
+            mimshel_core::i18n::t(self.language, "sound.title"),
+            &BOLD,
+            TRACK_X0,
+            ty,
+            None,
+        );
         let pct = if self.sound.muted {
-            "выкл.".to_string()
+            mimshel_core::i18n::t(self.language, "sound.off").to_string()
         } else {
             format!("{} %", self.sound.volume)
         };
@@ -316,7 +329,7 @@ impl SoundPanel {
         if self.app_count() > 0 {
             fonts.draw(
                 &mut pm,
-                "Программы",
+                mimshel_core::i18n::t(self.language, "sound.apps"),
                 &DIM,
                 TRACK_X0,
                 line_y(Self::apps_caption_top(), &DIM),
@@ -325,7 +338,7 @@ impl SoundPanel {
             for (i, app) in self.sound.apps.iter().take(MAX_APPS).enumerate() {
                 let top = Self::app_top(i);
                 let pct = if app.muted {
-                    "выкл.".to_string()
+                    mimshel_core::i18n::t(self.language, "sound.off").to_string()
                 } else {
                     format!("{} %", app.volume)
                 };
@@ -358,7 +371,7 @@ impl SoundPanel {
 
         fonts.draw(
             &mut pm,
-            "Выход",
+            mimshel_core::i18n::t(self.language, "sound.output"),
             &DIM,
             TRACK_X0,
             line_y(self.caption_top(), &DIM),
@@ -401,7 +414,7 @@ impl SoundPanel {
             &mut pm,
             fonts,
             self.settings_top(),
-            "Настройки звука…",
+            mimshel_core::i18n::t(self.language, "sound.settings"),
             self.hover == Some(Row::Settings),
             false,
         );

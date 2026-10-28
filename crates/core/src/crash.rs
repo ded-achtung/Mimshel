@@ -193,13 +193,85 @@ pub fn report_reason(text: &str) -> Option<String> {
 
 /// The reason a process exited, in plain Russian: an exit code or a
 /// signal with an explanation (by signal name, so it is clear what
-/// happened).
+/// happened). Kept as the Russian variant for existing callers/tests;
+/// new UI code should use `exit_reason_lang`.
 pub fn exit_reason(code: Option<i32>, signal: Option<i32>) -> String {
-    match (code, signal) {
-        (Some(101), _) => "упала (паника)".into(),
-        (Some(c), _) => format!("завершилась с кодом {c}"),
-        (None, Some(sig)) => signal_reason(sig),
-        (None, None) => "завершилась".into(),
+    exit_reason_lang(crate::i18n::Language::Ru, code, signal)
+}
+
+/// Language-aware variant of `exit_reason`.
+pub fn exit_reason_lang(
+    lang: crate::i18n::Language,
+    code: Option<i32>,
+    signal: Option<i32>,
+) -> String {
+    match lang.resolve() {
+        crate::i18n::Language::En => match (code, signal) {
+            (Some(101), _) => "crashed (panic)".into(),
+            (Some(c), _) => format!("exited with code {c}"),
+            (None, Some(sig)) => signal_reason_lang(lang, sig),
+            (None, None) => "exited".into(),
+        },
+        crate::i18n::Language::Zh => match (code, signal) {
+            (Some(101), _) => "崩溃（panic）".into(),
+            (Some(c), _) => format!("退出码 {c}"),
+            (None, Some(sig)) => signal_reason_lang(lang, sig),
+            (None, None) => "已退出".into(),
+        },
+        crate::i18n::Language::ZhTw => match (code, signal) {
+            (Some(101), _) => "當機（panic）".into(),
+            (Some(c), _) => format!("結束碼 {c}"),
+            (None, Some(sig)) => signal_reason_lang(lang, sig),
+            (None, None) => "已結束".into(),
+        },
+        _ => match (code, signal) {
+            (Some(101), _) => "упала (паника)".into(),
+            (Some(c), _) => format!("завершилась с кодом {c}"),
+            (None, Some(sig)) => signal_reason(sig),
+            (None, None) => "завершилась".into(),
+        },
+    }
+}
+
+fn signal_reason_lang(lang: crate::i18n::Language, sig: i32) -> String {
+    match lang.resolve() {
+        crate::i18n::Language::En => match sig {
+            1 => "disconnected: session closed (SIGHUP)".into(),
+            2 => "interrupted (SIGINT)".into(),
+            4 => "crashed: illegal instruction (SIGILL)".into(),
+            6 => "aborted (SIGABRT)".into(),
+            7 => "crashed: bus error (SIGBUS)".into(),
+            8 => "crashed: arithmetic error (SIGFPE)".into(),
+            9 => "killed externally (SIGKILL) — most often out of memory".into(),
+            11 => "crashed: memory access error (SIGSEGV)".into(),
+            15 => "stopped by command (SIGTERM)".into(),
+            s => format!("killed by signal {s}"),
+        },
+        crate::i18n::Language::Zh => match sig {
+            1 => "已断开：会话已关闭（SIGHUP）".into(),
+            2 => "已中断（SIGINT）".into(),
+            4 => "崩溃：非法指令（SIGILL）".into(),
+            6 => "异常终止（SIGABRT）".into(),
+            7 => "崩溃：总线错误（SIGBUS）".into(),
+            8 => "崩溃：算术错误（SIGFPE）".into(),
+            9 => "被外部杀死（SIGKILL）——多为内存不足".into(),
+            11 => "崩溃：内存访问错误（SIGSEGV）".into(),
+            15 => "被命令停止（SIGTERM）".into(),
+            s => format!("被信号 {s} 杀死"),
+        },
+        crate::i18n::Language::ZhTw => match sig {
+            1 => "已中斷連線：工作階段已關閉（SIGHUP）".into(),
+            2 => "已中斷（SIGINT）".into(),
+            4 => "當機：非法指令（SIGILL）".into(),
+            6 => "異常終止（SIGABRT）".into(),
+            7 => "當機：匯流排錯誤（SIGBUS）".into(),
+            8 => "當機：算術錯誤（SIGFPE）".into(),
+            9 => "被外部終止（SIGKILL）——多為記憶體不足".into(),
+            11 => "當機：記憶體存取錯誤（SIGSEGV）".into(),
+            15 => "被命令停止（SIGTERM）".into(),
+            s => format!("被訊號 {s} 終止"),
+        },
+        _ => signal_reason(sig),
     }
 }
 

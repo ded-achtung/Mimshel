@@ -12,11 +12,12 @@ use crate::sys::{command, output, output_any, read, run, spawn, succeeds};
 /// Код выхода: 0 — сделано или отменено, 2 — нет такого действия.
 pub fn action(name: &str, shell: &Path) -> i32 {
     let shell = shell.to_string_lossy();
+    let lang = mimshel_core::i18n::language_from_config();
     match name {
         "about" => {
             zenity(&[
                 "--info",
-                "--title=Об этом компьютере",
+                &format!("--title={}", mimshel_core::i18n::t(lang, "action.about_title")),
                 &format!("--text={}", about_text()),
                 // Свой знак — планета (ставит `mimshel apply menubar`); нет его
                 // в теме — zenity покажет обычный значок сведений.
@@ -41,9 +42,9 @@ pub fn action(name: &str, shell: &Path) -> i32 {
         "lock" => spawn(&[&shell, "lock"]),
         "restart" => {
             if confirm(
-                "Перезагрузить",
-                "Вы действительно хотите перезагрузить компьютер?",
-                "Перезагрузить",
+                mimshel_core::i18n::t(lang, "action.restart_title"),
+                mimshel_core::i18n::t(lang, "action.restart_text"),
+                mimshel_core::i18n::t(lang, "action.restart_title"),
                 "system-reboot",
             ) {
                 run(&["xfce4-session-logout", "--reboot", "--fast"]);
@@ -51,9 +52,9 @@ pub fn action(name: &str, shell: &Path) -> i32 {
         }
         "shutdown" => {
             if confirm(
-                "Выключить",
-                "Вы действительно хотите выключить компьютер?",
-                "Выключить",
+                mimshel_core::i18n::t(lang, "action.shutdown_title"),
+                mimshel_core::i18n::t(lang, "action.shutdown_text"),
+                mimshel_core::i18n::t(lang, "action.shutdown_title"),
                 "system-shutdown",
             ) {
                 run(&["xfce4-session-logout", "--halt", "--fast"]);
@@ -61,9 +62,9 @@ pub fn action(name: &str, shell: &Path) -> i32 {
         }
         "logout" => {
             if confirm(
-                "Завершить сеанс",
-                "Закрыть все программы и выйти из системы?",
-                "Выйти",
+                mimshel_core::i18n::t(lang, "action.logout_title"),
+                mimshel_core::i18n::t(lang, "action.logout_text"),
+                mimshel_core::i18n::t(lang, "action.logout_title"),
                 "system-log-out",
             ) {
                 run(&["xfce4-session-logout", "--logout", "--fast"]);
@@ -113,12 +114,13 @@ fn zenity(args: &[&str]) -> bool {
 
 /// Вопрос «да/нет» окном zenity (`text` — разметка Pango). `true` — нажали `ok`.
 pub fn confirm(title: &str, text: &str, ok: &str, icon: &str) -> bool {
+    let cancel = mimshel_core::i18n::t(mimshel_core::i18n::language_from_config(), "action.cancel");
     zenity(&[
         "--question",
         &format!("--title={title}"),
         &format!("--text={text}"),
         &format!("--ok-label={ok}"),
-        "--cancel-label=Отменить",
+        &format!("--cancel-label={cancel}"),
         &format!("--icon={icon}"),
         "--width=360",
     ])

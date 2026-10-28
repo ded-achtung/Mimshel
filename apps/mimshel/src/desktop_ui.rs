@@ -106,6 +106,7 @@ pub struct DesktopUi {
     /// Значки и папка «Рабочий стол».
     grid: IconGrid,
     dir: PathBuf,
+    language: mimshel_core::i18n::Language,
     /// Выделить, когда появится в списке (только что создан или переименован).
     pending_select: Option<PathBuf>,
     /// Последний щелчок по значку — для двойного щелчка.
@@ -155,6 +156,24 @@ pub struct DesktopUi {
 }
 
 impl DesktopUi {
+    /// Hot reload (v2): switch language and, if it changed, wallpaper
+    /// without restarting the daemon. The desktop is fully redrawn on
+    /// the next flush; a new wallpaper is painted by the painter thread
+    /// and applied when its DesktopMsg arrives.
+    pub fn set_language(
+        &mut self,
+        d: &Display,
+        lang: mimshel_core::i18n::Language,
+        wallpaper: &str,
+    ) {
+        self.language = lang;
+        self.full_dirty = true;
+        if wallpaper != self.wallpaper {
+            self.wallpaper = wallpaper.to_string();
+            self.load_wallpaper(d);
+        }
+    }
+
     pub fn new(d: &Display, config: &Config, tx: Sender<Msg>) -> Result<DesktopUi> {
         let window = d.create_desktop()?;
         // Xfwm4 обновляет _NET_WORKAREA при изменении резервов Dock/панелей.
@@ -171,6 +190,7 @@ impl DesktopUi {
             picker_popup: d.create_popup("wallpaper-picker")?,
             picker: None,
             picker_dirty: false,
+            language: config.language,
             wallpaper: config.wallpaper.clone(),
             wall: None,
             grid: IconGrid::new((0.0, 0.0, 1.0, 1.0)),
@@ -834,23 +854,67 @@ impl DesktopUi {
             indent: false,
         };
         let entries = if on_icon {
-            let mut e = vec![entry("Открыть", DesktopCommand::Open, false)];
+            let mut e = vec![entry(
+                mimshel_core::i18n::t(self.language, "folder.open"),
+                DesktopCommand::Open,
+                false,
+            )];
             // Переименовать можно только один значок.
             if self.grid.selected().is_some() {
-                e.push(entry("Переименовать", DesktopCommand::Rename, true));
+                e.push(entry(
+                    mimshel_core::i18n::t(self.language, "folder.rename"),
+                    DesktopCommand::Rename,
+                    true,
+                ));
             }
-            e.push(entry("Копировать", DesktopCommand::Copy, true));
-            e.push(entry("Вырезать", DesktopCommand::Cut, false));
-            e.push(entry("В корзину", DesktopCommand::Trash, true));
+            e.push(entry(
+                mimshel_core::i18n::t(self.language, "folder.copy"),
+                DesktopCommand::Copy,
+                true,
+            ));
+            e.push(entry(
+                mimshel_core::i18n::t(self.language, "folder.cut"),
+                DesktopCommand::Cut,
+                false,
+            ));
+            e.push(entry(
+                mimshel_core::i18n::t(self.language, "folder.move_to_trash"),
+                DesktopCommand::Trash,
+                true,
+            ));
             e
         } else {
             vec![
-                entry("Новая папка", DesktopCommand::NewFolder, false),
-                entry("Новый текстовый файл", DesktopCommand::NewTextFile, false),
-                entry("Вставить", DesktopCommand::Paste, false),
-                entry("Упорядочить", DesktopCommand::Arrange, true),
-                entry("Открыть терминал здесь", DesktopCommand::Terminal, true),
-                entry("Изменить обои…", DesktopCommand::ChangeWallpaper, true),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.new_folder"),
+                    DesktopCommand::NewFolder,
+                    false,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.new_text_file"),
+                    DesktopCommand::NewTextFile,
+                    false,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.paste"),
+                    DesktopCommand::Paste,
+                    false,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "desktop.arrange"),
+                    DesktopCommand::Arrange,
+                    true,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "folder.open_terminal_here"),
+                    DesktopCommand::Terminal,
+                    true,
+                ),
+                entry(
+                    mimshel_core::i18n::t(self.language, "desktop.change_wallpaper"),
+                    DesktopCommand::ChangeWallpaper,
+                    true,
+                ),
             ]
         };
         let mut menu = Menu::new("desktop".into(), entries);
@@ -975,7 +1039,8 @@ impl DesktopUi {
 
     /// Окно «Обои» посередине экрана; миниатюры рисуются в фоне.
     fn open_picker(&mut self, d: &Display) -> Result<()> {
-        let picker = WallpaperPicker::new(WALLPAPERS, &self.wallpaper);
+        let mut picker = WallpaperPicker::new(WALLPAPERS, &self.wallpaper);
+        picker.set_language(self.language);
         let (w, h) = picker.size();
         let (sw, sh) = d.screen_size();
         let x = (i32::from(sw) - w as i32) / 2;

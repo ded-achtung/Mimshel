@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod crash;
+pub mod i18n;
 pub mod input;
 pub mod keyboard;
 pub mod names;

@@ -65,6 +65,7 @@ pub enum PickerResult {
 }
 
 pub struct WallpaperPicker {
+    pub language: mimshel_core::i18n::Language,
     tiles: Vec<Tile>,
     /// Миниатюры (в пикселях экрана) по значению настройки.
     thumbs: Vec<(String, Pixmap)>,
@@ -92,11 +93,16 @@ impl WallpaperPicker {
         }
         tiles.push(Tile::Pick);
         WallpaperPicker {
+            language: mimshel_core::i18n::Language::Ru,
             tiles,
             thumbs: Vec::new(),
             current: current.to_string(),
             hover: None,
         }
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
     }
 
     pub fn tiles(&self) -> &[Tile] {
@@ -195,7 +201,14 @@ impl WallpaperPicker {
             pm.stroke_path(&r, &paint(BORDER), &stroke, id, None);
         }
         let ty = ((TITLE_H - TITLE.line_height()) / 2.0).round();
-        fonts.draw(&mut pm, "Обои", &TITLE, PAD, ty, None);
+        fonts.draw(
+            &mut pm,
+            mimshel_core::i18n::t(self.language, "wallpaper.title"),
+            &TITLE,
+            PAD,
+            ty,
+            None,
+        );
 
         for (i, tile) in self.tiles.iter().enumerate() {
             let (x, y) = Self::tile_pos(i);
@@ -221,11 +234,16 @@ impl WallpaperPicker {
                 continue;
             };
             let (label, thumb) = match tile {
-                Tile::Wallpaper { value, label } => (
-                    label.as_str(),
+                Tile::Wallpaper { value, .. } => (
+                    match value.as_str() {
+                        "space" => mimshel_core::i18n::t(self.language, "wallpaper.space"),
+                        "waves" => mimshel_core::i18n::t(self.language, "wallpaper.waves"),
+                        "aurora" => mimshel_core::i18n::t(self.language, "wallpaper.aurora"),
+                        _ => mimshel_core::i18n::t(self.language, "wallpaper.custom"),
+                    },
                     self.thumbs.iter().find(|(v, _)| v == value).map(|(_, p)| p),
                 ),
-                Tile::Pick => ("Выбрать картинку…", None),
+                Tile::Pick => (mimshel_core::i18n::t(self.language, "wallpaper.pick"), None),
             };
             match thumb {
                 // Картинка — заливкой со скруглёнными углами: растянута на

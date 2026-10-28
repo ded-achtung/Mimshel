@@ -966,6 +966,7 @@ dependencies = [
 name = "mimshel-notify"
 version = "0.0.3-alpha"
 dependencies = [
+ "mimshel-core",
  "mimshel-dbus",
  "mimshel-render",
  "mimshel-text",

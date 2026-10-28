@@ -35,6 +35,7 @@ pub enum BluetoothAction {
 
 pub struct BluetoothPanel {
     pub state: BtState,
+    pub language: mimshel_core::i18n::Language,
     pub hover: Option<Row>,
 }
 
@@ -100,7 +101,15 @@ struct Layout {
 
 impl BluetoothPanel {
     pub fn new(state: BtState) -> BluetoothPanel {
-        BluetoothPanel { state, hover: None }
+        BluetoothPanel {
+            state,
+            language: mimshel_core::i18n::Language::Ru,
+            hover: None,
+        }
+    }
+
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
     }
 
     fn layout(&self) -> Layout {
@@ -110,8 +119,13 @@ impl BluetoothPanel {
         let mut rows = Vec::new();
         let mut note = None;
         if s.powered {
-            for (paired, caption) in [(true, "Мои устройства"), (false, "Другие устройства")]
-            {
+            for (paired, caption) in [
+                (true, mimshel_core::i18n::t(self.language, "bt.my_devices")),
+                (
+                    false,
+                    mimshel_core::i18n::t(self.language, "bt.other_devices"),
+                ),
+            ] {
                 let list: Vec<usize> = (0..s.devices.len())
                     .filter(|&i| s.devices[i].paired == paired)
                     .take(MAX_ROWS)
@@ -127,16 +141,19 @@ impl BluetoothPanel {
                 }
                 if !paired && rows.iter().all(|&(_, i)| s.devices[i].paired) {
                     let text = if s.discovering {
-                        "Поиск устройств…"
+                        mimshel_core::i18n::t(self.language, "bt.searching")
                     } else {
-                        "Устройств рядом не найдено"
+                        mimshel_core::i18n::t(self.language, "bt.no_devices")
                     };
                     note = Some((y, text.to_string()));
                     y += ROW;
                 }
             }
         } else {
-            note = Some((y, "Bluetooth выключен".to_string()));
+            note = Some((
+                y,
+                mimshel_core::i18n::t(self.language, "bt.off").to_string(),
+            ));
             y += ROW;
         }
         let error = s.error.as_ref().map(|_| {
@@ -307,10 +324,10 @@ impl BluetoothPanel {
             );
             let busy = s.busy.as_deref() == Some(d.path.as_str());
             let status = match (busy, d.connected) {
-                (true, true) => "Отключение…",
-                (true, false) if d.paired => "Подключение…",
-                (true, false) => "Сопряжение…",
-                (false, true) => "Подключено",
+                (true, true) => mimshel_core::i18n::t(self.language, "bt.disconnecting"),
+                (true, false) if d.paired => mimshel_core::i18n::t(self.language, "bt.connecting"),
+                (true, false) => mimshel_core::i18n::t(self.language, "bt.pairing"),
+                (false, true) => mimshel_core::i18n::t(self.language, "bt.connected"),
                 (false, false) => "",
             };
             let sw = fonts.measure(status, &NOTE);
@@ -354,7 +371,7 @@ impl BluetoothPanel {
         }
         fonts.draw(
             &mut pm,
-            "Настройки Bluetooth…",
+            mimshel_core::i18n::t(self.language, "bt.settings"),
             &TEXT,
             X0,
             line_y(l.settings, ROW, &TEXT),

@@ -12,6 +12,8 @@ use crate::Action;
 use mimshel_widgets::field::{Edit, TextField};
 
 pub struct SearchPanel {
+    /// Interface language for the placeholder (default: Russian).
+    pub language: mimshel_core::i18n::Language,
     apps: Vec<App>,
     /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
     prepared: Vec<mimshel_core::search::Prepared>,
@@ -24,9 +26,14 @@ pub struct SearchPanel {
 }
 
 impl SearchPanel {
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
+    }
+
     pub fn new(apps: Vec<App>) -> SearchPanel {
         let prepared = crate::prepare_all(&apps);
         SearchPanel {
+            language: mimshel_core::i18n::Language::Ru,
             apps,
             prepared,
             field: TextField::default(),

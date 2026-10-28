@@ -15,9 +15,14 @@ pub enum Section {
 
 impl Section {
     pub fn title(self) -> &'static str {
+        // Upstream default (Russian); app layer uses title_lang().
+        self.title_lang(mimshel_core::i18n::Language::Ru)
+    }
+
+    pub fn title_lang(self, lang: mimshel_core::i18n::Language) -> &'static str {
         match self {
-            Section::Places => "Места",
-            Section::Devices => "Устройства",
+            Section::Places => mimshel_core::i18n::t(lang, "folder.places"),
+            Section::Devices => mimshel_core::i18n::t(lang, "folder.devices"),
         }
     }
 }
@@ -73,8 +78,14 @@ pub fn trash_dir(home: &Path) -> PathBuf {
 }
 
 /// Места этого пользователя (несуществующие папки пропускаются) и
-/// подключённые диски.
+/// подключённые диски. Upstream default language is Russian; the app
+/// layer calls `places_lang(config.language)` instead.
 pub fn places() -> Vec<Place> {
+    places_lang(mimshel_core::i18n::Language::Ru)
+}
+
+/// Same as [`places`], with sidebar names in `lang`.
+pub fn places_lang(lang: mimshel_core::i18n::Language) -> Vec<Place> {
     let home = home();
     let mut list = from_user_dirs(&user_dirs_text(&home), &home);
     list.retain(|p| p.path.is_dir());
@@ -83,7 +94,7 @@ pub fn places() -> Vec<Place> {
     list.insert(
         at.map_or(list.len(), |i| i + 1),
         Place {
-            name: "Корзина".into(),
+            name: mimshel_core::i18n::t(lang, "dock.trash").to_string(),
             path: trash_dir(&home),
             icon: "user-trash-symbolic",
             section: Section::Places,
@@ -92,7 +103,7 @@ pub fn places() -> Vec<Place> {
         },
     );
     list.push(Place {
-        name: "Файловая система".into(),
+        name: mimshel_core::i18n::t(lang, "folder.filesystem").to_string(),
         path: PathBuf::from("/"),
         icon: "drive-harddisk-symbolic",
         section: Section::Devices,
@@ -114,7 +125,9 @@ fn from_user_dirs(text: &str, home: &Path) -> Vec<Place> {
     let name = home
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Домашняя папка".into());
+        .unwrap_or_else(|| {
+            mimshel_core::i18n::t(mimshel_core::i18n::Language::Ru, "app.home").to_string()
+        });
     let mut list = vec![Place {
         name,
         path: home.to_path_buf(),

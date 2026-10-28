@@ -160,6 +160,14 @@ fn main() {
         }
         Some("apply") => std::process::exit(setup::apply_cmd(&args[1..])),
         Some("config") => std::process::exit(setup::show_config()),
+        Some("reload") => {
+            if ui::ask_daemon_reload() {
+                println!("Служба перечитала настройки (без перезапуска)");
+            } else {
+                println!("Служба не запущена — настройки применятся при следующем запуске");
+                std::process::exit(1);
+            }
+        }
         Some("lock") if args.len() == 1 => {
             // Меню и xflock4 ждут, пока команда вернётся: сторож уходит в фон.
             let exe = guard::own_exe();

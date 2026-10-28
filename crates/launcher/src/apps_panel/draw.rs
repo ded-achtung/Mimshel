@@ -243,7 +243,7 @@ impl AppsPanel {
             fonts.draw(&mut pm, &app.name, &LABEL, tx, ty, Some(max));
         }
         if !any && !self.field.is_empty() {
-            let text = "Ничего не найдено";
+            let text = mimshel_core::i18n::t(self.language, "panel.nothing_found");
             let tw = fonts.measure(text, &NOTHING);
             let y = self.layout.h * 0.4;
             fonts.draw(&mut pm, text, &NOTHING, (self.layout.w - tw) / 2.0, y, None);
@@ -297,7 +297,7 @@ impl AppsPanel {
         let ty = y + (h - SEARCH_TEXT.line_height()) / 2.0;
         let gy = y + (h - glass) / 2.0;
         if self.field.is_empty() {
-            let label = "Поиск";
+            let label = mimshel_core::i18n::t(self.language, "panel.search");
             let tw = fonts.measure(label, &PLACEHOLDER);
             let gx = x + (w - (glass + 6.0 + tw)) / 2.0;
             magnifier(pm, gx, gy, glass, GLASS);

@@ -82,7 +82,14 @@ fn print_check(c: &Check) {
 /// `apply` = false (`mimshel set --no-apply`) — только записать: установщик
 /// пишет несколько настроек и применяет всё разом.
 pub fn set(key: &str, input: &str, apply: bool) -> i32 {
-    let key = &config::current_key(key);
+    // Bare `mimshel set language en` is an alias for `look.language`.
+    let key_owned;
+    let key = if key == "language" {
+        key_owned = "look.language".to_string();
+        &key_owned
+    } else {
+        &config::current_key(key)
+    };
     let value = match setting_value(key, input) {
         Ok(v) => v,
         Err(e) => {
@@ -115,6 +122,17 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
     }
     println!("✔ {key} = {}", input.trim());
     if !apply {
+        return 0;
+    }
+    // Hot reload (v2): language and wallpaper switch without restarting
+    // the daemon, the session or the machine. If no daemon is running,
+    // the setting simply takes effect on the next login.
+    if section == "look" && (name == "language" || name == "wallpaper") {
+        if crate::ui::ask_daemon_reload() {
+            println!("Служба перечитала настройки (без перезапуска)");
+        } else {
+            println!("Служба не запущена — настройки применятся при следующем запуске");
+        }
         return 0;
     }
     let config = load_config();

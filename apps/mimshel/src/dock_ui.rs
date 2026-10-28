@@ -115,6 +115,7 @@ impl DockUi {
                 config.no_dgpu_apps.clone(),
             )));
         }
+        ui.dock.set_language(config.language);
         ui.dock.set_trash(trash_full());
         watch_trash(ui.tx.clone());
         d.watch_root()?;
@@ -132,6 +133,13 @@ impl DockUi {
                 icons.get(name, self.dock.max_icon());
             }
         }
+    }
+
+    /// Hot reload (v2): switch language without restarting the daemon.
+    /// The dock is redrawn on the next flush.
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.dock.set_language(lang);
+        self.dirty = true;
     }
 
     pub fn set_apps(&mut self, d: &Display, apps: Vec<App>) {

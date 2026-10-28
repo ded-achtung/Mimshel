@@ -87,6 +87,9 @@ pub struct Dock {
     drag: Option<drag::Drag>,
     /// Корзина в конце дока: полна ли она (`None` — без корзины).
     trash: Option<bool>,
+    /// Interface language for dock labels (default: Russian, upstream
+    /// behaviour; the app layer sets it from config via `set_language`).
+    language: mimshel_core::i18n::Language,
 }
 
 impl Dock {
@@ -108,6 +111,7 @@ impl Dock {
             popup_open: false,
             drag: None,
             trash: None,
+            language: mimshel_core::i18n::Language::Ru,
         };
         d.rebuild();
         d
@@ -121,6 +125,12 @@ impl Dock {
 
     pub fn apps(&self) -> &[App] {
         &self.apps
+    }
+
+    /// Interface language for dock labels (see `crate::i18n` in core).
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
+        self.rebuild();
     }
 
     pub fn set_screen_width(&mut self, w: u32) {
@@ -182,7 +192,13 @@ impl Dock {
             .drag
             .and_then(|d| self.items.get(d.index))
             .map(|i| i.key.clone());
-        self.items = items::build(&self.apps, &self.pinned, &self.windows, self.trash);
+        self.items = items::build(
+            &self.apps,
+            &self.pinned,
+            &self.windows,
+            self.trash,
+            self.language,
+        );
         // Значки перестроились посреди перетаскивания — найти свой заново.
         if let Some(key) = dragged {
             match self.items.iter().position(|i| i.key == key) {
@@ -252,9 +268,11 @@ impl Dock {
     /// Меню значка `index` (правый клик). Пусто — меню нет.
     pub fn menu(&self, index: usize) -> Option<Menu> {
         let item = self.items.get(index)?;
+        let lang = self.language.resolve();
+        let tr = |k: &'static str| mimshel_core::i18n::t(lang, k);
         if item.key == TRASH {
             let mut entries = vec![MenuEntry {
-                label: "Открыть".into(),
+                label: tr("dock.open").into(),
                 command: MenuCommand::OpenTrash,
                 checked: false,
                 separator_before: false,
@@ -263,7 +281,7 @@ impl Dock {
             }];
             if self.trash == Some(true) {
                 entries.push(MenuEntry {
-                    label: "Очистить Корзину…".into(),
+                    label: tr("dock.empty_trash").into(),
                     command: MenuCommand::EmptyTrash,
                     checked: false,
                     separator_before: true,
@@ -297,9 +315,9 @@ impl Dock {
         if item.app.is_some() {
             entries.push(MenuEntry {
                 label: if running {
-                    "Новое окно"
+                    tr("dock.new_window")
                 } else {
-                    "Открыть"
+                    tr("dock.open")
                 }
                 .into(),
                 command: MenuCommand::Launch,
@@ -309,7 +327,7 @@ impl Dock {
                 indent: false,
             });
             entries.push(MenuEntry {
-                label: "Оставить в Dock".into(),
+                label: tr("dock.keep_in_dock").into(),
                 command: MenuCommand::TogglePin,
                 checked: item.pinned,
                 separator_before: true,
@@ -318,7 +336,7 @@ impl Dock {
             });
             if let (Some((yes, no)), Some(app)) = (&self.dgpu, &item.app) {
                 entries.push(MenuEntry {
-                    label: "Запускать на видеокарте NVIDIA".into(),
+                    label: tr("dock.run_on_dgpu").into(),
                     command: MenuCommand::ToggleDgpu,
                     checked: dgpu_wanted(yes, no, &app.id, app.prefers_dgpu),
                     separator_before: false,
@@ -329,7 +347,7 @@ impl Dock {
         }
         if running {
             entries.push(MenuEntry {
-                label: "Завершить".into(),
+                label: tr("dock.quit").into(),
                 command: MenuCommand::Quit,
                 checked: false,
                 separator_before: true,

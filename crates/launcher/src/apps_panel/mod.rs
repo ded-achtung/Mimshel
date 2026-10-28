@@ -72,6 +72,8 @@ impl Layout {
 }
 
 pub struct AppsPanel {
+    /// Interface language for the placeholder (default: Russian).
+    pub language: mimshel_core::i18n::Language,
     apps: Vec<App>,
     /// Поля `apps`, подготовленные для поиска один раз (см. [`prepare_all`]).
     prepared: Vec<mimshel_core::search::Prepared>,
@@ -86,9 +88,14 @@ pub struct AppsPanel {
 }
 
 impl AppsPanel {
+    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+        self.language = lang;
+    }
+
     pub fn new(apps: Vec<App>, screen: (u32, u32), grid: Grid) -> AppsPanel {
         let prepared = crate::prepare_all(&apps);
         let mut l = AppsPanel {
+            language: mimshel_core::i18n::Language::Ru,
             apps,
             prepared,
             field: TextField::default(),
