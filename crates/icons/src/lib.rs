@@ -209,6 +209,9 @@ impl Icons {
     /// Запоминается: второй раз — мгновенно.
     pub fn get(&mut self, name: &str, size: u32) -> Option<&Pixmap> {
         let px = mimshel_render::to_px(size, self.scale);
+        if name.starts_with('/') {
+            return self.get_foreign(name, px);
+        }
         let key = (name.to_string(), px);
         if !self.cache.contains_key(&key) {
             // Рисунок выбираем по размеру в точках: у одного имени в разных
@@ -221,6 +224,30 @@ impl Icons {
                 .filter(|p| px == size || p.extension().is_some_and(|e| e == "svg"))
                 .or_else(|| self.find(name, px));
             let pixmap = path.and_then(|p| render(&p, px));
+            self.cache.insert(key.clone(), pixmap);
+        }
+        self.cache.get(&key).and_then(Option::as_ref)
+    }
+
+    /// A picture by full path: size-limited, and keyed by the file's change
+    /// time too, so a program that rewrites the same file shows the new one.
+    fn get_foreign(&mut self, path: &str, px: u32) -> Option<&Pixmap> {
+        let changed = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos());
+        let key = (format!("{path}\0{changed}"), px);
+        if !self.cache.contains_key(&key) {
+            let foreign = self
+                .cache
+                .keys()
+                .filter(|(k, _)| k.starts_with('/'))
+                .count();
+            if foreign >= FOREIGN_CACHED_MAX {
+                self.cache.retain(|(k, _), _| !k.starts_with('/'));
+            }
+            let pixmap = render_foreign(Path::new(path), px);
             self.cache.insert(key.clone(), pixmap);
         }
         self.cache.get(&key).and_then(Option::as_ref)
@@ -311,14 +338,55 @@ pub enum Fit {
 /// Картинка из файла (SVG, PNG или JPEG — по содержимому, не по имени:
 /// у `~/.face` расширения нет) в рамке `w`×`h`.
 pub fn render_file(path: &Path, w: u32, h: u32, fit: Fit) -> Option<Pixmap> {
+    render_data(&std::fs::read(path).ok()?, w, h, fit)
+}
+
+/// A picture named by its full path (a notification's `app_icon`, a
+/// launcher's `Icon=/…`): any program can point at any file, so a
+/// 30 MB screenshot must not be decoded on the main thread.
+fn render_foreign(path: &Path, size: u32) -> Option<Pixmap> {
+    if std::fs::metadata(path).ok()?.len() > FOREIGN_FILE_MAX {
+        return None;
+    }
     let data = std::fs::read(path).ok()?;
+    if raster_size(&data).is_some_and(|(w, h)| u64::from(w) * u64::from(h) > FOREIGN_PIXELS_MAX) {
+        return None;
+    }
+    render_data(&data, size, size, Fit::Contain)
+}
+
+/// Limits for [`render_foreign`]: file size and pixels of a PNG or JPEG.
+const FOREIGN_FILE_MAX: u64 = 4 * 1024 * 1024;
+const FOREIGN_PIXELS_MAX: u64 = 2048 * 2048;
+/// Pictures by full path kept in the cache at most; past that they are
+/// dropped (a screenshot tool sends a new path with every notification).
+const FOREIGN_CACHED_MAX: usize = 64;
+
+/// Width and height from a PNG or JPEG header, without decoding.
+fn raster_size(data: &[u8]) -> Option<(u32, u32)> {
+    if data.starts_with(b"\x89PNG") {
+        let w = u32::from_be_bytes(data.get(16..20)?.try_into().ok()?);
+        let h = u32::from_be_bytes(data.get(20..24)?.try_into().ok()?);
+        return Some((w, h));
+    }
+    if !data.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    use zune_jpeg::zune_core::bytestream::ZCursor;
+    let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
+    decoder.decode_headers().ok()?;
+    let info = decoder.info()?;
+    Some((u32::from(info.width), u32::from(info.height)))
+}
+
+fn render_data(data: &[u8], w: u32, h: u32, fit: Fit) -> Option<Pixmap> {
     let mut out = Pixmap::new(w, h)?;
     let (fw, fh) = (w as f32, h as f32);
     let scale = |iw: f32, ih: f32| match fit {
         Fit::Contain => (fw / iw).min(fh / ih),
         Fit::Cover => (fw / iw).max(fh / ih),
     };
-    if let Some(img) = decode_raster(&data) {
+    if let Some(img) = decode_raster(data) {
         // Сильное уменьшение одной интерполяцией даёт рябь — сначала
         // усредняем квадратиками в целое число раз.
         let k = scale(img.width() as f32, img.height() as f32);
@@ -336,7 +404,7 @@ pub fn render_file(path: &Path, w: u32, h: u32, fit: Fit) -> Option<Pixmap> {
             Transform::from_scale(k, k).post_translate((fw - iw * k) / 2.0, (fh - ih * k) / 2.0);
         out.draw_pixmap(0, 0, img.as_ref(), &paint, t, None);
     } else {
-        let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
+        let tree = resvg::usvg::Tree::from_data(data, &resvg::usvg::Options::default()).ok()?;
         let (iw, ih) = (tree.size().width(), tree.size().height());
         let k = scale(iw, ih);
         let t =
@@ -466,6 +534,38 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned()
+    }
+
+    #[test]
+    fn pictures_by_path_are_limited_and_follow_changes() {
+        let dir = TempDir::new("foreign");
+        let path = dir.0.join("shot.png");
+        let small = Pixmap::new(4, 4).unwrap().encode_png().unwrap();
+        assert_eq!(raster_size(&small), Some((4, 4)));
+        std::fs::write(&path, &small).unwrap();
+        let mut icons = Icons::new("hicolor");
+        let name = path.to_string_lossy().into_owned();
+        assert!(icons.get(&name, 16).is_some());
+        // A header claiming 30000x30000 is refused without decoding.
+        let mut huge = small.clone();
+        huge[16..20].copy_from_slice(&30000u32.to_be_bytes());
+        huge[20..24].copy_from_slice(&30000u32.to_be_bytes());
+        let big = dir.0.join("big.png");
+        std::fs::write(&big, &huge).unwrap();
+        assert!(render_foreign(&big, 16).is_none());
+        // Many different paths do not pile up in the cache.
+        for i in 0..FOREIGN_CACHED_MAX + 10 {
+            let p = dir.0.join(format!("n{i}.png"));
+            std::fs::write(&p, &small).unwrap();
+            icons.get(&p.to_string_lossy(), 16);
+        }
+        let foreign = icons
+            .cache
+            .keys()
+            .filter(|(k, _)| k.starts_with('/'))
+            .count();
+        assert!(foreign <= FOREIGN_CACHED_MAX, "{foreign}");
+        let _ = std::fs::remove_dir_all(&dir.0);
     }
 
     #[test]
