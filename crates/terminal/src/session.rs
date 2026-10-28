@@ -209,15 +209,8 @@ impl Session {
     /// Вставить текст: в режиме «скобок» (bash, vim) — в скобках, чтобы
     /// программа не выполнила строки по одной.
     pub fn paste(&self, text: &str) {
-        let text = text.replace("\r\n", "\r").replace('\n', "\r");
-        let bytes = if self.mode().contains(TermMode::BRACKETED_PASTE) {
-            // Внутри вставки не должно быть конца скобок — иначе её можно «закрыть».
-            let safe = text.replace("\x1b[201~", "");
-            format!("\x1b[200~{safe}\x1b[201~").into_bytes()
-        } else {
-            text.into_bytes()
-        };
-        self.input(bytes);
+        let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
+        self.input(paste_bytes(text, bracketed));
     }
 
     pub fn mode(&self) -> TermMode {
@@ -435,12 +428,42 @@ fn window_size((cols, rows): (usize, usize), (cw, ch): (u32, u32)) -> WindowSize
     }
 }
 
+/// The bytes a paste sends. In bracketed mode the text must not be able
+/// to end the brackets early: a single pass removing `ESC [201~` is not
+/// enough (`ESC [20` + `ESC [201~` + `1~` leaves a new one behind), so
+/// every escape character goes, ESC and its one-byte form (C1 CSI).
+/// Whatever followed a fake end would run in the shell as typed commands.
+fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    let text = text.replace("\r\n", "\r").replace('\n', "\r");
+    if bracketed {
+        let safe: String = text
+            .chars()
+            .filter(|&c| c != '\x1b' && c != '\u{9b}')
+            .collect();
+        format!("\x1b[200~{safe}\x1b[201~").into_bytes()
+    } else {
+        text.into_bytes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
     /// Настоящий сеанс: оболочка печатает — сетка это видит, OSC 52 доходит.
+    #[test]
+    fn paste_cannot_end_the_brackets() {
+        let nested = "echo ok\x1b[20\x1b[201~1~\nrm -rf ~\n";
+        let out = String::from_utf8(paste_bytes(nested, true)).unwrap();
+        assert_eq!(out.matches("\x1b[201~").count(), 1, "{out:?}");
+        assert!(out.ends_with("\x1b[201~"));
+        assert!(!out.contains('\u{9b}'));
+        let c1 = String::from_utf8(paste_bytes("a\u{9b}201~b", true)).unwrap();
+        assert_eq!(c1, "\x1b[200~a201~b\x1b[201~");
+        assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc");
+    }
+
     #[test]
     fn shell_output_and_osc52() {
         let mut s = Session::spawn(
