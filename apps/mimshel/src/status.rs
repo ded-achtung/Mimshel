@@ -15,8 +15,8 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use mimshel_menubar::status::{
-    Backlight, Battery, Sound, SysBattery, parse_app_sounds_lang, parse_default_state, parse_sinks,
-    pick_backlight, sys_battery,
+    Backlight, Battery, Sound, SysBattery, parse_default_state, parse_sinks, pick_backlight,
+    sys_battery,
 };
 use mimshel_menubar::{NetState, parse_known, parse_wifi_list, parse_wired};
 

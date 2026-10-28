@@ -191,7 +191,11 @@ pub fn note_last_crash(id: &str, reason: &str, report: Option<&Path>) {
 /// our own notification UI the banner goes straight to it; without one
 /// (`parts.notify` = xfce) the same text goes through `notify-send`. The
 /// file is removed either way, so the message shows once.
-pub fn announce_restart(notify: Option<&mut NotifyUi>, icons: &mut Icons, lang: mimshel_core::i18n::Language) {
+pub fn announce_restart(
+    notify: Option<&mut NotifyUi>,
+    icons: &mut Icons,
+    lang: mimshel_core::i18n::Language,
+) {
     let Some(path) = last_crash_path() else {
         return;
     };
@@ -252,14 +256,9 @@ fn notify_send(body: &str, lang: mimshel_core::i18n::Language) {
 
 /// The reason the service child fell, for the guard's log: by code or
 /// signal, and for a panic (code 101) also the message and place from
-/// this process's report (the file name carries the pid).
-pub fn service_failure(status: &ExitStatus, pid: u32) -> (String, Option<PathBuf>) {
-    use std::os::unix::process::ExitStatusExt;
-    service_failure_at(report_dir(), status.code(), status.signal(), pid)
-}
-
-/// Language-aware variant: the guard passes the config language so the
-/// stored reason (and hence the restart banner) is already translated.
+/// this process's report (the file name carries the pid). The guard
+/// passes the config language so the stored reason (and hence the
+/// restart banner) is already translated.
 pub fn service_failure_lang(
     status: &ExitStatus,
     pid: u32,
@@ -269,6 +268,7 @@ pub fn service_failure_lang(
     service_failure_at_lang(report_dir(), status.code(), status.signal(), pid, lang)
 }
 
+#[cfg(test)]
 fn service_failure_at(
     dir: Option<PathBuf>,
     code: Option<i32>,

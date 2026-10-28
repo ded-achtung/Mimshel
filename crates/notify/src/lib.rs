@@ -711,18 +711,30 @@ mod tests {
     fn age_labels() {
         use mimshel_core::i18n::Language;
         let t = Instant::now();
-        assert_eq!(age_label(Language::Ru, t, t + Duration::from_secs(5)), "сейчас");
+        assert_eq!(
+            age_label(Language::Ru, t, t + Duration::from_secs(5)),
+            "сейчас"
+        );
         assert_eq!(
             age_label(Language::Ru, t, t + Duration::from_secs(5 * 60 + 7)),
             "5 мин назад"
         );
-        assert_eq!(age_label(Language::Ru, t, t + Duration::from_secs(2 * 3600)), "2 ч назад");
-        assert_eq!(age_label(Language::En, t, t + Duration::from_secs(5)), "now");
+        assert_eq!(
+            age_label(Language::Ru, t, t + Duration::from_secs(2 * 3600)),
+            "2 ч назад"
+        );
+        assert_eq!(
+            age_label(Language::En, t, t + Duration::from_secs(5)),
+            "now"
+        );
         assert_eq!(
             age_label(Language::En, t, t + Duration::from_secs(5 * 60 + 7)),
             "5 min ago"
         );
-        assert_eq!(age_label(Language::En, t, t + Duration::from_secs(2 * 3600)), "2 hr ago");
+        assert_eq!(
+            age_label(Language::En, t, t + Duration::from_secs(2 * 3600)),
+            "2 hr ago"
+        );
     }
 
     #[test]

@@ -17,7 +17,10 @@ pub fn action(name: &str, shell: &Path) -> i32 {
         "about" => {
             zenity(&[
                 "--info",
-                &format!("--title={}", mimshel_core::i18n::t(lang, "action.about_title")),
+                &format!(
+                    "--title={}",
+                    mimshel_core::i18n::t(lang, "action.about_title")
+                ),
                 &format!("--text={}", about_text()),
                 // Свой знак — планета (ставит `mimshel apply menubar`); нет его
                 // в теме — zenity покажет обычный значок сведений.

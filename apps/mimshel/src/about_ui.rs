@@ -153,7 +153,8 @@ fn height(info: &About) -> u32 {
     text.max(PAD * 2.0 + LOGO as f32) as u32
 }
 
-/// Окно целиком размером `(w, h)` точек (русский по умолчанию — тесты).
+/// The whole window, `(w, h)` points, in Russian (for the tests).
+#[cfg(test)]
 pub fn render(info: &About, (w, h): (u32, u32), fonts: &mut Fonts, icons: &mut Icons) -> Canvas {
     render_lang(info, (w, h), fonts, icons, mimshel_core::i18n::Language::Ru)
 }
@@ -206,27 +207,27 @@ fn translate_about_value(lang: mimshel_core::i18n::Language, value: &str) -> Str
     if lang.resolve() == mimshel_core::i18n::Language::Ru {
         return value.to_string();
     }
-    if let Some(rest) = value.strip_prefix("занято ") {
-        if let Some((used, size)) = rest.split_once(" из ") {
-            let size = size.strip_suffix(" ГБ").unwrap_or(size);
-            return match lang.resolve() {
-                mimshel_core::i18n::Language::En => format!("Used {used} of {size} GB"),
-                mimshel_core::i18n::Language::Zh => format!("已用 {used} / 共 {size} GB"),
-                _ => format!("已用 {used} / 共 {size} GB"),
-            };
-        }
+    if let Some(rest) = value.strip_prefix("занято ")
+        && let Some((used, size)) = rest.split_once(" из ")
+    {
+        let size = size.strip_suffix(" ГБ").unwrap_or(size);
+        return match lang.resolve() {
+            mimshel_core::i18n::Language::En => format!("Used {used} of {size} GB"),
+            mimshel_core::i18n::Language::Zh => format!("已用 {used} / 共 {size} GB"),
+            _ => format!("已用 {used} / 共 {size} GB"),
+        };
     }
     if let Some(n) = value.strip_suffix(" ГБ") {
         return format!("{n} GB");
     }
-    if let Some(base) = value.strip_suffix(" потоков)") {
-        if let Some((head, n)) = base.rsplit_once(" (") {
-            return match lang.resolve() {
-                mimshel_core::i18n::Language::En => format!("{head} ({n} threads)"),
-                mimshel_core::i18n::Language::Zh => format!("{head}（{n} 个线程）"),
-                _ => format!("{head}（{n} 個執行緒）"),
-            };
-        }
+    if let Some(base) = value.strip_suffix(" потоков)")
+        && let Some((head, n)) = base.rsplit_once(" (")
+    {
+        return match lang.resolve() {
+            mimshel_core::i18n::Language::En => format!("{head} ({n} threads)"),
+            mimshel_core::i18n::Language::Zh => format!("{head}（{n} 个线程）"),
+            _ => format!("{head}（{n} 個執行緒）"),
+        };
     }
     value.to_string()
 }

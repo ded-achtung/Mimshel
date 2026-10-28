@@ -198,11 +198,7 @@ impl Battery {
     }
 }
 
-/// «2,5 hours» / «40,0 minutes» → «2,5 ч» / «40 мин» (русский по умолчанию).
-fn human_time(t: &str) -> String {
-    human_time_lang(t, mimshel_core::i18n::Language::Ru)
-}
-
+/// "2,5 hours" / "40,0 minutes" -> "2,5 ч" / "40 мин" in the given language.
 fn human_time_lang(t: &str, lang: mimshel_core::i18n::Language) -> String {
     let mut it = t.split_whitespace();
     let (Some(n), Some(unit)) = (it.next(), it.next()) else {
@@ -305,7 +301,7 @@ fn battery_icon(percent: u32, state: &str) -> String {
 }
 
 /// Время до полного разряда или заряда в том же виде, в котором его выдавал
-/// UPower («2,5 hours») — [`human_time`] превращает его в «2,5 ч».
+/// UPower («2,5 hours») — [`human_time_lang`] превращает его в «2,5 ч».
 fn battery_time(state: &str, now: u64, full: u64, power: u64) -> Option<String> {
     if power == 0 {
         return None;

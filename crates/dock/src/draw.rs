@@ -139,7 +139,9 @@ impl Dock {
     pub fn drag_image(&self, fonts: &mut Fonts, icons: &mut Icons) -> Option<(Canvas, (f32, f32))> {
         let item = self.items.get(self.drag?.index)?;
         let size = self.max_icon() as f32;
-        let label = self.drag_removes().then_some(mimshel_core::i18n::t(self.language, "dock.remove"));
+        let label = self
+            .drag_removes()
+            .then_some(mimshel_core::i18n::t(self.language, "dock.remove"));
         let (tw, th) = label.map_or((0.0, 0.0), |t| tip_size(fonts, t));
         let top = if label.is_some() { th + 8.0 } else { 0.0 };
         let w = size.max(tw).ceil();

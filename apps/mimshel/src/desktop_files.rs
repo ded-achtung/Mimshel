@@ -342,7 +342,7 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
                     mimshel_core::i18n::language_from_config(),
                     "desktop.transfer_failed",
                 )
-                .replace("{name}", &*name),
+                .replace("{name}", &name),
             );
         }
     }
