@@ -538,12 +538,16 @@ impl FolderUi {
         let Some(folder) = target.filter(|f| f != w.view.dir()) else {
             return Ok(());
         };
-        let copy = d.modifiers().0;
-        let pairs = pairs_into(
-            w.view.selected_items().into_iter().map(|i| i.path),
-            &folder,
-            !copy,
-        );
+        // Like Finder: onto another disk (a USB stick in the side bar) the
+        // files are copied, not moved; Ctrl copies anywhere.
+        let items: Vec<PathBuf> = w
+            .view
+            .selected_items()
+            .into_iter()
+            .map(|i| i.path)
+            .collect();
+        let copy = d.modifiers().0 || !items.iter().all(|p| desktop_files::same_device(p, &folder));
+        let pairs = pairs_into(items.into_iter(), &folder, !copy);
         desktop_files::transfer_async(pairs, !copy);
         Ok(())
     }

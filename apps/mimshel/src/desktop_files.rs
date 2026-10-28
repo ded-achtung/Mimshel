@@ -156,6 +156,16 @@ fn pango_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Whether `path` lies on the same file system as the folder `into` (a
+/// move there is a rename). When either cannot be read, assume it does.
+pub fn same_device(path: &Path, into: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(path), std::fs::metadata(into)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev(),
+        _ => true,
+    }
+}
+
 /// В корзину (её видит и корзина в доке). One `gio trash` per batch of
 /// files, not one process per file: deleting 2000 files started 2000
 /// processes at once.
@@ -526,6 +536,18 @@ pub fn spawn(args: &[&str], dir: Option<&Path>) {
 #[cfg(test)]
 mod transfer_tests {
     use super::*;
+
+    #[test]
+    fn same_device_for_files_in_one_folder() {
+        let dir = std::env::temp_dir().join(format!("mimshel-dev-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("f"), b"x").unwrap();
+        assert!(same_device(&dir.join("f"), &dir.join("sub")));
+        // /proc is always its own file system.
+        assert!(!same_device(&dir.join("f"), Path::new("/proc")));
+        assert!(same_device(&dir.join("missing"), &dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn trash_goes_in_batches() {
