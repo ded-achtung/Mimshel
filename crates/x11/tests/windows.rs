@@ -282,3 +282,221 @@ fn isolated_x11_primary_monitor() -> Result<()> {
     assert_eq!(d.primary_area(), (0, 0, 1280, 800));
     Ok(())
 }
+
+/// A program dragging files onto our window, speaking XDND on its own
+/// connection (as Thunar does).
+struct Source {
+    conn: RustConnection,
+    window: u32,
+    atoms: std::collections::HashMap<&'static str, u32>,
+}
+
+impl Source {
+    fn new() -> Result<Source> {
+        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
+        let (conn, screen) = RustConnection::connect(None)?;
+        let root = conn.setup().roots[screen].root;
+        let window = conn.generate_id()?;
+        conn.create_window(
+            0,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new(),
+        )?;
+        let mut atoms = std::collections::HashMap::new();
+        for name in [
+            "XdndEnter",
+            "XdndPosition",
+            "XdndDrop",
+            "XdndStatus",
+            "XdndFinished",
+            "XdndSelection",
+            "XdndActionCopy",
+            "XdndActionMove",
+            "text/uri-list",
+        ] {
+            atoms.insert(
+                name,
+                conn.intern_atom(false, name.as_bytes())?.reply()?.atom,
+            );
+        }
+        conn.set_selection_owner(window, atoms["XdndSelection"], x11rb::CURRENT_TIME)?;
+        conn.get_input_focus()?.reply()?;
+        Ok(Source {
+            conn,
+            window,
+            atoms,
+        })
+    }
+
+    fn send(&self, to: u32, kind: &str, data: [u32; 5]) -> Result<()> {
+        use x11rb::protocol::xproto::{ClientMessageEvent, EventMask};
+        let ev = ClientMessageEvent::new(32, to, self.atoms[kind], data);
+        self.conn.send_event(false, to, EventMask::NO_EVENT, ev)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Enter, move to the root point `(x, y)` offering `action`, drop.
+    fn drop_at(&self, to: u32, (x, y): (u32, u32), action: &str) -> Result<()> {
+        let uri = self.atoms["text/uri-list"];
+        self.send(to, "XdndEnter", [self.window, 5 << 24, uri, 0, 0])?;
+        let at = (x << 16) | y;
+        self.send(
+            to,
+            "XdndPosition",
+            [self.window, 0, at, 0, self.atoms[action]],
+        )?;
+        self.send(to, "XdndDrop", [self.window, 0, 0, 0, 0])
+    }
+
+    /// Answer the target's request for the file list, as the owner of
+    /// XdndSelection does; returns once one request was served.
+    fn serve(&self, uris: &str, limit: Duration) -> Result<bool> {
+        use x11rb::protocol::Event as X;
+        use x11rb::protocol::xproto::{EventMask, SelectionNotifyEvent};
+        let deadline = std::time::Instant::now() + limit;
+        while std::time::Instant::now() < deadline {
+            if let Some(X::SelectionRequest(req)) = self.conn.poll_for_event()? {
+                self.conn.change_property8(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    req.property,
+                    req.target,
+                    uris.as_bytes(),
+                )?;
+                let notify = SelectionNotifyEvent {
+                    response_type: x11rb::protocol::xproto::SELECTION_NOTIFY_EVENT,
+                    sequence: 0,
+                    time: req.time,
+                    requestor: req.requestor,
+                    selection: req.selection,
+                    target: req.target,
+                    property: req.property,
+                };
+                self.conn
+                    .send_event(false, req.requestor, EventMask::NO_EVENT, notify)?;
+                self.conn.flush()?;
+                return Ok(true);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Ok(false)
+    }
+
+    /// The `XdndFinished` the target sent back: (accepted, action).
+    fn finished(&self, limit: Duration) -> Result<Option<(bool, u32)>> {
+        use x11rb::protocol::Event as X;
+        let deadline = std::time::Instant::now() + limit;
+        while std::time::Instant::now() < deadline {
+            match self.conn.poll_for_event()? {
+                Some(X::ClientMessage(m)) if m.type_ == self.atoms["XdndFinished"] => {
+                    let data = m.data.as_data32();
+                    return Ok(Some((data[1] & 1 != 0, data[2])));
+                }
+                Some(_) => {}
+                None => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[test]
+#[ignore = "нужен Xvfb; CI запускает отдельно"]
+fn isolated_x11_drop_from_another_program() -> Result<()> {
+    use mimshel_x11::Event;
+    if outer_run("isolated_x11_drop_from_another_program", "800x600x24")? {
+        return Ok(());
+    }
+    let d = std::sync::Arc::new(Display::connect()?);
+    let target = d.create_popup("dnd-target")?;
+    target.show(&d, 100, 50, 300, 200)?;
+    d.enable_drop(target.id())?;
+    d.sync()?;
+    let (events, seen) = mpsc::channel();
+    {
+        let d = std::sync::Arc::clone(&d);
+        std::thread::spawn(move || {
+            while let Ok(ev) = d.next_event() {
+                if events.send(ev).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let dropped = || -> Option<(i16, i16, bool, u64)> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match seen.recv_timeout(left) {
+                Ok(Event::Dropped {
+                    x,
+                    y,
+                    moving,
+                    ticket,
+                    ..
+                }) => return Some((x, y, moving, ticket)),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
+        None
+    };
+
+    // 1. A normal drop: the point comes in window coordinates, the paths
+    //    by ticket, and the source hears the result only at finish_drop.
+    let source = Source::new()?;
+    source.drop_at(target.id(), (140, 90), "XdndActionMove")?;
+    assert!(source.serve(
+        "file:///home/u/a.txt\r\nfile:///home/u/b%20c.txt\r\n",
+        Duration::from_secs(3)
+    )?);
+    let (x, y, moving, ticket) = dropped().ok_or("no Dropped event")?;
+    assert_eq!(
+        (x, y),
+        (40, 40),
+        "root (140, 90) in the window at (100, 50)"
+    );
+    assert!(moving, "the source offered a move");
+    assert_eq!(
+        d.take_drop(ticket),
+        [
+            std::path::PathBuf::from("/home/u/a.txt"),
+            std::path::PathBuf::from("/home/u/b c.txt")
+        ]
+    );
+    assert_eq!(source.finished(Duration::from_millis(200))?, None);
+    d.finish_drop(ticket, true);
+    let (accepted, action) = source
+        .finished(Duration::from_secs(3))?
+        .ok_or("no XdndFinished")?;
+    assert!(accepted);
+    assert_eq!(action, source.atoms["XdndActionMove"]);
+
+    // 2. A source that hangs after XdndDrop never hands over the list (one
+    //    that dies is fine: the server answers for it). The next drop is
+    //    refused while the first may still come, and accepted after the
+    //    wait (it used to be refused until the service restarted).
+    let hung = Source::new()?;
+    hung.drop_at(target.id(), (140, 90), "XdndActionCopy")?;
+    let next = Source::new()?;
+    next.drop_at(target.id(), (150, 100), "XdndActionCopy")?;
+    let (refused, _) = next
+        .finished(Duration::from_secs(2))?
+        .ok_or("the second drop gets an answer")?;
+    assert!(!refused, "refused while the first drop may still come");
+    std::thread::sleep(Duration::from_secs(5));
+    next.drop_at(target.id(), (150, 100), "XdndActionCopy")?;
+    assert!(next.serve("file:///tmp/x\r\n", Duration::from_secs(3))?);
+    let (_, _, moving, ticket) = dropped().ok_or("a drop after the wait works")?;
+    assert!(!moving);
+    assert_eq!(d.take_drop(ticket), [std::path::PathBuf::from("/tmp/x")]);
+    Ok(())
+}
