@@ -86,7 +86,7 @@ enum Act {
 }
 
 pub fn start(notify: impl Fn(AppMenuUpdate) + Send + 'static) -> zbus::Result<AppMenu> {
-    let conn = Connection::session()?;
+    let conn = crate::session()?;
     // Свой регистратор меню. Имя занято (регистратор vala-panel) — встаём в
     // очередь: он выключается, когда им не пользуются, и имя перейдёт к нам.
     let windows: Windows = Default::default();

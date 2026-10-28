@@ -131,7 +131,7 @@ impl Watcher {
 pub fn start(notify: impl Fn(TrayUpdate) + Send + 'static) -> zbus::Result<Tray> {
     let items = Arc::new(Mutex::new(Vec::new()));
     let (wake_tx, wake_rx) = mpsc::channel();
-    let conn = Connection::session()?;
+    let conn = crate::session()?;
     conn.object_server().at(
         "/StatusNotifierWatcher",
         Watcher {

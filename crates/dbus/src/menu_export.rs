@@ -188,7 +188,7 @@ pub fn export(
     menus: Vec<MenuSpec>,
     on_click: impl Fn(i32) + Send + Sync + 'static,
 ) -> zbus::Result<ExportedMenu> {
-    let conn = Connection::session()?;
+    let conn = crate::session()?;
     let root = MenuSpec::menu(0, "", menus);
     conn.object_server().at(
         PATH,

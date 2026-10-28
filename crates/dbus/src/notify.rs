@@ -394,7 +394,7 @@ pub fn strip_markup(s: &str) -> String {
 /// Запустить службу уведомлений. Имя занято (xfce4-notifyd) — ждём в
 /// очереди: оно перейдёт к нам, когда тот уйдёт.
 pub fn start(notify: impl Fn(NotifyEvent) + Send + 'static) -> zbus::Result<NotifyServer> {
-    let conn = Connection::session()?;
+    let conn = crate::session()?;
     conn.object_server().at(
         PATH,
         Server {
