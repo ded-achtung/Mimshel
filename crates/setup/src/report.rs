@@ -27,6 +27,8 @@ pub struct Identity {
     pub home: String,
     pub user: String,
     pub host: String,
+    /// The real name from the account (GECOS), e.g. "Ivan Petrov".
+    pub real_name: String,
 }
 
 fn word(c: char) -> bool {
@@ -63,6 +65,10 @@ pub fn redact(text: &str, id: &Identity) -> String {
     }
     out = replace_word(&out, &id.host, "<host>");
     out = replace_word(&out, &id.user, "<user>");
+    // Short or empty names would hit ordinary words.
+    if id.real_name.chars().count() >= 3 {
+        out = replace_word(&out, &id.real_name, "<name>");
+    }
     out.split_inclusive('\n')
         .map(|line| {
             if let Some(at) = line
@@ -316,16 +322,23 @@ pub struct Report {
     pub files: Vec<String>,
 }
 
+/// The account's real name: the first GECOS field of `getent passwd`.
+fn real_name(user: &str) -> String {
+    crate::sys::output(&["getent", "passwd", user])
+        .and_then(|line| line.trim().split(':').nth(4).map(str::to_owned))
+        .and_then(|gecos| gecos.split(',').next().map(|n| n.trim().to_owned()))
+        .unwrap_or_default()
+}
+
 /// Collect only the allowlisted sources, without applying repairs.
 pub fn make(dir: &Path, cfg: &Config, config: Option<&Path>) -> io::Result<Report> {
     let home = crate::sys::home();
     let id = Identity {
         home: home.to_string_lossy().into_owned(),
-        user: std::env::var("USER")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| home.file_name().map(|s| s.to_string_lossy().into_owned()))
-            .unwrap_or_default(),
+        // From the system (`id -un`), not $USER: that may be empty or
+        // someone else's (su, env), and then the name would stay in.
+        user: crate::lock::user_name(),
+        real_name: real_name(&crate::lock::user_name()),
         host: fs::read_to_string("/proc/sys/kernel/hostname")
             .unwrap_or_default()
             .trim()
@@ -378,7 +391,7 @@ pub fn make(dir: &Path, cfg: &Config, config: Option<&Path>) -> io::Result<Repor
     }
     collect_crashes(&state.join("crashes"), &stage.0, &mut add, &mut skipped)?;
     let readme = format!(
-        "Mimshel diagnostic report\n\nIncluded:\n{}\n\nREADME.txt — report description.\nsystem.txt — version, OS, desktop session, monitors, GPU and effective scale.\ndoctor.txt — full checklist without repairs; uses the UI language (currently Russian).\nconfig.toml — Mimshel configuration.\ndaemon.log and lock.log — daemon and lock-screen logs (last 500 lines).\ncrashes/ — crash reports; safe original names are preserved, others use crash-N.txt.\n\nSkipped:\n{}\n\nRedacted: home paths, user name, host name and Wi-Fi network names.\nThe full environment, clipboard, notification texts, .ssh, keyrings and browser data are not collected.\nOther personal data may remain in arbitrary configuration and log text.\nInspect the contents before sending this archive to anyone!\n\nList: tar tzf ARCHIVE.tar.gz\nExtract into a separate directory: mkdir review; tar xzf ARCHIVE.tar.gz -C review\n",
+        "Mimshel diagnostic report\n\nIncluded:\n{}\n\nREADME.txt — report description.\nsystem.txt — version, OS, desktop session, monitors, GPU and effective scale.\ndoctor.txt — full checklist without repairs; uses the UI language (currently Russian).\nconfig.toml — Mimshel configuration.\ndaemon.log and lock.log — daemon and lock-screen logs (last 500 lines).\ncrashes/ — crash reports; safe original names are preserved, others use crash-N.txt.\n\nSkipped:\n{}\n\nRedacted: home paths, user name, real name, host name and Wi-Fi network names.\nThe full environment, clipboard, notification texts, .ssh, keyrings and browser data are not collected.\nOther personal data may remain in arbitrary configuration and log text.\nInspect the contents before sending this archive to anyone!\n\nList: tar tzf ARCHIVE.tar.gz\nExtract into a separate directory: mkdir review; tar xzf ARCHIVE.tar.gz -C review\n",
         files.join("\n"),
         if skipped.is_empty() {
             "none".into()
@@ -426,6 +439,7 @@ mod tests {
             home: "/srv/private/ded".into(),
             user: "ded".into(),
             host: "workstation".into(),
+            real_name: "Ded Achtung".into(),
         }
     }
 
@@ -490,6 +504,19 @@ mod tests {
             ),
             "<user> /<user>/x deduce добавлено embedded_ded <user>-дом"
         );
+    }
+
+    #[test]
+    fn real_name_words() {
+        assert_eq!(
+            redact("Author: Ded Achtung <x>", &identity()),
+            "Author: <name> <x>"
+        );
+        let short = Identity {
+            real_name: "Ed".into(),
+            ..identity()
+        };
+        assert_eq!(redact("Ed edits", &short), "Ed edits");
     }
 
     #[test]
