@@ -112,6 +112,9 @@ pub struct MenubarUi {
     calendar_names: Option<mimshel_menubar::Names>,
     popup: Popup,
     popup_x: i16,
+    /// The primary monitor (`Display::primary_area`), in points: the bar
+    /// lies along its top edge, popups open under the bar on it.
+    area: (i32, i32, u32, u32),
     popup_dirty: bool,
     dirty: bool,
     /// Служба — для просьб, которые выполняет не строка (центр уведомлений).
@@ -143,10 +146,10 @@ impl MenubarUi {
     }
 
     pub fn new(d: &Display, config: &Config, apps: Vec<App>, tx: Sender<Msg>) -> Result<MenubarUi> {
-        let (sw, _) = d.screen_size();
+        let (_, _, area_w, _) = d.primary_area();
         let mut ui = MenubarUi {
             window: d.create_dock("menubar")?,
-            bar: Bar::new(u32::from(sw), config.menubar_height, &config.menu_icon),
+            bar: Bar::new(area_w, config.menubar_height, &config.menu_icon),
             apps,
             layouts: Vec::new(),
             group: 0,
@@ -181,6 +184,7 @@ impl MenubarUi {
             calendar_names: None,
             popup: d.create_popup("menubar-menu")?,
             popup_x: 0,
+            area: d.primary_area(),
             popup_dirty: false,
             dirty: true,
             tx: tx.clone(),
@@ -753,8 +757,8 @@ impl MenubarUi {
     fn show_popup(&mut self, d: &Display, part: Part, x: f32, (w, h): (u32, u32)) -> Result<()> {
         let x = x.min(self.bar.width as f32 - w as f32 - 4.0).max(4.0);
         self.popup_x = x as i16;
-        self.popup
-            .show(d, x as i16, self.bar.height as i16, w as u16, h as u16)?;
+        let (px, py) = self.popup_origin();
+        self.popup.show(d, px, py, w as u16, h as u16)?;
         self.popup_dirty = true;
         self.bar.open = Some(part);
         self.dirty = true;
@@ -1304,13 +1308,27 @@ impl MenubarUi {
         }
     }
 
+    /// Where the popup's top-left corner goes on the screen.
+    fn popup_origin(&self) -> (i16, i16) {
+        let (ax, ay, _, _) = self.area;
+        (
+            (ax + i32::from(self.popup_x)) as i16,
+            (ay + self.bar.height as i32) as i16,
+        )
+    }
+
     fn place(&mut self, d: &Display) -> Result<()> {
-        let (sw, _) = d.screen_size();
-        self.bar.width = u32::from(sw);
+        self.area = d.primary_area();
+        let (ax, ay, aw, _) = self.area;
+        self.bar.width = aw;
         let h = self.bar.height;
-        self.window.set_geometry(d, 0, 0, self.bar.width, h)?;
+        self.window.set_geometry(d, ax, ay, self.bar.width, h)?;
         self.window.set_input(d, &[(0, 0, self.bar.width, h)])?;
-        self.window.set_strut_top(d, h, 0, self.bar.width)?;
+        // The top strut counts from the top of the whole screen and covers
+        // only this monitor's columns.
+        let (x0, top) = (ax.max(0) as u32, ay.max(0) as u32 + h);
+        self.window
+            .set_strut_top(d, top, x0, x0 + self.bar.width.saturating_sub(1))?;
         self.dirty = true;
         Ok(())
     }
@@ -1327,46 +1345,26 @@ impl MenubarUi {
                 self.popup.present(d, &menu.render(fonts))?;
             } else if let Some(panel) = &self.sound_panel {
                 let (w, h) = panel.size();
-                self.popup.set_geometry(
-                    d,
-                    self.popup_x,
-                    self.bar.height as i16,
-                    w as u16,
-                    h as u16,
-                )?;
+                let (px, py) = self.popup_origin();
+                self.popup.set_geometry(d, px, py, w as u16, h as u16)?;
                 self.popup.present(d, &panel.render(fonts))?;
             } else if let Some(panel) = &self.control_panel {
                 let (w, h) = panel.size();
-                self.popup.set_geometry(
-                    d,
-                    self.popup_x,
-                    self.bar.height as i16,
-                    w as u16,
-                    h as u16,
-                )?;
+                let (px, py) = self.popup_origin();
+                self.popup.set_geometry(d, px, py, w as u16, h as u16)?;
                 self.popup.present(d, &panel.render(fonts, icons))?;
             } else if let Some(panel) = &self.calendar {
                 self.popup.present(d, &panel.render(fonts))?;
             } else if let Some(panel) = &self.network_panel {
                 let (w, h) = panel.size();
-                self.popup.set_geometry(
-                    d,
-                    self.popup_x,
-                    self.bar.height as i16,
-                    w as u16,
-                    h as u16,
-                )?;
+                let (px, py) = self.popup_origin();
+                self.popup.set_geometry(d, px, py, w as u16, h as u16)?;
                 self.popup.present(d, &panel.render(fonts))?;
             } else if let Some(panel) = &self.bluetooth_panel {
                 // Список растёт по мере поиска — окно под размер.
                 let (w, h) = panel.size();
-                self.popup.set_geometry(
-                    d,
-                    self.popup_x,
-                    self.bar.height as i16,
-                    w as u16,
-                    h as u16,
-                )?;
+                let (px, py) = self.popup_origin();
+                self.popup.set_geometry(d, px, py, w as u16, h as u16)?;
                 self.popup.present(d, &panel.render(fonts))?;
             }
         }

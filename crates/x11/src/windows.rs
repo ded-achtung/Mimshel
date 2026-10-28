@@ -12,6 +12,17 @@ use x11rb::protocol::xproto::{
 
 use crate::{Display, Result};
 
+/// A rectangle: x, y, width, height.
+type Rect = (i32, i32, u32, u32);
+
+/// The primary monitor of `list`, else the first; none — the whole screen.
+fn pick_primary(list: &[(bool, Rect)], screen: (u32, u32)) -> Rect {
+    list.iter()
+        .find(|(primary, _)| *primary)
+        .or_else(|| list.first())
+        .map_or((0, 0, screen.0, screen.1), |(_, r)| *r)
+}
+
 /// IconicState из ICCCM — «свернуть».
 const ICONIC_STATE: u32 = 3;
 
@@ -23,6 +34,11 @@ impl Display {
     /// Геометрия активных мониторов непосредственно из RandR, без
     /// запуска внешнего xrandr при событиях изменения размера.
     pub fn monitors(&self) -> Vec<(i32, i32, u32, u32)> {
+        self.monitor_list().into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Monitors with the «primary» mark, in pixels.
+    fn monitor_list(&self) -> Vec<(bool, Rect)> {
         self.conn
             .randr_get_monitors(self.root, true)
             .ok()
@@ -34,15 +50,34 @@ impl Display {
                     .filter(|m| m.width > 0 && m.height > 0)
                     .map(|m| {
                         (
-                            i32::from(m.x),
-                            i32::from(m.y),
-                            u32::from(m.width),
-                            u32::from(m.height),
+                            m.primary,
+                            (
+                                i32::from(m.x),
+                                i32::from(m.y),
+                                u32::from(m.width),
+                                u32::from(m.height),
+                            ),
                         )
                     })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The monitor the menu bar and the dock live on, in points: the one
+    /// marked primary (Xfce «Display» settings), else the first; without
+    /// RandR — the whole screen. With a second monitor the bar and the
+    /// dock used to stretch over both screens.
+    pub fn primary_area(&self) -> Rect {
+        let (sw, sh) = self.screen_pixels();
+        let (x, y, w, h) = pick_primary(&self.monitor_list(), (u32::from(sw), u32::from(sh)));
+        let pt = |v: f32| (v / self.scale).round();
+        (
+            pt(x as f32) as i32,
+            pt(y as f32) as i32,
+            pt(w as f32) as u32,
+            pt(h as f32) as u32,
+        )
     }
 
     /// Доступная рабочая область по EWMH в физических пикселях. У xfwm4 она
@@ -68,12 +103,21 @@ impl Display {
     }
 
     /// Получать события о списке окон, активном окне и размере экрана.
+    /// Monitor changes come from RandR too: monitors rearranged or the
+    /// primary one changed leave the root size as it was, so without them
+    /// nothing would move. They arrive as `Event::Configure` of the root.
     pub fn watch_root(&self) -> Result<()> {
         let mask = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
         self.conn.change_window_attributes(
             self.root,
             &ChangeWindowAttributesAux::new().event_mask(mask),
         )?;
+        use x11rb::protocol::randr::NotifyMask;
+        // No RandR (a bare X server): the root's own events still work.
+        let _ = self.conn.randr_select_input(
+            self.root,
+            NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE | NotifyMask::OUTPUT_CHANGE,
+        );
         self.conn.flush()?;
         Ok(())
     }
@@ -377,5 +421,26 @@ impl Display {
     /// Попросить окно закрыться (как крестик в заголовке).
     pub fn close(&self, w: Window) -> Result<()> {
         self.client_message(w, self.atoms._NET_CLOSE_WINDOW, [0, 2, 0, 0, 0])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primary_monitor_is_picked() {
+        let laptop = (false, (0, 0, 1920, 1080));
+        let external = (true, (1920, 0, 2560, 1440));
+        assert_eq!(
+            pick_primary(&[laptop, external], (4480, 1440)),
+            (1920, 0, 2560, 1440)
+        );
+        let unmarked = (false, (1920, 0, 2560, 1440));
+        assert_eq!(
+            pick_primary(&[laptop, unmarked], (4480, 1440)),
+            (0, 0, 1920, 1080)
+        );
+        assert_eq!(pick_primary(&[], (1280, 800)), (0, 0, 1280, 800));
     }
 }

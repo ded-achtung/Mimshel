@@ -272,6 +272,16 @@ impl NotifyUi {
         window == self.popup.id() || window == self.center_popup.id()
     }
 
+    /// Top-right corner for banners and the centre: on the primary
+    /// monitor, under the menu bar.
+    fn corner(&self, d: &Display) -> (i16, i16) {
+        let (ax, ay, aw, _) = d.primary_area();
+        (
+            (ax + aw as i32 - WIDTH as i32 - MARGIN as i32) as i16,
+            (ay + (self.top + MARGIN) as i32) as i16,
+        )
+    }
+
     /// Открыть центр уведомлений или закрыть, если открыт.
     pub fn toggle_center(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
         if self.center.is_some() {
@@ -282,10 +292,8 @@ impl NotifyUi {
             return Ok(());
         };
         let (w, h) = c.size(fonts);
-        let (sw, _) = d.screen_size();
-        let x = i32::from(sw) - WIDTH as i32 - MARGIN as i32;
-        self.center_popup
-            .show(d, x as i16, (self.top + MARGIN) as i16, w as u16, h as u16)?;
+        let (x, y) = self.corner(d);
+        self.center_popup.show(d, x, y, w as u16, h as u16)?;
         self.center_dirty = true;
         Ok(())
     }
@@ -308,8 +316,8 @@ impl NotifyUi {
 
     /// Собрать центр заново по истории (размер окна — по содержимому).
     fn rebuild_center(&mut self, fonts: &mut Fonts, d: &Display) {
-        let (_, sh) = d.screen_size();
-        let max_h = (u32::from(sh)).saturating_sub(self.top + 2 * MARGIN + DOCK_ROOM) as f32;
+        let (_, _, _, area_h) = d.primary_area();
+        let max_h = area_h.saturating_sub(self.top + 2 * MARGIN + DOCK_ROOM) as f32;
         let mut center = Center::new(fonts, self.history.clone(), max_h);
         center.language = self.language;
         self.center = Some(center);
@@ -363,15 +371,9 @@ impl NotifyUi {
             self.rebuild_center(fonts, d);
             if let Some(c) = &self.center {
                 let (w, h) = c.size(fonts);
-                let (sw, _) = d.screen_size();
-                let x = i32::from(sw) - WIDTH as i32 - MARGIN as i32;
-                self.center_popup.set_geometry(
-                    d,
-                    x as i16,
-                    (self.top + MARGIN) as i16,
-                    w as u16,
-                    h as u16,
-                )?;
+                let (x, y) = self.corner(d);
+                self.center_popup
+                    .set_geometry(d, x, y, w as u16, h as u16)?;
             }
         }
         if self.center_dirty {
@@ -392,10 +394,8 @@ impl NotifyUi {
             return Ok(());
         }
         let (w, h) = self.banners.size(fonts);
-        let (sw, _) = d.screen_size();
-        let x = i32::from(sw) - WIDTH as i32 - MARGIN as i32;
-        self.popup
-            .show_passive(d, x as i16, (self.top + MARGIN) as i16, w as u16, h as u16)?;
+        let (x, y) = self.corner(d);
+        self.popup.show_passive(d, x, y, w as u16, h as u16)?;
         self.shown = true;
         self.popup.present(d, &self.banners.render(fonts))?;
         Ok(())

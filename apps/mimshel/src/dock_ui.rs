@@ -77,12 +77,15 @@ pub struct DockUi {
     painted: Option<(u32, u32)>,
     tx: Sender<Msg>,
     terminal: Vec<String>,
-    screen: (u32, u32),
+    /// The primary monitor (`Display::primary_area`), in points: the dock
+    /// sits at its bottom edge. The dock's own coordinates (bar, icons) are
+    /// relative to its window, which spans this monitor's width.
+    area: (i32, i32, u32, u32),
 }
 
 impl DockUi {
     pub fn new(d: &Display, config: &Config, apps: Vec<App>, tx: Sender<Msg>) -> Result<DockUi> {
-        let (sw, sh) = d.screen_size();
+        let area = d.primary_area();
         let look = Look {
             icon: config.dock_icon,
             zoom: config.dock_zoom.map_or(1.0, |p| p as f32 / 100.0),
@@ -90,7 +93,7 @@ impl DockUi {
         };
         let mut ui = DockUi {
             window: d.create_dock("dock")?,
-            dock: Dock::new(look, apps, config.dock_apps.clone(), u32::from(sw)),
+            dock: Dock::new(look, apps, config.dock_apps.clone(), area.2),
             hide: config.dock_hide,
             watched: HashSet::new(),
             known: HashMap::new(),
@@ -114,7 +117,7 @@ impl DockUi {
             painted: None,
             tx,
             terminal: crate::ui::terminal_command(config),
-            screen: (u32::from(sw), u32::from(sh)),
+            area,
         };
         if mimshel_apps::gpu::offload_available() {
             ui.dock.set_dgpu(Some((
@@ -281,9 +284,8 @@ impl DockUi {
             }
             Event::Expose { .. } => {}
             Event::Configure { window } if window == d.root() => {
-                let (sw, sh) = d.screen_size();
-                self.screen = (u32::from(sw), u32::from(sh));
-                self.dock.set_screen_width(u32::from(sw));
+                self.area = d.primary_area();
+                self.dock.set_screen_width(self.area.2);
                 self.place(d)?;
                 self.update_hide(d);
             }
@@ -428,7 +430,7 @@ impl DockUi {
         let item = &self.dock.items()[index];
         let mut windows = item.windows.clone();
         windows.sort_unstable();
-        windows.truncate(Preview::fits(self.screen.0));
+        windows.truncate(Preview::fits(self.area.2));
         let app_icon = item
             .app
             .as_ref()
@@ -464,10 +466,7 @@ impl DockUi {
             return Ok(());
         };
         let (w, h) = preview.size();
-        let (sw, sh) = self.screen;
-        let window_top = sh as f32 - self.dock.window_height() as f32;
-        let x = (cx - w as f32 / 2.0).clamp(4.0, (sw as f32 - w as f32 - 4.0).max(4.0));
-        let y = (window_top + icon_top - h as f32 - 10.0).max(0.0);
+        let (x, y) = self.above_icon(cx, icon_top, (w, h));
         self.preview_popup
             .show_passive(d, x as i16, y as i16, w as u16, h as u16)?;
         self.preview = Some(preview);
@@ -582,10 +581,7 @@ impl DockUi {
             return Ok(());
         };
         let (w, h) = menu.measure(fonts);
-        let (sw, sh) = self.screen;
-        let window_top = sh as f32 - self.dock.window_height() as f32;
-        let x = (cx - w as f32 / 2.0).clamp(4.0, (sw as f32 - w as f32 - 4.0).max(4.0));
-        let y = (window_top + icon_top - h as f32 - 10.0).max(0.0);
+        let (x, y) = self.above_icon(cx, icon_top, (w, h));
         self.menu_popup
             .show(d, x as i16, y as i16, w as u16, h as u16)?;
         self.menu = Some(menu);
@@ -616,12 +612,13 @@ impl DockUi {
 
     /// Док какое-то время не следил за мышью (меню, перетаскивание) — где она теперь?
     fn sync_pointer(&mut self, d: &Display) {
-        let bar = self.dock.bar_rect(self.screen.1);
-        let over = d.pointer_position().filter(|&(x, y)| {
-            let x = i32::from(x);
-            i32::from(y) >= bar.y && x >= bar.x && x < bar.x + bar.w as i32
-        });
-        self.dock.set_pointer(over.map(|(x, _)| f32::from(x)));
+        let (ax, ay, _, ah) = self.area;
+        let bar = self.dock.bar_rect(ah);
+        let over = d
+            .pointer_position()
+            .map(|(x, y)| (i32::from(x) - ax, i32::from(y) - ay))
+            .filter(|&(x, y)| y >= bar.y && x >= bar.x && x < bar.x + bar.w as i32);
+        self.dock.set_pointer(over.map(|(x, _)| x as f32));
         self.update_hide(d);
     }
 
@@ -706,11 +703,11 @@ impl DockUi {
         if self.drag_dirty {
             self.drag_dirty = false;
             if let Some((image, (cx, cy))) = self.dock.drag_image(fonts, icons) {
-                let top = self.screen.1 as f32 - self.dock.window_height() as f32;
+                let (left, top) = self.window_origin();
                 let (x, y) = self.drag_at;
                 self.drag_popup.show_passive(
                     d,
-                    (x - cx).round() as i16,
+                    (left + x - cx).round() as i16,
                     (top + y - cy).round() as i16,
                     image.width() as u16,
                     image.height() as u16,
@@ -726,11 +723,11 @@ impl DockUi {
             } else {
                 let size = (self.dock.max_icon() as f32 * 1.4) as u32;
                 let image = poof_image(size, t);
-                let top = self.screen.1 as f32 - self.dock.window_height() as f32;
+                let (left, top) = self.window_origin();
                 let half = size as f32 / 2.0;
                 self.drag_popup.show_passive(
                     d,
-                    (x - half).round() as i16,
+                    (left + x - half).round() as i16,
                     (top + y - half).round() as i16,
                     size as u16,
                     size as u16,
@@ -805,7 +802,14 @@ impl DockUi {
 
     /// Прятать или показывать — по режиму, активному окну и указателю.
     fn update_hide(&mut self, d: &Display) {
-        let bar = self.dock.bar_rect(self.screen.1);
+        // The bar on the screen, to compare with the active window's frame.
+        let (ax, ay, _, ah) = self.area;
+        let bar = self.dock.bar_rect(ah);
+        let bar = Rect {
+            x: bar.x + ax,
+            y: bar.y + ay,
+            ..bar
+        };
         let active = self.dock.active().and_then(|w| {
             let info = self.dock.window(w)?;
             if info.minimized {
@@ -827,18 +831,40 @@ impl DockUi {
         }
     }
 
+    /// The dock window's top-left corner on the screen.
+    fn window_origin(&self) -> (f32, f32) {
+        let (ax, ay, _, ah) = self.area;
+        (
+            ax as f32,
+            (ay + ah as i32) as f32 - self.dock.window_height() as f32,
+        )
+    }
+
+    /// Where a popup of size `(w, h)` goes above the icon centred at `cx`
+    /// (window coordinates) whose top is `icon_top`: kept on the monitor.
+    fn above_icon(&self, cx: f32, icon_top: f32, (w, h): (u32, u32)) -> (f32, f32) {
+        let (_, ay, aw, _) = self.area;
+        let (left, top) = self.window_origin();
+        let x = (cx - w as f32 / 2.0).clamp(4.0, (aw as f32 - w as f32 - 4.0).max(4.0));
+        let y = (top + icon_top - h as f32 - 10.0).max(ay as f32);
+        (left + x, y)
+    }
+
     /// Окно дока у нижнего края; при «никогда не прятать» — резерв места,
     /// чтобы развёрнутые окна заканчивались над доком.
     fn place(&self, d: &Display) -> Result<()> {
-        let (sw, sh) = self.screen;
+        let (ax, ay, aw, ah) = self.area;
         let h = self.dock.window_height();
         self.window
-            .set_geometry(d, 0, sh as i32 - h as i32, sw, h)?;
-        let bar = self.dock.bar_rect(sh);
+            .set_geometry(d, ax, ay + ah as i32 - h as i32, aw, h)?;
+        let bar = self.dock.bar_rect(ah);
         if self.hide == DockHide::Never {
-            let reserve = (sh as i32 - bar.y) as u32;
-            self.window
-                .set_strut(d, reserve, bar.x as u32, (bar.x + bar.w as i32) as u32)?;
+            // The bottom strut counts from the bottom of the whole screen:
+            // a shorter monitor next to a taller one reserves more.
+            let (_, screen_h) = d.screen_size();
+            let reserve = (i32::from(screen_h) - (ay + bar.y)).max(0) as u32;
+            let x0 = (ax + bar.x).max(0) as u32;
+            self.window.set_strut(d, reserve, x0, x0 + bar.w)?;
         } else {
             self.window.set_strut(d, 0, 0, 0)?;
         }

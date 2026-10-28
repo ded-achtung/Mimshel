@@ -169,3 +169,116 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
     assert_eq!(d.workarea(), Some((0, 28, 800, 472)));
     Ok(())
 }
+
+/// Start a private Xvfb of `size` and run the test `name` again inside it
+/// (with `MIMSHEL_TEST_PRIVATE_X11` set). `false` — we are the inner run.
+fn outer_run(name: &str, size: &str) -> Result<bool> {
+    if std::env::var_os("MIMSHEL_TEST_PRIVATE_X11").is_some() {
+        return Ok(false);
+    }
+    let xvfb = mimshel_core::names::env("TEST_XVFB").unwrap_or_else(|| "Xvfb".into());
+    let mut server = Server(
+        Command::new(xvfb)
+            .args([
+                "-displayfd",
+                "1",
+                "-screen",
+                "0",
+                size,
+                "-nolisten",
+                "tcp",
+                "-ac",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()?,
+    );
+    let stdout = server.0.stdout.take().ok_or("нет stdout Xvfb")?;
+    let mut line = String::new();
+    BufReader::new(stdout).read_line(&mut line)?;
+    let display: u32 = line.trim().parse()?;
+    let status = Command::new("timeout")
+        .arg("20s")
+        .arg(std::env::current_exe()?)
+        .args(["--ignored", "--exact", name, "--nocapture"])
+        .env("DISPLAY", format!(":{display}"))
+        .env("MIMSHEL_TEST_PRIVATE_X11", "1")
+        .status()?;
+    assert!(status.success(), "{name} on Xvfb");
+    Ok(true)
+}
+
+#[test]
+#[ignore = "нужен Xvfb; CI запускает отдельно"]
+fn isolated_x11_primary_monitor() -> Result<()> {
+    use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
+    if outer_run("isolated_x11_primary_monitor", "3200x1080x24")? {
+        return Ok(());
+    }
+    let d = std::sync::Arc::new(Display::connect()?);
+    d.watch_root()?;
+    let (observer, _) = RustConnection::connect(None)?;
+    let root = d.root();
+    // Events in a thread: the test waits for them with a deadline.
+    let (events, seen) = mpsc::channel();
+    {
+        let d = std::sync::Arc::clone(&d);
+        std::thread::spawn(move || {
+            while let Ok(ev) = d.next_event() {
+                if events.send(ev).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let root_changed = || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match seen.recv_timeout(left) {
+                Ok(mimshel_x11::Event::Configure { window }) if window == root => return true,
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+        }
+        false
+    };
+    // A laptop screen on the left and an external one, marked primary, on
+    // the right — as `xrandr --setmonitor` would describe them.
+    let monitor = |name: &[u8], primary, x, w, h| -> Result<MonitorInfo> {
+        Ok(MonitorInfo {
+            name: observer.intern_atom(false, name)?.reply()?.atom,
+            primary,
+            automatic: false,
+            x,
+            y: 0,
+            width: w,
+            height: h,
+            width_in_millimeters: 300,
+            height_in_millimeters: 200,
+            outputs: Vec::new(),
+        })
+    };
+    observer.randr_set_monitor(root, monitor(b"LAPTOP", false, 0, 1280, 800)?)?;
+    observer.randr_set_monitor(root, monitor(b"EXTERNAL", true, 1280, 1920, 1080)?)?;
+    observer.get_input_focus()?.reply()?;
+    assert_eq!(d.primary_area(), (1280, 0, 1920, 1080));
+    while seen.try_recv().is_ok() {}
+    // The primary mark moves to the laptop screen (the monitors are set up
+    // anew, as a display change does): the screen size stays the same.
+    for name in [&b"LAPTOP"[..], b"EXTERNAL"] {
+        let atom = observer.intern_atom(false, name)?.reply()?.atom;
+        observer.randr_delete_monitor(root, atom)?;
+    }
+    observer.randr_set_monitor(root, monitor(b"LAPTOP", true, 0, 1280, 800)?)?;
+    observer.randr_set_monitor(root, monitor(b"EXTERNAL", false, 1280, 1920, 1080)?)?;
+    observer.get_input_focus()?.reply()?;
+    // Xvfb has no CRTCs: it reports a monitor change as ConfigureNotify of
+    // the root. Real outputs also send RandR notifications, which
+    // `watch_root` subscribes to; both reach the parts as this event.
+    assert!(
+        root_changed(),
+        "a monitor change arrives as Configure of the root"
+    );
+    assert_eq!(d.primary_area(), (0, 0, 1280, 800));
+    Ok(())
+}

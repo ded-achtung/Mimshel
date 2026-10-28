@@ -538,6 +538,10 @@ impl Display {
                 }
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
+            // Monitors changed (see `Display::watch_root`).
+            XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_) => {
+                Event::Configure { window: self.root }
+            }
             // Окно уничтожили снаружи (не через «закрыть») — забыть его.
             XEvent::DestroyNotify(e) => Event::Close { window: e.window },
             XEvent::MapNotify(e) => Event::Mapped { window: e.window },

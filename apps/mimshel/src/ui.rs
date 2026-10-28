@@ -663,10 +663,11 @@ impl Ui<'_> {
     }
 
     /// Левый верхний угол «Поиска»: по центру, на 22 % высоты экрана.
+    /// Centred on the primary monitor.
     fn search_position(&self, width: u32) -> (i16, i16) {
-        let (sw, sh) = self.display.screen_size();
-        let x = (i32::from(sw) - width as i32) / 2;
-        let y = (f32::from(sh) * TOP) as i32;
+        let (ax, ay, aw, ah) = self.display.primary_area();
+        let x = ax + (aw as i32 - width as i32) / 2;
+        let y = ay + (ah as f32 * TOP) as i32;
         (x as i16, y as i16)
     }
 
