@@ -29,6 +29,9 @@ pub struct Identity {
     pub host: String,
     /// The real name from the account (GECOS), e.g. "Ivan Petrov".
     pub real_name: String,
+    /// Other names the user goes by here ($USER, the home folder's name)
+    /// when they differ from `user`.
+    pub aliases: Vec<String>,
 }
 
 fn word(c: char) -> bool {
@@ -65,6 +68,9 @@ pub fn redact(text: &str, id: &Identity) -> String {
     }
     out = replace_word(&out, &id.host, "<host>");
     out = replace_word(&out, &id.user, "<user>");
+    for alias in &id.aliases {
+        out = replace_word(&out, alias, "<user>");
+    }
     // Short or empty names would hit ordinary words.
     if id.real_name.chars().count() >= 3 {
         out = replace_word(&out, &id.real_name, "<name>");
@@ -333,12 +339,21 @@ fn real_name(user: &str) -> String {
 /// Collect only the allowlisted sources, without applying repairs.
 pub fn make(dir: &Path, cfg: &Config, config: Option<&Path>) -> io::Result<Report> {
     let home = crate::sys::home();
+    let user = crate::lock::user_name();
     let id = Identity {
         home: home.to_string_lossy().into_owned(),
-        // From the system (`id -un`), not $USER: that may be empty or
-        // someone else's (su, env), and then the name would stay in.
-        user: crate::lock::user_name(),
-        real_name: real_name(&crate::lock::user_name()),
+        // From the system (`id -un`): $USER may be empty or someone
+        // else's (su, env). Both are redacted, and the home folder's name.
+        user: user.clone(),
+        real_name: real_name(&user),
+        aliases: [
+            std::env::var("USER").ok(),
+            home.file_name().map(|s| s.to_string_lossy().into_owned()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|a| !a.is_empty() && *a != user)
+        .collect(),
         host: fs::read_to_string("/proc/sys/kernel/hostname")
             .unwrap_or_default()
             .trim()
@@ -440,6 +455,7 @@ mod tests {
             user: "ded".into(),
             host: "workstation".into(),
             real_name: "Ded Achtung".into(),
+            aliases: vec!["olduser".into()],
         }
     }
 
@@ -517,6 +533,7 @@ mod tests {
             ..identity()
         };
         assert_eq!(redact("Ed edits", &short), "Ed edits");
+        assert_eq!(redact("su olduser", &identity()), "su <user>");
     }
 
     #[test]
