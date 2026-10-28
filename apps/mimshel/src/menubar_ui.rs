@@ -23,8 +23,8 @@ use mimshel_icons::Icons;
 use mimshel_menubar::status::{Backlight, Battery, Sound};
 use mimshel_menubar::{
     AppleItem, Bar, BluetoothAction, BluetoothPanel, CalendarAction, CalendarPanel, ControlAction,
-    ControlPanel, ControlState, NetState, NetworkAction, NetworkPanel, Part, SoundAction,
-    SoundPanel, apple_menu,
+    ControlPanel, ControlState, DRAG_SIZE, HiddenLook, NetState, NetworkAction, NetworkPanel, Part,
+    SoundAction, SoundPanel, apple_menu, drag_image,
 };
 use mimshel_text::Fonts;
 use mimshel_widgets::{Menu, MenuEntry, MenuResult};
@@ -58,6 +58,38 @@ const VOLUME_STEP: u32 = 5;
 /// Столько после своего изменения громкости не верим присланной: она
 /// отстаёт и вернула бы старое значение между двумя щелчками колёсика.
 const VOLUME_SETTLE: Duration = Duration::from_millis(700);
+
+/// A menu bar icon held with the mouse: dragged down out of the bar it
+/// moves into the Control Center, dragged from there up onto the bar it
+/// comes back. Without moving it is a plain click, done on release (so a
+/// drag does not also open an app or switch the layout).
+struct IconDrag {
+    /// The icon's name in `[menubar] hidden` (`layout`, `tray:ID`…).
+    id: String,
+    from: DragFrom,
+    /// Where the button went down, screen points.
+    start: (i32, i32),
+    /// Moved far enough to be a drag; the picture that follows the pointer.
+    active: Option<HiddenLook>,
+    /// Where the pointer is now, screen points.
+    at: (i32, i32),
+}
+
+#[derive(Clone, Copy)]
+enum DragFrom {
+    /// From the bar: the part, its left edge, and the part whose popup was
+    /// open before the press (pressing it again only closes that popup).
+    Bar {
+        part: Part,
+        px: f32,
+        was: Option<Part>,
+    },
+    /// From the Control Center's hidden row (index in `control_hidden`).
+    Control(usize),
+}
+
+/// How far the pointer must move before a press becomes a drag, points.
+const DRAG_START: i32 = 6;
 
 pub struct MenubarUi {
     window: DockWindow,
@@ -115,6 +147,14 @@ pub struct MenubarUi {
     today: Today,
     popup: Popup,
     popup_x: i16,
+    /// `[menubar] hidden`: icons moved into the Control Center.
+    hidden_ids: Vec<String>,
+    /// The parts shown in the Control Center's hidden row, in its order.
+    control_hidden: Vec<Part>,
+    icon_drag: Option<IconDrag>,
+    /// The picture under the pointer while an icon is dragged.
+    drag_popup: Popup,
+    drag_dirty: bool,
     /// The primary monitor (`Display::primary_area`), in points: the bar
     /// lies along its top edge, popups open under the bar on it.
     area: (i32, i32, u32, u32),
@@ -195,6 +235,11 @@ impl MenubarUi {
             ),
             popup: d.create_popup("menubar-menu")?,
             popup_x: 0,
+            hidden_ids: config.menubar_hidden.clone(),
+            control_hidden: Vec::new(),
+            icon_drag: None,
+            drag_popup: d.create_popup("menubar-drag")?,
+            drag_dirty: false,
             area: d.primary_area(),
             popup_dirty: false,
             dirty: true,
@@ -217,6 +262,7 @@ impl MenubarUi {
             });
         }
         ui.bar.control = true;
+        ui.refresh_hidden();
         watch_clock(config.clock_format.clone(), tx.clone());
         status::watch_sound(tx.clone());
         status::watch_battery(tx.clone());
@@ -445,6 +491,24 @@ impl MenubarUi {
 
     pub fn event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
         let popup = self.popup.id();
+        if self.icon_drag.is_some() {
+            match ev {
+                Event::Motion { window, x, y } => {
+                    let at = self.to_screen(window, x, y);
+                    return self.icon_drag_motion(d, at);
+                }
+                Event::Release {
+                    window,
+                    x,
+                    y,
+                    button: 1,
+                } => {
+                    let at = self.to_screen(window, x, y);
+                    return self.icon_drag_end(d, fonts, at);
+                }
+                _ => {}
+            }
+        }
         match ev {
             // Открытое меню или окошко громкости: их мышь и клавиатура.
             Event::Motion { window, x, y } if window == popup => {
@@ -475,8 +539,29 @@ impl MenubarUi {
                     self.network_action(d, action)?;
                 }
             }
-            Event::Button { window, x, y, .. } if window == popup => {
-                let (x, y) = (f32::from(x), f32::from(y));
+            Event::Button {
+                window,
+                x: ex,
+                y: ey,
+                button,
+            } if window == popup => {
+                let (x, y) = (f32::from(ex), f32::from(ey));
+                // A hidden icon in the Control Center: a click or a drag back
+                // to the bar, decided on release.
+                if button == 1
+                    && let Some(i) = self.control_panel.as_ref().and_then(|p| p.hidden_at(x, y))
+                    && let Some(id) = self.control_hidden.get(i).and_then(|&p| self.icon_id(p))
+                {
+                    let start = self.to_screen(window, ex, ey);
+                    self.icon_drag = Some(IconDrag {
+                        id,
+                        from: DragFrom::Control(i),
+                        start,
+                        active: None,
+                        at: start,
+                    });
+                    return Ok(());
+                }
                 if let Some(menu) = &self.menu {
                     let result = menu.click(x, y);
                     self.menu_result(d, result)?;
@@ -550,7 +635,12 @@ impl MenubarUi {
                 }
             }
             Event::Expose { window } if window == popup => self.popup_dirty = true,
-            Event::Button { x, button, .. } => {
+            Event::Button {
+                window,
+                x,
+                y,
+                button,
+            } => {
                 let part = self.bar.part_at(fonts, f32::from(x));
                 if mimshel_core::names::flag("DEBUG_DOCK") {
                     eprintln!(
@@ -600,33 +690,31 @@ impl MenubarUi {
                 if self.popup_open() {
                     self.close_popup(d)?;
                 }
+                // An icon that can move to the Control Center: wait for the
+                // release — a click, or a drag out of the bar.
+                if let Some((p, px)) = part
+                    && Bar::movable(p)
+                    && let Some(id) = self.icon_id(p)
+                {
+                    let start = self.to_screen(window, x, y);
+                    self.icon_drag = Some(IconDrag {
+                        id,
+                        from: DragFrom::Bar { part: p, px, was },
+                        start,
+                        active: None,
+                        at: start,
+                    });
+                    return Ok(());
+                }
                 match part {
-                    // Колокольчик — центр уведомлений (его рисует служба
-                    // уведомлений; повторный щелчок закрывает его там же).
-                    Some((Part::Bell, _)) => {
-                        let _ = self.tx.send(Msg::ToggleCenter);
-                    }
+                    // Icons that can move (bell, battery, volume, tray,
+                    // layout) are clicked on release; this is the rare case
+                    // of one without a name to remember it by.
+                    Some((p, px)) if Bar::movable(p) => self.click_part(d, fonts, p, px, was)?,
                     Some((p, _)) if Some(p) == was => {}
                     Some((Part::Clock, px)) => self.open_calendar(d, px)?,
                     Some((Part::Apple, px)) => self.open_apple(d, fonts, px)?,
-                    Some((Part::Battery, px)) => self.open_battery(d, fonts, px)?,
-                    Some((Part::Volume, px)) => self.open_sound(d, px)?,
                     Some((Part::Control, px)) => self.open_control(d, px)?,
-                    // Значок Bluetooth (blueman) — своё окошко устройств,
-                    // как из Пункта управления; правая кнопка — меню blueman.
-                    Some((Part::Tray(i), px))
-                        if self.bt_state.is_some()
-                            && self.tray_items.get(i).is_some_and(is_bluetooth_tray) =>
-                    {
-                        self.open_bluetooth(d, Part::Tray(i), px)?
-                    }
-                    // Значок сети (nm-applet) — своё окошко сети.
-                    Some((Part::Tray(i), px))
-                        if self.tray_items.get(i).is_some_and(is_network_tray) =>
-                    {
-                        self.open_network(d, Part::Tray(i), px)?
-                    }
-                    Some((Part::Tray(i), px)) => self.tray_click(i, px, 1)?,
                     Some((Part::Menu(i), px)) => {
                         // Читаем меню заново: доступность пунктов могла поменяться.
                         self.app_menu_wait = Some((i, px));
@@ -635,7 +723,6 @@ impl MenubarUi {
                         self.load_app_menu(d, Some(i));
                     }
                     Some((Part::App, px)) => self.open_app(d, fonts, px)?,
-                    Some((Part::Layout, _)) if was.is_none() => self.next_layout(d)?,
                     _ => {}
                 }
             }
@@ -674,6 +761,224 @@ impl MenubarUi {
             _ => {}
         }
         Ok(())
+    }
+
+    /// A left click on a movable icon at left edge `px`; `was` — the part
+    /// whose popup was open before (clicking it again only closed it).
+    fn click_part(
+        &mut self,
+        d: &Display,
+        fonts: &mut Fonts,
+        part: Part,
+        px: f32,
+        was: Option<Part>,
+    ) -> Result<()> {
+        match part {
+            // Колокольчик — центр уведомлений (его рисует служба
+            // уведомлений; повторный щелчок закрывает его там же).
+            Part::Bell => {
+                let _ = self.tx.send(Msg::ToggleCenter);
+            }
+            p if Some(p) == was => {}
+            Part::Battery => self.open_battery(d, fonts, px)?,
+            Part::Volume => self.open_sound(d, px)?,
+            // Значок Bluetooth (blueman) — своё окошко устройств,
+            // как из Пункта управления; правая кнопка — меню blueman.
+            Part::Tray(i)
+                if self.bt_state.is_some()
+                    && self.tray_items.get(i).is_some_and(is_bluetooth_tray) =>
+            {
+                self.open_bluetooth(d, Part::Tray(i), px)?
+            }
+            // Значок сети (nm-applet) — своё окошко сети.
+            Part::Tray(i) if self.tray_items.get(i).is_some_and(is_network_tray) => {
+                self.open_network(d, Part::Tray(i), px)?
+            }
+            Part::Tray(i) => self.tray_click(i, px, 1)?,
+            Part::Layout if was.is_none() => self.next_layout(d)?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The settings name of a movable icon: `layout`, `volume`, `battery`,
+    /// `bell`, or `tray:ID` (the app's StatusNotifierItem `Id`, its title
+    /// when it has none).
+    fn icon_id(&self, part: Part) -> Option<String> {
+        match part {
+            Part::Layout => Some("layout".into()),
+            Part::Volume => Some("volume".into()),
+            Part::Battery => Some("battery".into()),
+            Part::Bell => Some("bell".into()),
+            Part::Tray(i) => {
+                let item = self.tray_items.get(i)?;
+                let name = if item.id.is_empty() {
+                    &item.title
+                } else {
+                    &item.id
+                };
+                (!name.is_empty()).then(|| format!("tray:{name}"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Mark the icons listed in `[menubar] hidden` as hidden in the bar.
+    fn refresh_hidden(&mut self) {
+        let parts = [Part::Layout, Part::Volume, Part::Battery, Part::Bell]
+            .into_iter()
+            .chain((0..self.tray_items.len()).map(Part::Tray));
+        let hidden: Vec<Part> = parts
+            .filter(|&p| {
+                self.icon_id(p)
+                    .is_some_and(|id| self.hidden_ids.contains(&id))
+            })
+            .collect();
+        if hidden != self.bar.hidden {
+            self.bar.hidden = hidden;
+            self.dirty = true;
+        }
+    }
+
+    /// `[menubar] hidden` changed in the file (hot reload).
+    pub fn set_hidden_ids(&mut self, ids: Vec<String>) {
+        self.hidden_ids = ids;
+        self.refresh_hidden();
+    }
+
+    /// What a movable icon looks like now; `None` — it is not there (no
+    /// battery, a single layout…).
+    fn look_of(&self, part: Part) -> Option<HiddenLook> {
+        match part {
+            Part::Tray(i) => self.bar.tray.get(i).cloned().map(HiddenLook::Picture),
+            Part::Layout => self.bar.layout.clone().map(HiddenLook::Text),
+            Part::Volume => self.bar.volume.clone().map(HiddenLook::Icon),
+            Part::Battery => self
+                .bar
+                .battery
+                .as_ref()
+                .map(|(icon, _)| HiddenLook::Icon(icon.clone())),
+            Part::Bell => self.bar.bell.clone().map(HiddenLook::Icon),
+            _ => None,
+        }
+    }
+
+    /// Hidden icons that are there now, in bar order (tray, then the rest).
+    fn hidden_present(&self) -> Vec<(Part, HiddenLook)> {
+        let mut parts = self.bar.hidden.clone();
+        let order = |p: &Part| match p {
+            Part::Tray(i) => *i,
+            Part::Layout => 1000,
+            Part::Volume => 1001,
+            Part::Battery => 1002,
+            _ => 1003,
+        };
+        parts.sort_by_key(order);
+        parts
+            .into_iter()
+            .filter_map(|p| Some((p, self.look_of(p)?)))
+            .collect()
+    }
+
+    /// An event point of our bar or popup window, in screen points.
+    fn to_screen(&self, window: u32, x: i16, y: i16) -> (i32, i32) {
+        let (ax, ay, _, _) = self.area;
+        let (ox, oy) = if window == self.popup.id() {
+            let (px, py) = self.popup_origin();
+            (i32::from(px), i32::from(py))
+        } else {
+            (ax, ay)
+        };
+        (ox + i32::from(x), oy + i32::from(y))
+    }
+
+    /// The pointer moved with an icon held: past [`DRAG_START`] it becomes
+    /// a drag; the picture follows the pointer.
+    fn icon_drag_motion(&mut self, d: &Display, at: (i32, i32)) -> Result<()> {
+        let Some(drag) = &self.icon_drag else {
+            return Ok(());
+        };
+        let (dx, dy) = (at.0 - drag.start.0, at.1 - drag.start.1);
+        if drag.active.is_none() {
+            if dx.abs().max(dy.abs()) < DRAG_START {
+                return Ok(());
+            }
+            let part = match drag.from {
+                DragFrom::Bar { part, .. } => Some(part),
+                DragFrom::Control(i) => self.control_hidden.get(i).copied(),
+            };
+            let Some(look) = part.and_then(|p| self.look_of(p)) else {
+                self.icon_drag = None;
+                return Ok(());
+            };
+            // Out of the Control Center: it closes, the drag goes on. The
+            // pointer is held on the bar window either way, so the release
+            // comes back to us wherever it happens.
+            self.close_popup(d)?;
+            d.grab_pointer_for_drag(self.window.id())?;
+            if let Some(drag) = &mut self.icon_drag {
+                drag.active = Some(look);
+            }
+        }
+        if let Some(drag) = &mut self.icon_drag {
+            drag.at = at;
+        }
+        self.drag_dirty = true;
+        Ok(())
+    }
+
+    /// The button went up: drop the dragged icon, or click it.
+    fn icon_drag_end(&mut self, d: &Display, fonts: &mut Fonts, at: (i32, i32)) -> Result<()> {
+        let Some(drag) = self.icon_drag.take() else {
+            return Ok(());
+        };
+        if drag.active.is_some() {
+            d.ungrab_pointer()?;
+            self.drag_popup.hide_passive(d)?;
+            let (ax, ay, aw, _) = self.area;
+            let bar_bottom = ay + self.bar.height as i32;
+            let over_bar = at.1 < bar_bottom + 4 && at.0 >= ax && at.0 < ax + aw as i32;
+            match drag.from {
+                // Pulled clearly below the bar: into the Control Center.
+                DragFrom::Bar { .. } if at.1 > bar_bottom + 12 => {
+                    self.move_icon(&drag.id, true);
+                }
+                DragFrom::Control(_) if over_bar => self.move_icon(&drag.id, false),
+                _ => {}
+            }
+            return Ok(());
+        }
+        match drag.from {
+            DragFrom::Bar { part, px, was } => self.click_part(d, fonts, part, px, was),
+            // A click on a hidden icon: what a click on it in the bar does,
+            // opened where the Control Center was.
+            DragFrom::Control(i) => {
+                let Some(part) = self.control_hidden.get(i).copied() else {
+                    return Ok(());
+                };
+                let x = f32::from(self.popup_x);
+                self.close_popup(d)?;
+                self.click_part(d, fonts, part, x, None)
+            }
+        }
+    }
+
+    /// Move icon `id` into the Control Center (`hide`) or back to the bar,
+    /// and remember it in `[menubar] hidden`.
+    fn move_icon(&mut self, id: &str, hide: bool) {
+        self.hidden_ids.retain(|h| h != id);
+        if hide {
+            self.hidden_ids.push(id.to_string());
+        }
+        self.refresh_hidden();
+        if let Some(path) = crate::ui::config_path()
+            && let Err(e) = save_hidden(&path, &self.hidden_ids)
+        {
+            eprintln!(
+                "Не удалось сохранить скрытые значки в {}: {e}",
+                path.display()
+            );
+        }
     }
 
     fn change_volume(&mut self, _d: &Display, v: u32) -> Result<()> {
@@ -919,6 +1224,9 @@ impl MenubarUi {
             sound: self.sound.clone(),
         });
         panel.set_language(self.language);
+        let (parts, looks) = self.hidden_present().into_iter().unzip();
+        self.control_hidden = parts;
+        panel.hidden = looks;
         let size = panel.size();
         self.control_panel = Some(panel);
         self.show_popup(d, Part::Control, x, size)
@@ -1231,6 +1539,7 @@ impl MenubarUi {
                     .iter()
                     .map(|i| tray_icon(i, icons))
                     .collect();
+                self.refresh_hidden();
                 self.dirty = true;
             }
             TrayUpdate::Menu { key, items } => {
@@ -1358,6 +1667,23 @@ impl MenubarUi {
 
     /// Перерисовать, если что-то изменилось.
     pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        if self.drag_dirty {
+            self.drag_dirty = false;
+            if let Some(drag) = &self.icon_drag
+                && let Some(look) = &drag.active
+            {
+                let image = drag_image(look, fonts, icons);
+                let half = (DRAG_SIZE / 2) as i32;
+                self.drag_popup.show_passive(
+                    d,
+                    (drag.at.0 - half) as i16,
+                    (drag.at.1 - half) as i16,
+                    DRAG_SIZE as u16,
+                    DRAG_SIZE as u16,
+                )?;
+                self.drag_popup.present(d, &image)?;
+            }
+        }
         if self.dirty {
             self.dirty = false;
             self.window.present(d, &self.bar.render(fonts, icons))?;
@@ -1457,6 +1783,18 @@ fn entry(label: &str, command: Cmd, checked: bool, separator_before: bool) -> Me
         enabled: true,
         indent: false,
     }
+}
+
+/// Write `[menubar] hidden`; the rest of the file stays as it is.
+fn save_hidden(path: &std::path::Path, ids: &[String]) -> std::io::Result<()> {
+    crate::ui::config_store(path.to_path_buf()).edit(|text| {
+        mimshel_core::config::set_menubar_hidden(text, ids).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "в файле ошибка, исправьте её — тогда значки сохранятся",
+            )
+        })
+    })
 }
 
 /// Файл главного меню (его пишет `mimshel apply launchers`).

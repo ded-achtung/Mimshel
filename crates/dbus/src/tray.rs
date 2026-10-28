@@ -29,6 +29,10 @@ const DBUSMENU: &str = "com.canonical.dbusmenu";
 pub struct TrayItem {
     /// Чей значок: «имя на шине + путь» — по нему же команды.
     pub key: String,
+    /// The item's own name (`Id`: `nm-applet`, `blueman`,
+    /// `TelegramDesktop`): unlike the bus name it stays the same after the
+    /// program restarts, so settings can remember the icon by it.
+    pub id: String,
     pub title: String,
     /// `Passive` — значок прятать; `NeedsAttention` — показывать иконку внимания.
     pub status: String,
@@ -386,6 +390,7 @@ fn read_item(conn: &Connection, bus: &str, path: &str) -> Option<TrayItem> {
     };
     Some(TrayItem {
         key: format!("{bus}{path}"),
+        id: text("Id"),
         title: text("Title"),
         status,
         icon_name,

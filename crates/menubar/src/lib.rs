@@ -15,7 +15,9 @@ pub mod status;
 pub use apple::{AppleItem, apple_menu, parse_menu};
 pub use bluetooth::{BluetoothAction, BluetoothPanel};
 pub use calendar::{CalendarAction, CalendarPanel, Date, Names};
-pub use control::{ControlAction, ControlPanel, ControlState, Network, Tile};
+pub use control::{
+    ControlAction, ControlPanel, ControlState, DRAG_SIZE, HiddenLook, Network, Tile, drag_image,
+};
 pub use network::{
     NetState, NetworkAction, NetworkPanel, WifiNet, parse_known, parse_wifi_list, parse_wired,
 };
@@ -71,6 +73,8 @@ pub struct Bar {
     pub clock: String,
     /// Подсвеченная часть — та, чьё меню открыто.
     pub open: Option<Part>,
+    /// Icons moved into the Control Center: not drawn in the bar.
+    pub hidden: Vec<Part>,
 }
 
 /// Отступ от краёв экрана.
@@ -112,7 +116,18 @@ impl Bar {
             control: false,
             clock: String::new(),
             open: None,
+            hidden: Vec::new(),
         }
+    }
+
+    /// The icons that can be moved into the Control Center and back: all
+    /// of them except the Control Center itself and the clock (otherwise
+    /// there would be nowhere to bring them back from).
+    pub fn movable(part: Part) -> bool {
+        matches!(
+            part,
+            Part::Tray(_) | Part::Layout | Part::Volume | Part::Battery | Part::Bell
+        )
     }
 
     /// Части строки: какая, левый край и ширина (вместе с полями).
@@ -139,29 +154,30 @@ impl Bar {
             out.push((Part::Clock, right, w));
         }
         let icon_w = ICON as f32 + 2.0 * ITEM_PAD;
+        let shown = |p: Part| !self.hidden.contains(&p);
         if self.control {
             right -= icon_w;
             out.push((Part::Control, right, icon_w));
         }
-        if self.bell.is_some() {
+        if self.bell.is_some() && shown(Part::Bell) {
             right -= icon_w;
             out.push((Part::Bell, right, icon_w));
         }
-        if let Some((_, text)) = &self.battery {
+        if let Some((_, text)) = self.battery.as_ref().filter(|_| shown(Part::Battery)) {
             let w = icon_w + BATTERY_GAP + fonts.measure(text, &TEXT);
             right -= w;
             out.push((Part::Battery, right, w));
         }
-        if self.volume.is_some() {
+        if self.volume.is_some() && shown(Part::Volume) {
             right -= icon_w;
             out.push((Part::Volume, right, icon_w));
         }
-        if let Some(layout) = &self.layout {
+        if let Some(layout) = self.layout.as_ref().filter(|_| shown(Part::Layout)) {
             let w = fonts.measure(layout, &BOLD) + 2.0 * ITEM_PAD;
             right -= w;
             out.push((Part::Layout, right, w));
         }
-        for i in (0..self.tray.len()).rev() {
+        for i in (0..self.tray.len()).rev().filter(|&i| shown(Part::Tray(i))) {
             right -= icon_w;
             out.push((Part::Tray(i), right, icon_w));
         }
@@ -357,6 +373,22 @@ mod tests {
         let x = |p: Part| parts.iter().find(|q| q.0 == p).unwrap().1;
         assert!(x(Part::Tray(0)) < x(Part::Tray(1)));
         assert!(x(Part::Tray(1)) < x(Part::Layout));
+    }
+
+    #[test]
+    fn hidden_icons_leave_the_bar() {
+        let mut fonts = Fonts::new("Inter");
+        let mut b = bar();
+        b.volume = Some("audio-volume-medium-symbolic".into());
+        b.tray = vec![Pixmap::new(16, 16).unwrap(), Pixmap::new(16, 16).unwrap()];
+        b.hidden = vec![Part::Tray(0), Part::Layout, Part::Clock];
+        let parts: Vec<Part> = b.parts(&mut fonts).iter().map(|p| p.0).collect();
+        assert!(!parts.contains(&Part::Tray(0)));
+        assert!(!parts.contains(&Part::Layout));
+        assert!(parts.contains(&Part::Tray(1)));
+        assert!(parts.contains(&Part::Volume));
+        assert!(parts.contains(&Part::Clock), "the clock always stays");
+        assert!(!Bar::movable(Part::Clock) && !Bar::movable(Part::Control));
     }
 
     #[test]

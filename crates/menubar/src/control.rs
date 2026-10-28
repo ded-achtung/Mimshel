@@ -10,7 +10,7 @@ use mimshel_icons::Icons;
 use mimshel_render::Canvas;
 use mimshel_text::{Fonts, Style};
 use mimshel_widgets::shape::{circle, paint, rounded};
-use tiny_skia::{FillRule, FilterQuality, PixmapPaint, Stroke, Transform};
+use tiny_skia::{FillRule, FilterQuality, Pixmap, PixmapPaint, Stroke, Transform};
 
 use crate::status::Sound;
 
@@ -65,12 +65,27 @@ pub enum ControlAction {
     OpenNetwork,
 }
 
+/// How a menu bar icon moved into the Control Center looks there.
+#[derive(Debug, Clone)]
+pub enum HiddenLook {
+    /// A tray icon: the app's own picture.
+    Picture(Pixmap),
+    /// An icon from the theme (volume, battery, bell).
+    Icon(String),
+    /// The keyboard layout label.
+    Text(String),
+}
+
 pub struct ControlPanel {
     pub state: ControlState,
     pub language: mimshel_core::i18n::Language,
     pub hover: Option<Tile>,
     /// The slider being dragged.
     dragging: Option<Tile>,
+    /// Menu bar icons moved here, in bar order: a row at the bottom.
+    pub hidden: Vec<HiddenLook>,
+    /// The hidden icon under the pointer.
+    pub hidden_hover: Option<usize>,
 }
 
 const WIDTH: f32 = 300.0;
@@ -83,6 +98,9 @@ const TOP_H: f32 = 2.0 * ROW + 12.0;
 const SLIDER_H: f32 = 66.0;
 const R: f32 = 15.0;
 const TILE_R: f32 = 14.0;
+/// The «Hidden icons» tile: title line and one cell per icon.
+const HIDDEN_TITLE: f32 = 24.0;
+const CELL: f32 = 34.0;
 
 const BG: [u8; 4] = [0x24, 0x24, 0x26, 0xf2];
 const EDGE: [u8; 4] = [0xff, 0xff, 0xff, 0x30];
@@ -111,6 +129,8 @@ impl ControlPanel {
             language: mimshel_core::i18n::Language::Ru,
             hover: None,
             dragging: None,
+            hidden: Vec::new(),
+            hidden_hover: None,
         }
     }
 
@@ -119,8 +139,43 @@ impl ControlPanel {
     }
 
     pub fn size(&self) -> (u32, u32) {
-        let h = PAD + TOP_H + self.sliders().len() as f32 * (GAP + SLIDER_H) + PAD;
+        let mut h = PAD + TOP_H + self.sliders().len() as f32 * (GAP + SLIDER_H) + PAD;
+        if !self.hidden.is_empty() {
+            h += GAP + self.hidden_height();
+        }
         (WIDTH as u32, h as u32)
+    }
+
+    /// Hidden icons per row.
+    fn per_row() -> usize {
+        ((WIDTH - 2.0 * PAD - 16.0) / CELL).floor() as usize
+    }
+
+    fn hidden_height(&self) -> f32 {
+        let rows = self.hidden.len().div_ceil(Self::per_row());
+        8.0 + HIDDEN_TITLE + rows as f32 * CELL + 6.0
+    }
+
+    /// Top of the «Hidden icons» tile.
+    fn hidden_top(&self) -> f32 {
+        PAD + TOP_H + self.sliders().len() as f32 * (GAP + SLIDER_H) + GAP
+    }
+
+    /// Centre of hidden icon `i`, in panel coordinates.
+    pub fn hidden_center(&self, i: usize) -> (f32, f32) {
+        let (row, col) = (i / Self::per_row(), i % Self::per_row());
+        (
+            PAD + 8.0 + col as f32 * CELL + CELL / 2.0,
+            self.hidden_top() + 8.0 + HIDDEN_TITLE + row as f32 * CELL + CELL / 2.0,
+        )
+    }
+
+    /// The hidden icon under `(x, y)`.
+    pub fn hidden_at(&self, x: f32, y: f32) -> Option<usize> {
+        (0..self.hidden.len()).find(|&i| {
+            let (cx, cy) = self.hidden_center(i);
+            (x - cx).abs() < CELL / 2.0 && (y - cy).abs() < CELL / 2.0
+        })
     }
 
     /// The sliders shown, top to bottom, with the top of each tile: display
@@ -275,10 +330,12 @@ impl ControlPanel {
         let hover = self
             .tile_at(x, y)
             .filter(|t| !matches!(t, Tile::Display | Tile::Volume));
-        if hover == self.hover {
+        let hidden = self.hidden_at(x, y);
+        if hover == self.hover && hidden == self.hidden_hover {
             return ControlAction::Nothing;
         }
         self.hover = hover;
+        self.hidden_hover = hidden;
         ControlAction::Redraw
     }
 
@@ -440,9 +497,93 @@ impl ControlPanel {
             );
             icon(&mut pm, ic, x0 + 12.0, cy);
         }
+
+        // Menu bar icons moved here.
+        if !self.hidden.is_empty() {
+            let top = self.hidden_top();
+            tile(
+                &mut pm,
+                PAD,
+                top,
+                WIDTH - 2.0 * PAD,
+                self.hidden_height(),
+                false,
+            );
+            fonts.draw(
+                &mut pm,
+                mimshel_core::i18n::t(self.language, "control.hidden_icons"),
+                &STATUS,
+                PAD + 14.0,
+                top + 8.0,
+                None,
+            );
+            for (i, look) in self.hidden.iter().enumerate() {
+                let (cx, cy) = self.hidden_center(i);
+                if self.hidden_hover == Some(i) {
+                    fill(&mut pm, circle(cx, cy, CELL / 2.0 - 2.0), TILE_HOVER);
+                }
+                draw_look(&mut pm, look, (cx, cy), fonts, icons);
+            }
+        }
         pm
     }
 }
+
+/// A hidden icon, 16 points, centred at `(cx, cy)`.
+fn draw_look(
+    pm: &mut Canvas,
+    look: &HiddenLook,
+    (cx, cy): (f32, f32),
+    fonts: &mut Fonts,
+    icons: &mut Icons,
+) {
+    let q = PixmapPaint {
+        quality: FilterQuality::Bicubic,
+        ..PixmapPaint::default()
+    };
+    let picture = |pm: &mut Canvas, img: &Pixmap| {
+        let k = 16.0 / img.width().max(img.height()).max(1) as f32;
+        let t = Transform::from_scale(k, k).post_translate(
+            cx - img.width() as f32 * k / 2.0,
+            cy - img.height() as f32 * k / 2.0,
+        );
+        pm.draw_pixmap(0, 0, img.as_ref(), &q, t, None);
+    };
+    match look {
+        HiddenLook::Picture(img) => picture(pm, img),
+        HiddenLook::Icon(name) => {
+            if let Some(img) = icons.get(name, 16) {
+                picture(pm, img);
+            }
+        }
+        HiddenLook::Text(text) => {
+            let tw = fonts.measure(text, &NAME);
+            fonts.draw(pm, text, &NAME, cx - tw / 2.0, cy - 9.0, None);
+        }
+    }
+}
+
+/// What follows the pointer while a menu bar icon is dragged: the icon on
+/// a small dark rounded square.
+pub fn drag_image(look: &HiddenLook, fonts: &mut Fonts, icons: &mut Icons) -> Canvas {
+    let size = DRAG_SIZE;
+    let mut pm = Canvas::new(size, size).expect("размер не нулевой");
+    let s = size as f32;
+    if let Some(p) = rounded(0.0, 0.0, s, s, 8.0) {
+        pm.fill_path(
+            &p,
+            &paint(BG),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    draw_look(&mut pm, look, (s / 2.0, s / 2.0), fonts, icons);
+    pm
+}
+
+/// Side of [`drag_image`], points.
+pub const DRAG_SIZE: u32 = 32;
 
 #[cfg(test)]
 mod tests {
@@ -466,6 +607,28 @@ mod tests {
                 apps: vec![],
             }),
         }
+    }
+
+    #[test]
+    fn hidden_icons_row() {
+        let mut panel = ControlPanel::new(state());
+        let (w, h) = panel.size();
+        panel.hidden = (0..10).map(|i| HiddenLook::Text(format!("{i}"))).collect();
+        let (_, taller) = panel.size();
+        assert!(taller > h + 2 * CELL as u32, "two rows of icons");
+        for i in [0, 7, 8, 9] {
+            let (x, y) = panel.hidden_center(i);
+            assert_eq!(panel.hidden_at(x, y), Some(i));
+            assert!(x > 0.0 && x < w as f32 && y < taller as f32);
+        }
+        assert_eq!(panel.hidden_at(5.0, 5.0), None);
+        // Pressing a hidden icon is the menu bar's business, not a tile's.
+        let (x, y) = panel.hidden_center(0);
+        assert_eq!(panel.press(x, y), ControlAction::Nothing);
+        let mut fonts = Fonts::new("Inter");
+        let mut icons = Icons::with_dirs("none", vec![], vec![]);
+        let pm = panel.render(&mut fonts, &mut icons);
+        assert_eq!((pm.width(), pm.height()), (w, taller));
     }
 
     #[test]

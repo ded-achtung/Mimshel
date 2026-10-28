@@ -8,6 +8,10 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 
 - **Interface languages** (PR #4 by ra1nzzz): English (now the default), Russian, Simplified
   and Traditional Chinese; `mimshel set look.language ru` switches without a restart.
+- **Menu bar icons can move into the Control Center**: drag an icon (an app's tray icon,
+  the keyboard layout, sound, battery or the bell) down out of the menu bar and it moves to
+  a «Hidden icons» row in the Control Center, where a click works as before; drag it up
+  onto the bar to bring it back. Remembered in `[menubar] hidden`.
 - The lock screen says why PAM refused — an account locked after failed attempts, an expired
   password — instead of «wrong password» every time.
 

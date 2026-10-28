@@ -74,6 +74,10 @@ pub struct Config {
     pub menubar_height: u32,
     pub menu_icon: String,
     pub clock_format: String,
+    /// Menu bar icons moved into the Control Center (dragged out of the
+    /// bar): `layout`, `volume`, `battery`, `bell` and `tray:ID` for an app's
+    /// tray icon (its StatusNotifierItem `Id`).
+    pub menubar_hidden: Vec<String>,
     /// Экран блокировки: подсказка в поле пароля, через сколько минут
     /// бездействия блокировать экран и через сколько гасить.
     pub lock_placeholder: String,
@@ -145,6 +149,7 @@ impl Default for Config {
             menubar_height: 28,
             menu_icon: "mimshel-logo".into(),
             clock_format: "%a %-d %b  %H:%M".into(),
+            menubar_hidden: Vec::new(),
             notify: false,
             desktop: false,
             folders: false,
@@ -369,6 +374,9 @@ impl Config {
         if let Some(v) = text("menubar", "clock_format") {
             c.clock_format = v;
         }
+        if let Some(v) = list("menubar", "hidden") {
+            c.menubar_hidden = v;
+        }
         if let Some(v) = list("dock", "apps") {
             c.dock_apps = v;
         }
@@ -522,6 +530,9 @@ png_icons = {png_icons}
 height = {height}
 menu_icon = {menu_icon}
 clock_format = {clock}
+# Значки, убранные в Пункт управления: перетащите значок из строки меню вниз —
+# он уйдёт туда, перетащите обратно наверх — вернётся (список меняется сам).
+hidden = {menubar_hidden}
 
 [dock]
 # Закреплённые программы — имена ярлыков без .desktop. Меняется и само,
@@ -578,6 +589,7 @@ osc52 = {osc52}
             height = self.menubar_height,
             menu_icon = s(&self.menu_icon),
             clock = s(&self.clock_format),
+            menubar_hidden = list(&self.menubar_hidden),
             apps = list(&self.dock_apps),
             icon = self.dock_icon,
             hide = s(self.dock_hide.name()),
@@ -699,6 +711,12 @@ pub fn set_dgpu_apps(text: &str, yes: &[String], no: &[String]) -> Option<String
     let no: Array = no.iter().map(String::as_str).collect();
     let text = set_value(text, "apps", "dgpu", Value::Array(yes))?;
     set_value(&text, "apps", "no_dgpu", Value::Array(no))
+}
+
+/// [`set_value`] for `[menubar] hidden`.
+pub fn set_menubar_hidden(text: &str, ids: &[String]) -> Option<String> {
+    let new: Array = ids.iter().map(String::as_str).collect();
+    set_value(text, "menubar", "hidden", Value::Array(new))
 }
 
 /// [`set_value`] для `[dock] apps`.
@@ -904,6 +922,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "значок главного меню: mimshel-logo (планета) или имя из темы",
     ),
     ("menubar.clock_format", "формат часов, как у date"),
+    (
+        "menubar.hidden",
+        "значки, убранные в Пункт управления, через запятую (меняется перетаскиванием)",
+    ),
     ("dock.apps", "программы через запятую"),
     ("dock.icon_size", "размер значков, 16–256"),
     ("dock.zoom", "увеличение в процентах (100–300) или false"),
@@ -1007,7 +1029,7 @@ pub fn setting_value(key: &str, input: &str) -> Result<Value, String> {
                 .collect(),
         )),
         // Пустой список — ничего не скрывать (и не переименовывать).
-        "apps.hide" | "apps.dgpu" | "apps.no_dgpu" => {
+        "apps.hide" | "apps.dgpu" | "apps.no_dgpu" | "menubar.hidden" => {
             Ok(Value::Array(comma_list(input).into_iter().collect()))
         }
         "apps.rename" => {
@@ -1067,7 +1089,12 @@ pub fn toml_error(text: &str) -> Option<String> {
                         .is_some_and(|n| (i64::from(min)..=i64::from(max)).contains(&n))
             } else if matches!(
                 key.as_str(),
-                "dock.apps" | "apps.terminal" | "apps.hide" | "apps.dgpu" | "apps.no_dgpu"
+                "dock.apps"
+                    | "apps.terminal"
+                    | "apps.hide"
+                    | "apps.dgpu"
+                    | "apps.no_dgpu"
+                    | "menubar.hidden"
             ) {
                 item.as_array().is_some_and(|a| {
                     a.iter().all(|v| {

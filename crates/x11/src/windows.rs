@@ -102,6 +102,37 @@ impl Display {
         (w > 0 && h > 0).then_some((x, y, w, h))
     }
 
+    /// Keep the pointer on `window` while something is dragged with the
+    /// button held: motion and the release come to it wherever the pointer
+    /// is (coordinates relative to `window`). `false` — someone else holds
+    /// the pointer.
+    pub fn grab_pointer_for_drag(&self, window: Window) -> Result<bool> {
+        use x11rb::protocol::xproto::{GrabMode, GrabStatus};
+        let mask = EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
+        let status = self
+            .conn
+            .grab_pointer(
+                false,
+                window,
+                mask,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                x11rb::CURRENT_TIME,
+            )?
+            .reply()?
+            .status;
+        Ok(status == GrabStatus::SUCCESS)
+    }
+
+    /// Let the pointer go after [`Display::grab_pointer_for_drag`].
+    pub fn ungrab_pointer(&self) -> Result<()> {
+        self.conn.ungrab_pointer(x11rb::CURRENT_TIME)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// Получать события о списке окон, активном окне и размере экрана.
     /// Monitor changes come from RandR too: monitors rearranged or the
     /// primary one changed leave the root size as it was, so without them

@@ -771,6 +771,7 @@ impl Ui<'_> {
         }
         if let Some(menubar) = &mut self.menubar {
             menubar.set_language(lang);
+            menubar.set_hidden_ids(config.menubar_hidden.clone());
         }
         if let Some(notify) = &mut self.notify {
             notify.set_language(lang);
