@@ -89,6 +89,10 @@ pub fn run(dir: Option<PathBuf>, command: Option<Vec<String>>) -> i32 {
 
 /// Open a web address in the default browser (detached).
 fn open_url(url: &str) {
+    if !mimshel_terminal::links::safe_to_open(url) {
+        eprintln!("Терминал: ссылка на запускаемый файл не открыта: {url}");
+        return;
+    }
     let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(url);
     let _ = crate::ui::spawn_detached(cmd);

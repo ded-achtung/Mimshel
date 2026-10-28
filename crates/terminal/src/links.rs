@@ -52,12 +52,71 @@ pub fn url_at(line: &[char], col: usize) -> Option<String> {
     ((at_col..url_end).contains(&col) && !scheme_only).then(|| url.into_iter().collect())
 }
 
+/// Whether Ctrl+click may hand `url` to `xdg-open`. Web addresses yes; a
+/// `file://` link only when it is not something that runs: on Xfce
+/// `xdg-open` goes to `exo-open`, which launches `.desktop` files, and a
+/// program printed by a remote host (`file:///home/u/Downloads/x.desktop`)
+/// must not start with one click.
+pub fn safe_to_open(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("file://") else {
+        return true;
+    };
+    // `file://host/path`: the path starts at the first slash.
+    let path = std::path::PathBuf::from(percent_decode(&rest[rest.find('/').unwrap_or(0)..]));
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("desktop"))
+    {
+        return false;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(&path) {
+        Ok(m) if m.is_file() => m.permissions().mode() & 0o111 == 0,
+        _ => true,
+    }
+}
+
+/// `%2E` -> `.`; a broken escape stays as it is.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn at(text: &str, col: usize) -> Option<String> {
         url_at(&text.chars().collect::<Vec<_>>(), col)
+    }
+
+    #[test]
+    fn runnable_files_are_not_opened() {
+        assert!(safe_to_open("https://example.org/x.desktop"));
+        assert!(!safe_to_open("file:///home/u/Downloads/x.desktop"));
+        assert!(!safe_to_open("file:///home/u/x%2EDesktop"));
+        assert!(!safe_to_open("file://localhost/tmp/a.desktop"));
+        assert!(!safe_to_open("file:///bin/sh"), "an executable file");
+        assert!(safe_to_open("file:///etc/hostname-missing.txt"));
+        assert!(safe_to_open("file:///tmp"), "a folder opens");
     }
 
     #[test]
