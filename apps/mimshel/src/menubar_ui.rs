@@ -1571,16 +1571,37 @@ fn watch_clock(format: String, tx: Sender<Msg>) {
     std::thread::spawn(move || {
         // Один запуск `date` в минуту: предыдущий ответ сообщает, сколько
         // секунд прошло в текущей минуте, — по ним и спим до границы.
+        // `sleep` does not count time spent suspended, so it sleeps at most
+        // CLOCK_STEP at a time and checks the wall-clock minute: after a
+        // resume the clock is right within seconds, not up to a minute late.
         let (_, mut secs) = clock(&format);
+        let mut shown = wall_minute();
         loop {
-            std::thread::sleep(Duration::from_secs(60 - secs.min(59)) + Duration::from_millis(50));
+            let left = Duration::from_secs(60 - secs.min(59)) + Duration::from_millis(50);
+            let started = std::time::Instant::now();
+            while started.elapsed() < left && wall_minute() == shown {
+                std::thread::sleep(CLOCK_STEP.min(left.saturating_sub(started.elapsed())));
+            }
             let (text, s) = clock(&format);
             secs = s;
+            shown = wall_minute();
             if tx.send(Msg::Clock(text)).is_err() {
                 return;
             }
         }
     });
+}
+
+/// The longest nap of the clock thread between wall-clock checks.
+const CLOCK_STEP: Duration = Duration::from_secs(5);
+
+/// Minutes since the epoch by the wall clock (time zones shift by whole
+/// minutes, so its change is the change of the shown minute).
+fn wall_minute() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 60)
+        .unwrap_or(0)
 }
 
 /// Значок Bluetooth от blueman в трее (`Id = blueman`, путь `/org/blueman/sni`).
