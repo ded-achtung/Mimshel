@@ -4,6 +4,34 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 
 ## [Unreleased]
 
+### New
+
+- **Interface languages** (PR #4 by ra1nzzz): English (now the default), Russian, Simplified
+  and Traditional Chinese; `mimshel set look.language ru` switches without a restart.
+- The lock screen says why PAM refused — an account locked after failed attempts, an expired
+  password — instead of «wrong password» every time.
+
+### Security
+
+- Terminal: a pasted text can no longer end bracketed paste early and run as typed commands;
+  Ctrl+click no longer launches `.desktop` files or executables from `file://` links.
+- Lock: before sleep the losing lock request waits until the lock screen covers the screen;
+  one failed `xset` no longer stops the guard from restarting the lock screen; the key debug
+  log never runs inside the lock screen.
+- The login-screen setup never replaces a theme in `/usr/local/share` that Mimshel did not install.
+- `doctor --report` also removes the real name and every name the user goes by.
+
+### Fixed
+
+- A panic on any thread of the service restarts it (it used to leave a frozen dock or menu bar).
+- A hung program no longer freezes the global menu or the tray (D-Bus calls time out after 3 s).
+- `mimshel set look.wallpaper` sets the Xfce desktop and lock background again.
+- The menu bar clock is right within seconds after waking from sleep.
+- Folder window: dragging onto another disk copies instead of moving.
+- A dead drag source no longer blocks every later drop until a restart.
+- Faster dock with many windows; trash in batches; bounded caches and log size; tray icon
+  size overflow.
+
 ## [v0.0.3-alpha] — 2026-10-26
 
 Third alpha: a security audit worked through, crash reports, and a few things people asked for.
