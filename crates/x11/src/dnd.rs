@@ -45,6 +45,8 @@ struct PendingDrop {
 }
 
 const MAX_PENDING_DROPS: usize = 16;
+/// How long a drop waits for the source to hand over the file list.
+const SELECTION_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Текущее перетаскивание, ожидаемый SelectionNotify и незавершённые операции.
 #[derive(Default)]
@@ -54,6 +56,10 @@ pub(crate) struct DropState {
     at: (i16, i16),
     action: u32,
     selecting: Option<DropOffer>,
+    /// When `selecting` was asked for: a source that died after XdndDrop
+    /// never answers, and without a deadline every later drop was refused
+    /// until the service restarted.
+    selecting_since: Option<std::time::Instant>,
     pending: Vec<PendingDrop>,
     paths: HashMap<u64, Vec<PathBuf>>,
     next_ticket: u64,
@@ -394,15 +400,25 @@ impl Display {
             return Some(Event::DropHover { window, x, y });
         }
         if kind == a.XdndLeave {
+            st.source = 0;
+            st.can_move = false;
             return Some(Event::DropLeave { window });
         }
         if kind == a.XdndDrop {
             // Пока сервер возвращает SelectionNotify, запомним исходный запрос.
             // Новый XdndEnter не должен подменить источник этого броска.
-            if st.selecting.is_some() {
+            let waiting = st
+                .selecting_since
+                .is_some_and(|t| t.elapsed() < SELECTION_WAIT);
+            if st.selecting.is_some() && waiting {
                 self.send_client(data[0], a.XdndFinished, [window, 0, 0, 0, 0]);
                 return Some(Event::Other);
             }
+            // The previous source never answered: give up on it.
+            if let Some(stale) = st.selecting.take() {
+                self.send_client(stale.source, a.XdndFinished, [stale.target, 0, 0, 0, 0]);
+            }
+            st.selecting_since = Some(std::time::Instant::now());
             st.selecting = Some(DropOffer {
                 source: data[0],
                 target: window,
@@ -431,6 +447,7 @@ impl Display {
         let Some(offer) = st.selecting.take() else {
             return Event::Other;
         };
+        st.selecting_since = None;
         if requestor != offer.target {
             self.send_client(offer.source, a.XdndFinished, [offer.target, 0, 0, 0, 0]);
             return Event::Other;
