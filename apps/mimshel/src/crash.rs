@@ -25,10 +25,20 @@ const INTERNAL_ID: u32 = u32::MAX;
 /// in daemon.log / lock.log). The hook must never panic itself and must
 /// not wait on locks other code may hold: only std fs and formatting,
 /// every error ignored.
+///
+/// In the service any panic not handled by `mimshel_core::crash::catch`
+/// ends the whole process: a panic on a worker thread (X events, tray,
+/// global menu, notifications…) would otherwise kill only that thread
+/// and leave a frozen dock or menu bar that the guard never restarts.
+/// Exit code 101 is what the guard reads as a panic.
 pub fn install(component: &str) {
     let component = component.to_string();
+    let fatal = component == "service";
     std::panic::set_hook(Box::new(move |info| {
         write_report(&component, info);
+        if fatal && !common::panic_is_caught() {
+            std::process::exit(101);
+        }
     }));
 }
 

@@ -77,7 +77,7 @@ const BACKGROUND_VERSION: u32 = 2;
 /// `wallpaper` — обои из настроек (`look.wallpaper`): свои по имени или путь.
 pub fn background(wallpaper: &str, w: i64, h: i64) -> Option<PathBuf> {
     // Падение при рисовании не должно помешать заблокировать экран.
-    let drawn = std::panic::catch_unwind(|| {
+    let drawn = mimshel_core::crash::catch(|| {
         let wallpaper = crate::parts::wallpaper_file(wallpaper, w, h)
             .ok_or_else(|| "обои не нарисованы".to_string())?;
         draw_background(&wallpaper, w, h)

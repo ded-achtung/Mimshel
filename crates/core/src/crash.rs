@@ -5,9 +5,33 @@
 //! writer lives in `apps/mimshel/src/crash.rs`; the readers are the
 //! service guard and `mimshel doctor`.
 
+use std::cell::Cell;
+use std::panic::UnwindSafe;
 use std::path::PathBuf;
 
 use crate::names;
+
+thread_local! {
+    /// How many [`catch`] calls this thread is inside.
+    static CATCHING: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Run `f` and turn its panic into `Err`, telling the panic hook that
+/// the panic is handled right here: the service's hook ends the whole
+/// process on any other panic (a dead worker thread would otherwise
+/// leave a half-working service the guard never restarts).
+pub fn catch<R>(f: impl FnOnce() -> R + UnwindSafe) -> std::thread::Result<R> {
+    CATCHING.with(|c| c.set(c.get() + 1));
+    let result = std::panic::catch_unwind(f);
+    CATCHING.with(|c| c.set(c.get() - 1));
+    result
+}
+
+/// True inside [`catch`] on this thread: the panic being reported will
+/// be handled by the caller.
+pub fn panic_is_caught() -> bool {
+    CATCHING.with(|c| c.get() > 0)
+}
 
 /// Reports kept in the `crashes` folder (the writer prunes by name).
 pub const KEEP_REPORTS: usize = 20;
@@ -350,6 +374,20 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catch_marks_the_panic_as_handled() {
+        assert!(!panic_is_caught());
+        let inside = catch(panic_is_caught);
+        assert_eq!(inside.ok(), Some(true));
+        assert!(!panic_is_caught());
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let fell = catch(|| -> u32 { panic!("test") });
+        std::panic::set_hook(hook);
+        assert!(fell.is_err());
+        assert!(!panic_is_caught());
+    }
 
     #[test]
     fn stamp_round_trips_known_dates() {
