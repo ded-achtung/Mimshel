@@ -79,7 +79,7 @@ pub(crate) enum Msg {
     /// Корзина стала полной (`true`) или пустой.
     Trash(bool),
     /// Часы в строке меню (новая минута).
-    Clock(String),
+    Clock(String, crate::menubar_ui::Today),
     /// Звук, батарея, «Не беспокоить» изменились.
     Sound(Option<mimshel_menubar::status::Sound>),
     Control(mimshel_menubar::Network, Option<bool>),
@@ -131,7 +131,7 @@ impl Msg {
             Msg::Apps(_) => "программы".into(),
             Msg::Tick => "кадр".into(),
             Msg::Trash(_) => "корзина".into(),
-            Msg::Clock(_) => "часы".into(),
+            Msg::Clock(..) => "часы".into(),
             Msg::Sound(_) | Msg::Control(..) | Msg::Battery(_) | Msg::Dnd(_) => "состояние".into(),
             Msg::Tray(_) => "трей".into(),
             Msg::Bluetooth(_) => "bluetooth".into(),
@@ -156,6 +156,18 @@ pub fn load_config() -> Config {
         Some(path) => config_store(path).load(),
         None => Config::default(),
     }
+}
+
+/// The settings as the file has them now, for a quick look on the main
+/// thread (launching an app: is it set to the discrete GPU?). No lock and
+/// no writes: the file is replaced atomically, so a read sees a whole
+/// version. A file that does not pass the check goes the full way.
+fn quick_config() -> Config {
+    config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .filter(|text| mimshel_core::config::toml_error(text).is_none())
+        .map(|text| Config::from_toml(&text))
+        .unwrap_or_else(load_config)
 }
 
 /// The terminal command from settings, ready to run: `mimshel …` (our own
@@ -187,7 +199,7 @@ pub fn spawn_detached(mut cmd: Command) -> std::io::Result<()> {
 /// или просит ярлык. Настройки читаются заново — галочку в доке могли
 /// переключить только что.
 pub fn launch_app(app: &App, terminal: &[String]) -> std::io::Result<u32> {
-    let dgpu = load_config().on_dgpu(&app.id, app.prefers_dgpu);
+    let dgpu = quick_config().on_dgpu(&app.id, app.prefers_dgpu);
     app.launch(terminal, dgpu)
 }
 
@@ -874,9 +886,9 @@ impl Ui<'_> {
                 }
                 Ok(())
             }
-            Msg::Clock(text) => {
+            Msg::Clock(text, today) => {
                 if let Some(menubar) = &mut self.menubar {
-                    menubar.set_clock(text);
+                    menubar.set_clock(text, today);
                 }
                 Ok(())
             }

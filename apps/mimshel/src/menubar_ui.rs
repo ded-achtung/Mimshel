@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Sender, SyncSender};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use mimshel_apps::App;
@@ -109,7 +110,9 @@ pub struct MenubarUi {
     net: Sender<NetCmd>,
     net_state: Option<NetState>,
     /// Названия месяцев и дней на языке системы (читаются один раз).
-    calendar_names: Option<mimshel_menubar::Names>,
+    calendar_names: Arc<OnceLock<mimshel_menubar::Names>>,
+    /// Today, refreshed with the clock every minute.
+    today: Today,
     popup: Popup,
     popup_x: i16,
     /// The primary monitor (`Display::primary_area`), in points: the bar
@@ -181,7 +184,15 @@ impl MenubarUi {
             network_panel: None,
             net: status::network_worker(tx.clone()),
             net_state: None,
-            calendar_names: None,
+            calendar_names: Arc::new(OnceLock::new()),
+            today: (
+                mimshel_menubar::Date {
+                    year: 1970,
+                    month: 1,
+                    day: 1,
+                },
+                String::new(),
+            ),
             popup: d.create_popup("menubar-menu")?,
             popup_x: 0,
             area: d.primary_area(),
@@ -194,7 +205,17 @@ impl MenubarUi {
         d.watch_keyboard()?;
         ui.read_layouts(d);
         ui.bar.app_name = ui.app_name(d);
-        ui.bar.clock = clock(&config.clock_format).0;
+        let (text, _, today) = clock(&config.clock_format);
+        ui.bar.clock = text;
+        ui.today = today;
+        // The calendar's month and weekday names take three runs of `date`
+        // and `locale`: fetched once, off the main thread.
+        {
+            let names = Arc::clone(&ui.calendar_names);
+            std::thread::spawn(move || {
+                let _ = names.set(calendar_names());
+            });
+        }
         ui.bar.control = true;
         watch_clock(config.clock_format.clone(), tx.clone());
         status::watch_sound(tx.clone());
@@ -304,7 +325,8 @@ impl MenubarUi {
         }
     }
 
-    pub fn set_clock(&mut self, text: String) {
+    pub fn set_clock(&mut self, text: String, today: Today) {
+        self.today = today;
         if self.bar.clock != text {
             self.bar.clock = text;
             self.dirty = true;
@@ -864,11 +886,12 @@ impl MenubarUi {
     }
 
     fn open_calendar(&mut self, d: &Display, x: f32) -> Result<()> {
-        let names = self
-            .calendar_names
-            .get_or_insert_with(calendar_names)
-            .clone();
-        let (today, text) = today();
+        let names = match self.calendar_names.get() {
+            Some(names) => names.clone(),
+            // Opened in the first moments after start: read them now.
+            None => self.calendar_names.get_or_init(calendar_names).clone(),
+        };
+        let (today, text) = self.today.clone();
         let panel = CalendarPanel::new(today, text, names);
         let size = panel.size();
         self.calendar = Some(panel);
@@ -1533,9 +1556,7 @@ fn calendar_names() -> mimshel_menubar::Names {
 }
 
 /// Сегодня: дата и она же словами («Пятница, 23 октября»).
-fn today() -> (mimshel_menubar::Date, String) {
-    let out = date(&["+%Y %m %d|%A, %-d %B"], "");
-    let (nums, text) = out.trim().split_once('|').unwrap_or(("", ""));
+fn parse_today(nums: &str, text: &str) -> Today {
     let n: Vec<u32> = nums.split(' ').filter_map(|v| v.parse().ok()).collect();
     let today = match n[..] {
         [y, m, d] => mimshel_menubar::Date {
@@ -1552,16 +1573,31 @@ fn today() -> (mimshel_menubar::Date, String) {
     (today, capitalize(text))
 }
 
-fn clock(format: &str) -> (String, u64) {
+/// One `date` run: the clock text, seconds into the minute, and today for
+/// the calendar (so opening it runs nothing on the main thread).
+fn clock(format: &str) -> (String, u64, Today) {
     let out = Command::new("date")
-        .arg(format!("+%S|{format}"))
+        .arg(format!("+%S|%Y %m %d|%A, %-d %B|{format}"))
         .stdin(Stdio::null())
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
-    let (secs, text) = out.trim_end().split_once('|').unwrap_or(("0", ""));
-    (text.to_string(), secs.parse().unwrap_or(0))
+    parse_clock(out.trim_end())
+}
+
+/// What the calendar shows as today: the date and the same in words.
+pub type Today = (mimshel_menubar::Date, String);
+
+/// `SS|YYYY MM DD|weekday, D month|clock text` (the clock format may hold
+/// `|` itself, so it goes last).
+fn parse_clock(out: &str) -> (String, u64, Today) {
+    let mut parts = out.splitn(4, '|');
+    let secs = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let nums = parts.next().unwrap_or("");
+    let words = parts.next().unwrap_or("");
+    let text = parts.next().unwrap_or("").to_string();
+    (text, secs, parse_today(nums, words))
 }
 
 /// Обновлять часы в начале каждой минуты.
@@ -1572,7 +1608,7 @@ fn watch_clock(format: String, tx: Sender<Msg>) {
         // `sleep` does not count time spent suspended, so it sleeps at most
         // CLOCK_STEP at a time and checks the wall-clock minute: after a
         // resume the clock is right within seconds, not up to a minute late.
-        let (_, mut secs) = clock(&format);
+        let (_, mut secs, _) = clock(&format);
         let mut shown = wall_minute();
         loop {
             let left = Duration::from_secs(60 - secs.min(59)) + Duration::from_millis(50);
@@ -1580,10 +1616,10 @@ fn watch_clock(format: String, tx: Sender<Msg>) {
             while started.elapsed() < left && wall_minute() == shown {
                 std::thread::sleep(CLOCK_STEP.min(left.saturating_sub(started.elapsed())));
             }
-            let (text, s) = clock(&format);
+            let (text, s, today) = clock(&format);
             secs = s;
             shown = wall_minute();
-            if tx.send(Msg::Clock(text)).is_err() {
+            if tx.send(Msg::Clock(text, today)).is_err() {
                 return;
             }
         }
@@ -1610,4 +1646,29 @@ fn is_bluetooth_tray(item: &TrayItem) -> bool {
 /// Значок сети от nm-applet в трее (`--indicator`: путь `…/nm_applet`).
 fn is_network_tray(item: &TrayItem) -> bool {
     item.key.ends_with("/nm_applet")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_date_run_gives_clock_and_today() {
+        let (text, secs, (today, words)) =
+            parse_clock("07|2026 10 28|среда, 28 октября|Ср 28 окт | 19:05");
+        assert_eq!(text, "Ср 28 окт | 19:05", "the clock format may hold |");
+        assert_eq!(secs, 7);
+        assert_eq!(
+            today,
+            mimshel_menubar::Date {
+                year: 2026,
+                month: 10,
+                day: 28
+            }
+        );
+        assert_eq!(words, "Среда, 28 октября");
+        // `date` did not run: an empty clock, not a panic.
+        let (text, secs, (today, _)) = parse_clock("");
+        assert_eq!((text.as_str(), secs, today.year), ("", 0, 1970));
+    }
 }
