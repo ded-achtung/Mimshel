@@ -3,7 +3,7 @@
 //! миниатюры окон, «умное» скрытие и анимация.
 
 use inotify::{Inotify, WatchMask};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -39,6 +39,12 @@ pub struct DockUi {
     hide: DockHide,
     /// Окна программ, за которыми уже следим (свёрнуто, перемещение…).
     watched: HashSet<u32>,
+    /// What each window in the client list looked like when last read
+    /// (`None`: not shown in the dock). Only new windows and the window
+    /// whose title, state or class changed are read again: re-reading all
+    /// of them on every title change of a browser tab or a terminal meant
+    /// ~5 X round trips and a /proc read per window on the main thread.
+    known: HashMap<u32, Option<(mimshel_core::windows::WindowInfo, Option<String>)>>,
     /// Идёт ли таймер анимации.
     ticking: Arc<AtomicBool>,
     /// Нужно перерисовать (рисуем в [`DockUi::flush`], один раз на пачку событий).
@@ -87,6 +93,7 @@ impl DockUi {
             dock: Dock::new(look, apps, config.dock_apps.clone(), u32::from(sw)),
             hide: config.dock_hide,
             watched: HashSet::new(),
+            known: HashMap::new(),
             ticking: Arc::new(AtomicBool::new(false)),
             dirty: true,
             menu: None,
@@ -121,7 +128,7 @@ impl DockUi {
         d.watch_root()?;
         ui.place(d)?;
         ui.window.show(d)?;
-        ui.refresh_windows(d);
+        ui.refresh_windows(d, None);
         Ok(ui)
     }
 
@@ -144,7 +151,7 @@ impl DockUi {
 
     pub fn set_apps(&mut self, d: &Display, apps: Vec<App>) {
         self.dock.set_apps(apps);
-        self.refresh_windows(d);
+        self.refresh_windows(d, None);
         self.dirty = true;
     }
 
@@ -288,13 +295,14 @@ impl DockUi {
                     return Ok(());
                 }
             }
-            Event::Property { what, .. } => match what {
-                Property::ClientList | Property::State | Property::Class | Property::Title => {
+            Event::Property { window, what } => match what {
+                Property::ClientList => {
                     // Окна поменялись — миниатюры устарели (откроются заново).
-                    if what == Property::ClientList {
-                        self.close_preview(d)?;
-                    }
-                    self.refresh_windows(d)
+                    self.close_preview(d)?;
+                    self.refresh_windows(d, None)
+                }
+                Property::State | Property::Class | Property::Title => {
+                    self.refresh_windows(d, Some(window))
                 }
                 Property::ActiveWindow => {
                     self.dock.set_active(d.active_window());
@@ -756,24 +764,33 @@ impl DockUi {
     }
 
     /// Перечитать окна программ.
-    fn refresh_windows(&mut self, d: &Display) {
+    /// Re-read the window list; `changed` — a window whose title, state or
+    /// class changed and must be read again (new windows always are).
+    fn refresh_windows(&mut self, d: &Display, changed: Option<u32>) {
         // Своё окно дока тоже в списке (оно управляемое) — пропускаем: подписка
         // на изменения заменила бы его собственный набор событий, и док
         // перестал бы получать движение указателя.
         let own = self.window.id();
         let list: Vec<u32> = d.client_list().into_iter().filter(|&w| w != own).collect();
         self.watched.retain(|w| list.contains(w));
+        self.known.retain(|w, _| list.contains(w));
         let mut infos = Vec::new();
         for &w in &list {
             if self.watched.insert(w) {
                 let _ = d.watch_window(w);
             }
-            if let Some(info) = d.window_info(w) {
-                let hint = info
-                    .pid
-                    .and_then(mimshel_apps::process::launched_from)
-                    .map(|p| p.to_string_lossy().into_owned());
-                infos.push((info, hint));
+            if changed == Some(w) || !self.known.contains_key(&w) {
+                let read = d.window_info(w).map(|info| {
+                    let hint = info
+                        .pid
+                        .and_then(mimshel_apps::process::launched_from)
+                        .map(|p| p.to_string_lossy().into_owned());
+                    (info, hint)
+                });
+                self.known.insert(w, read);
+            }
+            if let Some(Some(entry)) = self.known.get(&w) {
+                infos.push(entry.clone());
             }
         }
         self.dock.set_windows(infos);
