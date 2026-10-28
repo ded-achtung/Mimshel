@@ -66,6 +66,10 @@ fn locked_run() -> mimshel_x11::Result<i32> {
         log("клавиатура или мышь заняты другой программой — повторяю захват");
     }
     popup.present(&display, &dark)?;
+    // The screen is covered and the input is ours: a guard that lost the
+    // race may now let the system sleep.
+    display.sync()?;
+    let locked = grabbed.then(mimshel_setup::lock::announce_locked).flatten();
     // Следить за окнами, появляющимися поверх (уведомления, всплывающие
     // окна), и за сменой размера экрана (подключили монитор).
     display.watch_stacking()?;
@@ -73,6 +77,7 @@ fn locked_run() -> mimshel_x11::Result<i32> {
     // 2. Фон (кеш или рисуется заново) и шрифты — экран уже закрыт.
     let mut ui = LockUi::new(Arc::clone(&display), &config, &layout, &popup, dark);
     ui.grabbed = grabbed;
+    ui.locked = locked;
     ui.redraw()?;
 
     // 3. События — в отдельном потоке; основной цикл по таймауту обновляет
@@ -134,6 +139,10 @@ struct LockUi<'a> {
     last_regrab: Instant,
     /// Клавиатура и мышь сейчас у нас.
     grabbed: bool,
+    /// Held once the screen is covered and the input is ours: a guard
+    /// that lost the race waits for it before letting the system sleep
+    /// (`mimshel_setup::lock::announce_locked`).
+    locked: Option<std::os::unix::net::UnixListener>,
     /// Обои из настроек — нарисовать фон заново, если сменится размер экрана.
     wallpaper: String,
     user: String,
@@ -168,6 +177,7 @@ impl<'a> LockUi<'a> {
             placeholder: config.lock_placeholder.clone(),
             last_regrab: Instant::now(),
             grabbed: true,
+            locked: None,
             wallpaper: config.wallpaper.clone(),
             user,
         };
@@ -366,8 +376,16 @@ impl<'a> LockUi<'a> {
                 });
             }
             self.grabbed = now;
+            self.announce_locked();
         }
         Ok(None)
+    }
+
+    /// Tell waiting guards the screen is locked, once the input is ours.
+    fn announce_locked(&mut self) {
+        if self.grabbed && self.locked.is_none() {
+            self.locked = mimshel_setup::lock::announce_locked();
+        }
     }
 
     fn update_clock(&mut self) {

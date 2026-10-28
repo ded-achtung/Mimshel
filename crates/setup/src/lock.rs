@@ -174,11 +174,19 @@ pub fn supervise(exe: &Path) -> i32 {
     // both through (two lock screens, the password asked twice). The kernel
     // gives an abstract socket name to one process only and frees it when the
     // process ends, even by a crash.
+    //
+    // The guard that loses must not return at once, though: xss-lock holds
+    // the system's sleep until its locker exits, and when its guard is the
+    // loser the laptop would fall asleep before the winner's screen is up —
+    // on resume the desktop shows (and takes keys) until the window maps.
+    // So it waits for the lock screen to say it covers the screen.
     let Some(_guard) = single_guard(&guard_name()) else {
+        wait_until_locked(LOSER_WAIT);
         return 0;
     };
     // A lock screen already shown without a guard (started by hand) — no second one.
     if LOCK_SCREEN.iter().any(|name| running(name)) {
+        wait_until_locked(LOSER_WAIT);
         return 0;
     }
     supervise_with(
@@ -190,7 +198,16 @@ pub fn supervise(exe: &Path) -> i32 {
             let status = child.wait()?;
             Ok((status, pid))
         },
-        || succeeds(&["xset", "q"]),
+        // One failed `xset` (no memory to fork, the X client limit) must not
+        // end the guard and leave the screen unlocked: ask a few times.
+        || {
+            (0..3).any(|i| {
+                if i > 0 {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                succeeds(&["xset", "q"])
+            })
+        },
         |restarts, how| {
             log(&format!(
                 "блокировка: {how} без пароля — перезапуск #{restarts}"
@@ -216,6 +233,51 @@ pub fn supervise(exe: &Path) -> i32 {
 fn guard_name() -> String {
     let display = std::env::var("DISPLAY").unwrap_or_default();
     format!("mimshel-lock-guard-{}-{display}", crate::sys::uid())
+}
+
+/// How long a guard that lost waits for the winner's lock screen: under
+/// logind's usual 5 s limit for holding the sleep.
+const LOSER_WAIT: Duration = Duration::from_secs(4);
+
+/// Name the lock screen holds while it covers the screen with the
+/// keyboard grabbed: one per user and display.
+fn locked_name() -> String {
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    format!("mimshel-lock-ready-{}-{display}", crate::sys::uid())
+}
+
+/// Called by the lock screen once its window is shown and the keyboard
+/// and pointer are ours: other guards waiting in [`supervise`] may now
+/// let the system sleep. Keep the listener for as long as the screen is
+/// locked.
+pub fn announce_locked() -> Option<std::os::unix::net::UnixListener> {
+    single_guard(&locked_name())
+}
+
+/// Wait until a lock screen has announced itself, at most `limit`.
+fn wait_until_locked(limit: Duration) -> bool {
+    let shown = wait_for_name(&locked_name(), limit);
+    if !shown {
+        log("блокировка: экран блокировки не показался вовремя — не жду дальше");
+    }
+    shown
+}
+
+fn wait_for_name(name: &str, limit: Duration) -> bool {
+    use std::os::linux::net::SocketAddrExt;
+    let Ok(addr) = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()) else {
+        return false;
+    };
+    let start = std::time::Instant::now();
+    loop {
+        if std::os::unix::net::UnixStream::connect_addr(&addr).is_ok() {
+            return true;
+        }
+        if start.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Take the guard «lock» (an abstract Unix socket name); `None` — another
@@ -365,6 +427,23 @@ mod tests {
         );
         assert_eq!(result, 0);
         assert_eq!(reasons, ["упала (паника)"]);
+    }
+
+    #[test]
+    fn losing_guard_waits_for_the_lock_screen() {
+        let name = format!("mimshel-test-ready-{}", std::process::id());
+        assert!(!wait_for_name(&name, Duration::from_millis(120)));
+        let announce = name.clone();
+        let screen = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            let held = single_guard(&announce).expect("the screen takes the name");
+            std::thread::sleep(Duration::from_millis(500));
+            drop(held);
+        });
+        let start = std::time::Instant::now();
+        assert!(wait_for_name(&name, Duration::from_secs(3)));
+        assert!(start.elapsed() >= Duration::from_millis(100));
+        screen.join().unwrap();
     }
 
     #[test]
