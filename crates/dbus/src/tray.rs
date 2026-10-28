@@ -349,7 +349,11 @@ fn read_item(conn: &Connection, bus: &str, path: &str) -> Option<TrayItem> {
         .and_then(|list| {
             // Самая большая картинка — уменьшить лучше, чем растянуть.
             list.into_iter()
-                .filter(|(w, h, d)| *w > 0 && *h > 0 && d.len() == (*w * *h * 4) as usize)
+                // i64: a hostile size like 65536×65536 overflowed the i32
+                // product (a panic in debug builds, a wrong match in release).
+                .filter(|(w, h, d)| {
+                    *w > 0 && *h > 0 && d.len() as i64 == i64::from(*w) * i64::from(*h) * 4
+                })
                 .max_by_key(|(w, _, _)| *w)
                 .map(|(w, h, d)| (w as u32, h as u32, d))
         });
