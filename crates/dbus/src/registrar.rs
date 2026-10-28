@@ -37,11 +37,18 @@ impl Registrar {
             .insert(window_id, (sender, menu_object_path.to_string()));
     }
 
-    fn unregister_window(&self, window_id: u32) {
-        self.windows
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&window_id);
+    /// Only the program that registered the window's menu may take it
+    /// away; any other client on the bus could otherwise blank the menu
+    /// of every window.
+    fn unregister_window(&self, window_id: u32, #[zbus(header)] header: Header<'_>) {
+        let sender = header.sender().map(|s| s.to_string()).unwrap_or_default();
+        let mut windows = self.windows.lock().unwrap_or_else(|p| p.into_inner());
+        if windows
+            .get(&window_id)
+            .is_some_and(|(bus, _)| *bus == sender)
+        {
+            windows.remove(&window_id);
+        }
     }
 
     fn get_menu_for_window(&self, window_id: u32) -> (String, OwnedObjectPath) {

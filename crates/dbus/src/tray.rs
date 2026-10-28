@@ -89,6 +89,9 @@ struct Watcher {
     changed: Sender<Wake>,
 }
 
+/// Tray items kept at most.
+const MAX_ITEMS: usize = 64;
+
 #[interface(name = "org.kde.StatusNotifierWatcher")]
 impl Watcher {
     /// Программа регистрирует значок: имя на шине (тогда путь —
@@ -101,6 +104,11 @@ impl Watcher {
             (service.to_string(), "/StatusNotifierItem".to_string())
         };
         let mut items = self.items.lock().unwrap_or_else(|p| p.into_inner());
+        // An item is dropped when its bus name goes away; a name that was
+        // never owned never goes away, so the list is capped.
+        if items.len() >= MAX_ITEMS {
+            return;
+        }
         if !items.contains(&(bus.clone(), path.clone())) {
             items.push((bus, path));
             let _ = self.changed.send(Wake::Changed);
