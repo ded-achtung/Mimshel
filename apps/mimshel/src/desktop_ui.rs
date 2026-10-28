@@ -752,9 +752,12 @@ impl DesktopUi {
             Key::Delete => {
                 self.grid.freeze();
                 desktop_files::save_places(self.grid.saved());
-                for item in self.grid.selected_items() {
-                    desktop_files::trash(item);
-                }
+                desktop_files::trash(
+                    self.grid
+                        .selected_items()
+                        .into_iter()
+                        .map(|i| i.path.as_path()),
+                );
             }
             Key::Escape => {
                 let changed = self.grid.select(None);
@@ -1005,9 +1008,12 @@ impl DesktopUi {
             DesktopCommand::Trash => {
                 self.grid.freeze();
                 desktop_files::save_places(self.grid.saved());
-                for item in self.grid.selected_items() {
-                    desktop_files::trash(item);
-                }
+                desktop_files::trash(
+                    self.grid
+                        .selected_items()
+                        .into_iter()
+                        .map(|i| i.path.as_path()),
+                );
             }
         }
         Ok(())

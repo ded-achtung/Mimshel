@@ -156,9 +156,32 @@ fn pango_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// В корзину (её видит и корзина в доке).
-pub fn trash(item: &Item) {
-    spawn(&["gio", "trash", &item.path.display().to_string()], None);
+/// В корзину (её видит и корзина в доке). One `gio trash` per batch of
+/// files, not one process per file: deleting 2000 files started 2000
+/// processes at once.
+pub fn trash<'a>(paths: impl IntoIterator<Item = &'a Path>) {
+    for args in trash_commands(paths) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        spawn(&args, None);
+    }
+}
+
+/// Files per `gio trash` call: keeps the command line far below the
+/// kernel's limit even with long paths.
+const TRASH_BATCH: usize = 200;
+
+fn trash_commands<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<Vec<String>> {
+    let paths: Vec<String> = paths.into_iter().map(|p| p.display().to_string()).collect();
+    paths
+        .chunks(TRASH_BATCH)
+        .map(|chunk| {
+            ["gio", "trash", "--"]
+                .into_iter()
+                .map(String::from)
+                .chain(chunk.iter().cloned())
+                .collect()
+        })
+        .collect()
 }
 
 /// Новая папка «Новая папка» (или «Новая папка 2»…). Возвращает путь.
@@ -503,6 +526,18 @@ pub fn spawn(args: &[&str], dir: Option<&Path>) {
 #[cfg(test)]
 mod transfer_tests {
     use super::*;
+
+    #[test]
+    fn trash_goes_in_batches() {
+        let paths: Vec<PathBuf> = (0..450)
+            .map(|i| PathBuf::from(format!("/t/f{i}")))
+            .collect();
+        let calls = trash_commands(paths.iter().map(PathBuf::as_path));
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0][..4], ["gio", "trash", "--", "/t/f0"]);
+        assert_eq!(calls[2].len(), 3 + 50);
+        assert!(trash_commands(std::iter::empty()).is_empty());
+    }
 
     #[test]
     fn untrusted_launcher_becomes_trusted_after_consent() {

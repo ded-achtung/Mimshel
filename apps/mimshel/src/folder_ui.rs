@@ -976,9 +976,7 @@ fn rename_pos(d: &Display, w: &FolderWindow, i: usize, width: u32) -> (i16, i16)
 }
 
 fn trash(paths: &[PathBuf]) {
-    for path in paths {
-        desktop_files::spawn(&["gio", "trash", &path.display().to_string()], None);
-    }
+    desktop_files::trash(paths.iter().map(PathBuf::as_path));
 }
 
 /// Пары «откуда → куда» для переноса в папку `into`: имена не повторяются
