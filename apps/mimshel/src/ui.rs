@@ -337,28 +337,28 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     };
     let (tx, rx) = mpsc::channel();
 
+    // When the config file was last read (see the hot reload watcher).
+    let config_seen = Arc::new(Mutex::new(None));
     if daemon {
         listen(tx.clone())?;
         // Hot reload watcher (v2): if the config file is edited by hand
         // (not via `mimshel set`, which also sends `reload` over the
         // socket), the daemon picks it up within ~2 s without exiting.
-        // Reload itself only reads the file, so it cannot retrigger.
+        // Reload itself only reads the file, so it cannot retrigger. A
+        // reload asked for over the socket records the file's time too, so
+        // the watcher does not read the same change a second time.
         {
             let watch_tx = tx.clone();
-            let watch_path = config_path();
+            let seen = Arc::clone(&config_seen);
             std::thread::spawn(move || {
-                let mut last = watch_path
-                    .as_ref()
-                    .and_then(|p| std::fs::metadata(p).ok())
-                    .and_then(|m| m.modified().ok());
+                *seen.lock().unwrap_or_else(|p| p.into_inner()) = config_mtime();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(2));
-                    let now = watch_path
-                        .as_ref()
-                        .and_then(|p| std::fs::metadata(p).ok())
-                        .and_then(|m| m.modified().ok());
-                    if now != last {
-                        last = now;
+                    let now = config_mtime();
+                    let mut last = seen.lock().unwrap_or_else(|p| p.into_inner());
+                    if now != *last {
+                        *last = now;
+                        drop(last);
                         if watch_tx.send(Msg::Reload).is_err() {
                             break;
                         }
@@ -482,6 +482,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         about: crate::about_ui::AboutUi::new(config.language),
         tx: tx.clone(),
         app_settings: settings,
+        config_seen,
     };
     ui.search.set_language(config.language);
     ui.apps_panel.set_language(config.language);
@@ -579,6 +580,8 @@ struct Ui<'a> {
     /// How app shortcuts are read (`[apps] hide` and `rename`), shared with
     /// the thread that re-reads them when they change (`watch_apps`).
     app_settings: Arc<Mutex<Settings>>,
+    /// The config file's time when it was last read.
+    config_seen: Arc<Mutex<Option<std::time::SystemTime>>>,
 }
 
 impl Ui<'_> {
@@ -766,6 +769,7 @@ impl Ui<'_> {
     /// Already-open terminal windows and already-open popups keep
     /// their old wording until reopened (see docs/i18n.md).
     fn reload(&mut self) -> Result<()> {
+        *self.config_seen.lock().unwrap_or_else(|p| p.into_inner()) = config_mtime();
         let config = load_config();
         let lang = config.language;
         eprintln!("Reloaded language: {}", lang.name());
@@ -1125,6 +1129,13 @@ fn listen(tx: Sender<Msg>) -> Result<()> {
     };
     crate::ipc::start(listener, tx)?;
     Ok(())
+}
+
+/// When the config file was last changed.
+fn config_mtime() -> Option<std::time::SystemTime> {
+    config_path()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
 }
 
 /// Следит за ярлыками и присылает новый список программ.
