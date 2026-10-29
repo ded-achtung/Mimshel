@@ -8,7 +8,7 @@ license.workspace = true
 mimshel-render = { path = "../render" }
 mimshel-core = { path = "../core" }
 tiny-skia = "0.12.0"
-x11rb = { version = "0.14.0", features = ["xkb", "shape", "shm", "render", "xfixes", "randr"] }
+x11rb = { version = "0.14.0", features = ["xkb", "shape", "shm", "render", "xfixes", "randr", "damage"] }
 xkeysym = "0.2.1"
 
 [lints]

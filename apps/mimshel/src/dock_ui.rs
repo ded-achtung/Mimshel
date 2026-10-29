@@ -49,6 +49,9 @@ pub struct DockUi {
     ticking: Arc<AtomicBool>,
     /// Нужно перерисовать (рисуем в [`DockUi::flush`], один раз на пачку событий).
     dirty: bool,
+    /// The dock waits for a new window to draw before sliding away (see
+    /// `update_hide`); look again at this time if it never draws.
+    recheck_at: Option<Instant>,
     /// Меню значка (правый клик) и его окно; `menu_dirty` — перерисовать меню.
     menu: Option<Menu>,
     menu_popup: Popup,
@@ -99,6 +102,7 @@ impl DockUi {
             known: HashMap::new(),
             ticking: Arc::new(AtomicBool::new(false)),
             dirty: true,
+            recheck_at: None,
             menu: None,
             menu_popup: d.create_popup("dock-menu")?,
             menu_dirty: false,
@@ -129,6 +133,7 @@ impl DockUi {
         ui.dock.set_trash(trash_full());
         watch_trash(ui.tx.clone());
         d.watch_root()?;
+        d.watch_new_windows()?;
         ui.place(d)?;
         ui.window.show(d)?;
         ui.refresh_windows(d, None);
@@ -283,6 +288,8 @@ impl DockUi {
                 }
             }
             Event::Expose { .. } => {}
+            // A new window drew for the first time: it may slide the dock away now.
+            Event::Drawn { .. } => self.update_hide(d),
             Event::Configure { window } if window == d.root() => {
                 self.area = d.primary_area();
                 self.dock.set_screen_width(self.area.2);
@@ -689,6 +696,10 @@ impl DockUi {
 
     /// Перерисовать, если что-то изменилось.
     pub fn flush(&mut self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
+        if self.recheck_at.is_some_and(|t| Instant::now() >= t) {
+            self.recheck_at = None;
+            self.update_hide(d);
+        }
         self.update_preview(d, icons)?;
         if self.preview_dirty {
             self.preview_dirty = false;
@@ -742,6 +753,20 @@ impl DockUi {
             }
         }
         Ok(())
+    }
+
+    /// Look at hiding again after `left` (a new window that never draws).
+    fn wake_in(&mut self, left: Duration) {
+        let at = Instant::now() + left;
+        if self.recheck_at.is_some_and(|t| t <= at) {
+            return;
+        }
+        self.recheck_at = Some(at);
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(left);
+            let _ = tx.send(Msg::Tick);
+        });
     }
 
     fn start_ticking(&self) {
@@ -824,6 +849,14 @@ impl DockUi {
             || self.menu.is_some()
             || self.preview.is_some();
         let hide = should_hide(self.hide, bar, active, busy);
+        // A new window that has not drawn yet shows stale screen contents
+        // (Chrome: about a second); sliding the dock away over it left frozen
+        // copies of the dock there. Wait for its first drawing (`Event::Drawn`)
+        // — or for the limit, if it never draws.
+        if hide && let Some(left) = self.dock.active().and_then(|w| d.undrawn_for(w)) {
+            self.wake_in(left);
+            return;
+        }
         let now = Instant::now();
         self.dock.slide_to(hide, now);
         if self.dock.animating(now) {

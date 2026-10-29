@@ -20,7 +20,9 @@ pub use dnd::DragTarget;
 pub use dock::DockWindow;
 pub use selection::SelectionRenderer;
 
+use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 pub use mimshel_core::input::{Key, KeyPress};
@@ -164,6 +166,11 @@ pub enum Property {
 /// при захвате мыши клик мимо окна приходит с координатами за его краями.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
+    /// A new program window drew for the first time
+    /// (`Display::watch_new_windows`).
+    Drawn {
+        window: u32,
+    },
     Key(KeyPress),
     Button {
         window: u32,
@@ -254,6 +261,13 @@ pub struct Display {
     /// The monitors as last passed on to the UI (`Display::monitors_changed`):
     /// RandR also sends events when nothing changed for us.
     monitors_seen: Mutex<Option<windows::MonitorList>>,
+    /// New program windows that have not drawn yet. See
+    /// `Display::watch_new_windows`.
+    undrawn: Mutex<HashMap<u32, windows::Undrawn>>,
+    /// `watch_new_windows` is on: the root's substructure events are ours
+    /// only for that, the rest of them is dropped (`watch_stacking` keeps them).
+    new_windows: AtomicBool,
+    stacking: AtomicBool,
     /// Масштаб (`mimshel_render::scale` при подключении): размеры окон и
     /// координаты мыши снаружи — в точках, серверу — в пикселях.
     scale: f32,
@@ -295,6 +309,9 @@ impl Display {
             shm,
             drop: dnd::DropCell::default(),
             monitors_seen: Mutex::new(None),
+            undrawn: Mutex::new(HashMap::new()),
+            new_windows: AtomicBool::new(false),
+            stacking: AtomicBool::new(false),
             scale: mimshel_render::scale(),
         })
     }
@@ -540,6 +557,36 @@ impl Display {
                     window: e.window,
                     what,
                 }
+            }
+            // A program window created on the root: wait for its first drawing.
+            XEvent::CreateNotify(e) => {
+                if e.parent == self.root && !e.override_redirect {
+                    self.track_new_window(e.window);
+                }
+                Event::Other
+            }
+            XEvent::DamageNotify(e) => match self.damaged(e.damage) {
+                Some(window) => Event::Drawn { window },
+                None => Event::Other,
+            },
+            // A watched new window appeared: is what it shows its own yet?
+            // (Its own map, or the root's substructure one: without a window
+            // manager the window can be mapped before we watch it.)
+            XEvent::MapNotify(e)
+                if (e.event == e.window || e.event == self.root) && self.is_undrawn(e.window) =>
+            {
+                match self.mapped(e.window) {
+                    true => Event::Drawn { window: e.window },
+                    false => Event::Other,
+                }
+            }
+            // The root's substructure events that came only with
+            // `watch_new_windows` (every top-level window moving): not ours.
+            XEvent::ConfigureNotify(e) if self.substructure_only(e.event, e.window) => Event::Other,
+            XEvent::MapNotify(e) if self.substructure_only(e.event, e.window) => Event::Other,
+            XEvent::DestroyNotify(e) if self.substructure_only(e.event, e.window) => {
+                self.forget_new_window(e.window);
+                Event::Other
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
             // Monitors changed (see `Display::watch_root`) — only if they really

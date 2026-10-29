@@ -283,6 +283,116 @@ fn isolated_x11_primary_monitor() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "нужен Xvfb; CI запускает отдельно"]
+fn isolated_x11_new_window_first_draw() -> Result<()> {
+    use x11rb::protocol::xproto::{
+        ConfigureWindowAux, CreateGCAux, CreateWindowAux, Rectangle, WindowClass,
+    };
+    if outer_run("isolated_x11_new_window_first_draw", "800x600x24")? {
+        return Ok(());
+    }
+    let (app, screen) = RustConnection::connect(None)?;
+    let root = app.setup().roots[screen].root;
+    // A window that existed before: it is not watched.
+    let old = app.generate_id()?;
+    app.create_window(
+        0,
+        old,
+        root,
+        0,
+        0,
+        100,
+        100,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new(),
+    )?;
+    app.map_window(old)?;
+    app.get_input_focus()?.reply()?;
+    let d = std::sync::Arc::new(Display::connect()?);
+    d.watch_root()?;
+    d.watch_new_windows()?;
+    let (events, seen) = mpsc::channel();
+    {
+        let d = std::sync::Arc::clone(&d);
+        std::thread::spawn(move || {
+            while let Ok(ev) = d.next_event() {
+                if events.send(ev).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    // A program starting up: a window that draws nothing for now (no
+    // background, like Chrome before its first frame).
+    let window = app.generate_id()?;
+    app.create_window(
+        0,
+        window,
+        root,
+        0,
+        0,
+        400,
+        300,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new(),
+    )?;
+    app.map_window(window)?;
+    app.get_input_focus()?.reply()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while d.undrawn_for(window).is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        d.undrawn_for(window).is_some(),
+        "the new window waits for its first drawing"
+    );
+    // Moving some other window must not reach the parts (the root's
+    // substructure events are only for catching new windows).
+    app.configure_window(old, &ConfigureWindowAux::new().x(50))?;
+    app.get_input_focus()?.reply()?;
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(ev) = seen.try_recv() {
+        assert!(
+            !matches!(ev, mimshel_x11::Event::Configure { window: w } | mimshel_x11::Event::Mapped { window: w } if w == old),
+            "root substructure events are dropped: {ev:?}"
+        );
+    }
+    // The program draws: one Drawn, and the window is not waited for any more.
+    let gc = app.generate_id()?;
+    app.create_gc(gc, window, &CreateGCAux::new().foreground(0x336699))?;
+    app.poly_fill_rectangle(
+        window,
+        gc,
+        &[Rectangle {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        }],
+    )?;
+    app.get_input_focus()?.reply()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut drawn = false;
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match seen.recv_timeout(left) {
+            Ok(mimshel_x11::Event::Drawn { window: w }) if w == window => {
+                drawn = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(drawn, "the first drawing arrives as Event::Drawn");
+    assert!(d.undrawn_for(window).is_none());
+    Ok(())
+}
+
 /// A program dragging files onto our window, speaking XDND on its own
 /// connection (as Thunar does).
 struct Source {

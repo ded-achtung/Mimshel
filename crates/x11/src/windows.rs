@@ -10,10 +10,46 @@ use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
 };
 
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
 use crate::{Display, Result};
 
 /// A rectangle: x, y, width, height.
 type Rect = (i32, i32, u32, u32);
+/// How long to wait for a new window to draw (`Display::undrawn_for`).
+const NEW_WINDOW_DRAW_WAIT: Duration = Duration::from_secs(3);
+
+/// A new window that has not drawn yet (`Display::watch_new_windows`).
+pub(crate) struct Undrawn {
+    damage: u32,
+    since: Instant,
+    /// Points read at map time and their pixels then (window coordinates).
+    samples: Vec<((i16, i16), u32)>,
+}
+
+/// Five points inside a `w`×`h` window, away from the edges (client-side
+/// shadows, title bars): the centre and halfway towards the corners.
+fn sample_points(w: u16, h: u16) -> Vec<(i16, i16)> {
+    let (w, h) = (i32::from(w), i32::from(h));
+    [(1, 1), (1, 1), (3, 1), (1, 3), (3, 3)]
+        .iter()
+        .enumerate()
+        .map(|(i, (fx, fy))| {
+            if i == 0 {
+                (w / 2, h / 2)
+            } else {
+                (w * fx / 4, h * fy / 4)
+            }
+        })
+        .map(|(x, y)| {
+            (
+                x.clamp(0, i16::MAX.into()) as i16,
+                y.clamp(0, i16::MAX.into()) as i16,
+            )
+        })
+        .collect()
+}
 /// Monitors with the «primary» mark, as `Display::monitor_list` reads them.
 pub(crate) type MonitorList = Vec<(bool, Rect)>;
 
@@ -185,12 +221,236 @@ impl Display {
             .reply()?
             .your_event_mask;
         let mask = mine | EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY;
+        self.stacking.store(true, Ordering::Relaxed);
         self.conn.change_window_attributes(
             self.root,
             &ChangeWindowAttributesAux::new().event_mask(mask),
         )?;
         self.conn.flush()?;
         Ok(())
+    }
+
+    /// Know when a new program window draws for the first time
+    /// ([`Event::Drawn`], [`Display::undrawn_for`]). Until then the server
+    /// shows stale screen contents in it — Chrome takes about a second — and
+    /// anything that moves over it (the dock sliding away) leaves frozen
+    /// copies of itself there. Windows are caught at creation, before they
+    /// can draw, so no first drawing is missed. Without DAMAGE — nothing.
+    pub fn watch_new_windows(&self) -> Result<()> {
+        use x11rb::protocol::damage::ConnectionExt as _;
+        let damage = self
+            .conn
+            .damage_query_version(1, 1)
+            .ok()
+            .and_then(|c| c.reply().ok());
+        if damage.is_none() {
+            return Ok(());
+        }
+        let mine = self
+            .conn
+            .get_window_attributes(self.root)?
+            .reply()?
+            .your_event_mask;
+        self.new_windows.store(true, Ordering::Relaxed);
+        self.conn.change_window_attributes(
+            self.root,
+            &ChangeWindowAttributesAux::new().event_mask(mine | EventMask::SUBSTRUCTURE_NOTIFY),
+        )?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// The window was created after `watch_new_windows` and has not drawn
+    /// yet: how much longer to wait for it. A program that draws nothing for
+    /// this long is not waited for any more.
+    pub fn undrawn_for(&self, window: Window) -> Option<Duration> {
+        let mut undrawn = self.undrawn.lock().unwrap_or_else(|p| p.into_inner());
+        let since = undrawn.get(&window)?.since;
+        match NEW_WINDOW_DRAW_WAIT.checked_sub(since.elapsed()) {
+            Some(left) if !left.is_zero() => Some(left),
+            _ => {
+                if let Some(u) = undrawn.remove(&window) {
+                    self.destroy_damage(u.damage);
+                }
+                None
+            }
+        }
+    }
+
+    pub(crate) fn is_undrawn(&self, window: Window) -> bool {
+        self.undrawn
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(&window)
+    }
+
+    /// Caught at creation, before it can draw: watch its drawing (DAMAGE)
+    /// and its own map (to look at what it shows then).
+    pub(crate) fn track_new_window(&self, window: Window) {
+        use x11rb::protocol::damage::{ConnectionExt as _, ReportLevel};
+        let Ok(damage) = self.conn.generate_id() else {
+            return;
+        };
+        if self
+            .conn
+            .damage_create(damage, window, ReportLevel::NON_EMPTY)
+            .is_err()
+        {
+            return;
+        }
+        // Nothing of ours is selected on a window that was just created.
+        let _ = self.conn.change_window_attributes(
+            window,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+        );
+        let _ = self.conn.flush();
+        self.undrawn
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                window,
+                Undrawn {
+                    damage,
+                    since: Instant::now(),
+                    samples: Vec::new(),
+                },
+            );
+    }
+
+    /// The watched window was mapped. Read a few points of it: if they are
+    /// still the window's empty start (fully transparent, or a copy of the
+    /// screen under it), remember them and wait; otherwise it has drawn
+    /// already (an opaque background counts) — forget it, `true`.
+    pub(crate) fn mapped(&self, window: Window) -> bool {
+        let empty = self.empty_start(window);
+        let mut undrawn = self.undrawn.lock().unwrap_or_else(|p| p.into_inner());
+        match empty {
+            Some(samples) => {
+                if let Some(u) = undrawn.get_mut(&window) {
+                    u.samples = samples;
+                }
+                false
+            }
+            None => {
+                if let Some(u) = undrawn.remove(&window) {
+                    self.destroy_damage(u.damage);
+                }
+                true
+            }
+        }
+    }
+
+    /// The window watched by `damage` changed: if any sample point differs
+    /// from its empty start, it drew — forget it, return it.
+    pub(crate) fn damaged(&self, damage: u32) -> Option<Window> {
+        use x11rb::protocol::damage::ConnectionExt as _;
+        let (window, samples) = {
+            let undrawn = self.undrawn.lock().unwrap_or_else(|p| p.into_inner());
+            undrawn
+                .iter()
+                .find_map(|(w, u)| (u.damage == damage).then(|| (*w, u.samples.clone())))?
+        };
+        // Report the next change too.
+        let _ = self.conn.damage_subtract(damage, 0u32, 0u32);
+        if samples.is_empty() {
+            // Its map went by unseen (it was mapped before we watched it):
+            // look at it now — something of its own means it drew.
+            return self.mapped(window).then_some(window);
+        }
+        let now = self.read_points(window, &samples.iter().map(|s| s.0).collect::<Vec<_>>());
+        let drawn = now.len() != samples.len() || now.iter().zip(&samples).any(|(n, s)| *n != s.1);
+        if !drawn {
+            return None;
+        }
+        if let Some(u) = self
+            .undrawn
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&window)
+        {
+            self.destroy_damage(u.damage);
+        }
+        Some(window)
+    }
+
+    pub(crate) fn forget_new_window(&self, window: Window) {
+        // A destroyed window takes its DAMAGE object with it.
+        self.undrawn
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&window);
+    }
+
+    /// The window's sample points and pixels when it still shows nothing of
+    /// its own; `None` when it already shows something (or cannot be read).
+    fn empty_start(&self, window: Window) -> Option<Vec<((i16, i16), u32)>> {
+        let geo = self.conn.get_geometry(window).ok()?.reply().ok()?;
+        let at = self
+            .conn
+            .translate_coordinates(window, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        let points = sample_points(geo.width, geo.height);
+        let mine = self.read_points(window, &points);
+        if mine.len() != points.len() {
+            return None;
+        }
+        let empty = if geo.depth == 32 {
+            // A window with transparency starts fully transparent.
+            mine.iter().all(|p| p >> 24 == 0)
+        } else {
+            // Without a background it starts as a copy of the screen under it.
+            let screen: Vec<(i16, i16)> = points
+                .iter()
+                .map(|(x, y)| (x + at.dst_x, y + at.dst_y))
+                .collect();
+            let under = self.read_root_points(&screen);
+            under.len() == mine.len()
+                && under
+                    .iter()
+                    .zip(&mine)
+                    .all(|(a, b)| a & 0xff_ffff == b & 0xff_ffff)
+        };
+        empty.then(|| points.into_iter().zip(mine).collect())
+    }
+
+    fn read_points(&self, drawable: Window, points: &[(i16, i16)]) -> Vec<u32> {
+        use x11rb::protocol::xproto::ImageFormat;
+        let cookies: Vec<_> = points
+            .iter()
+            .filter_map(|&(x, y)| {
+                self.conn
+                    .get_image(ImageFormat::Z_PIXMAP, drawable, x, y, 1, 1, !0)
+                    .ok()
+            })
+            .collect();
+        cookies
+            .into_iter()
+            .filter_map(|c| c.reply().ok())
+            .filter_map(|img| {
+                let d = img.data.get(..4)?;
+                Some(u32::from_le_bytes([d[0], d[1], d[2], d[3]]))
+            })
+            .collect()
+    }
+
+    fn read_root_points(&self, points: &[(i16, i16)]) -> Vec<u32> {
+        self.read_points(self.root, points)
+    }
+
+    /// A root substructure event we only get because of `watch_new_windows`.
+    pub(crate) fn substructure_only(&self, event: Window, window: Window) -> bool {
+        event == self.root
+            && window != self.root
+            && self.new_windows.load(Ordering::Relaxed)
+            && !self.stacking.load(Ordering::Relaxed)
+    }
+
+    fn destroy_damage(&self, damage: u32) {
+        use x11rb::protocol::damage::ConnectionExt as _;
+        let _ = self.conn.damage_destroy(damage);
+        let _ = self.conn.flush();
     }
 
     /// Получать события об изменениях окна программы (свёрнуто, заголовок,
