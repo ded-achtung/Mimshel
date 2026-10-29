@@ -133,8 +133,10 @@ the environment; the service links the whole `setup` crate.
 ### Screen and windows
 
 - The menu bar, the dock, notifications and Search live on the **primary monitor**
-  (`Display::primary_area`: RandR primary, else the first monitor). Struts reserve only
-  that monitor's columns. RandR changes arrive as `Event::Configure` of the root. The
+  (`Display::primary_area`: RandR primary, else the first monitor). The menu bar's strut
+  reserves only that monitor's columns. The dock reserves no space, even with
+  `dock.hide = never`: maximized windows take the whole height under it (user,
+  2026-10-29). RandR changes arrive as `Event::Configure` of the root. The
   desktop draws wallpapers per monitor; desktop icons are on the first monitor (to be
   decided after user tests); the Apps window covers the whole screen.
 - Menu bar icons (tray, layout, volume, battery, bell — not the Control Center icon or the

@@ -906,24 +906,17 @@ impl DockUi {
         (left + x, y)
     }
 
-    /// Окно дока у нижнего края; при «никогда не прятать» — резерв места,
-    /// чтобы развёрнутые окна заканчивались над доком.
+    /// The dock window at the bottom edge. It reserves no space, even when
+    /// it never hides: maximized windows take the whole height and the
+    /// dock stays above them (the user's choice, 2026-10-29; macOS would
+    /// stop them above the dock). Clearing the strut also drops one an
+    /// older build set.
     fn place(&self, d: &Display) -> Result<()> {
         let (ax, ay, aw, ah) = self.area;
         let h = self.dock.window_height();
         self.window
             .set_geometry(d, ax, ay + ah as i32 - h as i32, aw, h)?;
-        let bar = self.dock.bar_rect(ah);
-        if self.hide == DockHide::Never {
-            // The bottom strut counts from the bottom of the whole screen:
-            // a shorter monitor next to a taller one reserves more.
-            let (_, screen_h) = d.screen_size();
-            let reserve = (i32::from(screen_h) - (ay + bar.y)).max(0) as u32;
-            let x0 = (ax + bar.x).max(0) as u32;
-            self.window.set_strut(d, reserve, x0, x0 + bar.w)?;
-        } else {
-            self.window.set_strut(d, 0, 0, 0)?;
-        }
+        self.window.set_strut(d, 0, 0, 0)?;
         Ok(())
     }
 
