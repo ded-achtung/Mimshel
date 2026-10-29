@@ -310,9 +310,20 @@ impl DockUi {
                     self.close_preview(d)?;
                     self.refresh_windows(d, None)
                 }
-                Property::State | Property::Class | Property::Title => {
-                    self.refresh_windows(d, Some(window))
+                // Programs retitle their windows all the time (a terminal
+                // with a spinner: every second). Matching windows to apps
+                // does not look at titles: only remember the new one, and
+                // draw again only if a window without a shortcut shows it.
+                Property::Title => {
+                    let title = d.window_title(window);
+                    if let Some(Some((info, _))) = self.known.get_mut(&window) {
+                        info.title = title.clone();
+                    }
+                    if !self.dock.set_title(window, title) {
+                        return Ok(());
+                    }
                 }
+                Property::State | Property::Class => self.refresh_windows(d, Some(window)),
                 Property::ActiveWindow => {
                     self.dock.set_active(d.active_window());
                     self.update_hide(d);

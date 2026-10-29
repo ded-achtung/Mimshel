@@ -555,6 +555,15 @@ impl Display {
 
     /// Сведения об окне — или `None`, если в доке его показывать не надо
     /// (панели, меню, окна с пометкой «не в панели задач»).
+    /// The window's title (`_NET_WM_NAME`, else `WM_NAME`); "" if none.
+    pub fn window_title(&self, w: Window) -> String {
+        let a = &self.atoms;
+        self.text(w, a._NET_WM_NAME, a.UTF8_STRING)
+            .or_else(|| self.text(w, AtomEnum::WM_NAME, AtomEnum::STRING))
+            .map(|t| String::from_utf8_lossy(&t).into_owned())
+            .unwrap_or_default()
+    }
+
     pub fn window_info(&self, w: Window) -> Option<WindowInfo> {
         let a = &self.atoms;
         let types = self.cardinals(w, a._NET_WM_WINDOW_TYPE, AtomEnum::ATOM);
@@ -572,11 +581,7 @@ impl Display {
             .map(|p| String::from_utf8_lossy(p).into_owned());
         let instance = parts.next().unwrap_or_default();
         let class = parts.next().unwrap_or_default();
-        let title = self
-            .text(w, a._NET_WM_NAME, a.UTF8_STRING)
-            .or_else(|| self.text(w, AtomEnum::WM_NAME, AtomEnum::STRING))
-            .map(|t| String::from_utf8_lossy(&t).into_owned())
-            .unwrap_or_default();
+        let title = self.window_title(w);
         // Свёрнуто: так помечает EWMH; WM_STATE (ICCCM) — запасной признак.
         let minimized = state.contains(&a._NET_WM_STATE_HIDDEN)
             || self.cardinals(w, a.WM_STATE, a.WM_STATE).first() == Some(&ICONIC_STATE);

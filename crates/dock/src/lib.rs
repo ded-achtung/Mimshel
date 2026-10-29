@@ -152,6 +152,23 @@ impl Dock {
         self.rebuild();
     }
 
+    /// A window's new title. Only a window without a shortcut shows it (as
+    /// its icon's name); `true` — the dock looks different now.
+    pub fn set_title(&mut self, window: u32, title: String) -> bool {
+        let Some((w, app)) = self.windows.iter_mut().find(|(w, _)| w.id == window) else {
+            return false;
+        };
+        if w.title == title {
+            return false;
+        }
+        w.title = title;
+        let shown = app.is_none();
+        if shown {
+            self.rebuild();
+        }
+        shown
+    }
+
     /// Окна без ярлыка, для которых нужна иконка самого окна.
     pub fn windows_without_icon(&self) -> Vec<u32> {
         self.windows
@@ -590,6 +607,31 @@ pub(crate) mod tests {
         );
         assert_eq!(d.items[2].windows, [11]);
         assert_eq!(d.windows_without_icon(), [12]);
+    }
+
+    #[test]
+    fn a_new_title_redraws_only_a_window_without_a_shortcut() {
+        let mut d = dock();
+        d.set_windows(vec![
+            (window(11, "org.xfce.mousepad", "Org.xfce.mousepad"), None),
+            (window(12, "xeyes", "XEyes"), None),
+        ]);
+        // Mousepad's icon is its shortcut's: the title is not shown.
+        assert!(!d.set_title(11, "notes.txt — Mousepad".into()));
+        assert_eq!(
+            d.window(11).map(|w| w.title.as_str()),
+            Some("notes.txt — Mousepad")
+        );
+        // xeyes has no shortcut: its icon is named after the title.
+        assert!(d.set_title(12, "Eyes".into()));
+        let item = d
+            .items
+            .iter()
+            .find(|it| it.windows == [12])
+            .expect("its icon");
+        assert_eq!(item.name, "Eyes");
+        assert!(!d.set_title(12, "Eyes".into()), "the same title again");
+        assert!(!d.set_title(99, "gone".into()));
     }
 
     #[test]
