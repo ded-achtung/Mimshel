@@ -11,8 +11,8 @@ use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use mimshel_apps::{App, Settings, Watcher};
@@ -403,13 +403,13 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         None
     };
 
-    let settings = app_settings(&config);
-    let all_apps = mimshel_apps::load_all(&settings);
+    let settings = Arc::new(Mutex::new(app_settings(&config)));
+    let all_apps = mimshel_apps::load_all(&settings.lock().unwrap_or_else(|p| p.into_inner()));
     let apps = visible(&all_apps);
     step("программы");
     let mut icons = Icons::new(&config.icon_theme);
     if daemon {
-        watch_apps(settings, tx.clone());
+        watch_apps(Arc::clone(&settings), tx.clone());
     }
     // Своя строка меню — только у службы и только если выбрана вместо панели
     // Xfce (`MIMSHEL_MENUBAR=1` — включить для проверки, не трогая настройки).
@@ -481,6 +481,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         notify,
         about: crate::about_ui::AboutUi::new(config.language),
         tx: tx.clone(),
+        app_settings: settings,
     };
     ui.search.set_language(config.language);
     ui.apps_panel.set_language(config.language);
@@ -575,6 +576,9 @@ struct Ui<'a> {
     about: crate::about_ui::AboutUi,
     /// Для потоков, которые служба запускает сама (сведения «Об этом компьютере»).
     tx: Sender<Msg>,
+    /// How app shortcuts are read (`[apps] hide` and `rename`), shared with
+    /// the thread that re-reads them when they change (`watch_apps`).
+    app_settings: Arc<Mutex<Settings>>,
 }
 
 impl Ui<'_> {
@@ -781,10 +785,28 @@ impl Ui<'_> {
             desktop.set_language(self.display, lang, &config.wallpaper);
         }
         if let Some(folders) = &mut self.folders {
-            folders.set_language(lang);
+            folders.set_language(self.display, lang)?;
         }
         self.about.set_language(lang);
         self.terminal = terminal_command(&config);
+        // The program names we give (`[apps] rename`: «Проводник», "File
+        // Manager") follow the language; the list is read again off the main
+        // thread and comes back as `Msg::Apps`.
+        let new = app_settings(&config);
+        let changed = {
+            let mut current = self.app_settings.lock().unwrap_or_else(|p| p.into_inner());
+            let changed = current.rename != new.rename || current.hide != new.hide;
+            if changed {
+                *current = new.clone();
+            }
+            changed
+        };
+        if changed {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Msg::Apps(mimshel_apps::load_all(&new)));
+            });
+        }
         if self.shown.is_some() {
             self.redraw()?;
         }
@@ -1106,8 +1128,8 @@ fn listen(tx: Sender<Msg>) -> Result<()> {
 }
 
 /// Следит за ярлыками и присылает новый список программ.
-fn watch_apps(settings: Settings, tx: Sender<Msg>) {
-    let mut watcher = match Watcher::new(&settings) {
+fn watch_apps(settings: Arc<Mutex<Settings>>, tx: Sender<Msg>) {
+    let mut watcher = match Watcher::new(&settings.lock().unwrap_or_else(|p| p.into_inner())) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("Не удалось следить за ярлыками: {e}");
@@ -1116,10 +1138,9 @@ fn watch_apps(settings: Settings, tx: Sender<Msg>) {
     };
     std::thread::spawn(move || {
         while watcher.wait().is_ok() {
-            if tx
-                .send(Msg::Apps(mimshel_apps::load_all(&settings)))
-                .is_err()
-            {
+            // The settings as they are now: a reload may have changed them.
+            let now = settings.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            if tx.send(Msg::Apps(mimshel_apps::load_all(&now))).is_err() {
                 break;
             }
         }

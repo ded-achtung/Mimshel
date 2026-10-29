@@ -393,7 +393,7 @@ impl<'a> LockUi<'a> {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() / 60)
             .unwrap_or(0);
-        let (time, date) = clock();
+        let (time, date) = clock(self.language);
         self.time = time;
         self.date = date;
     }
@@ -411,15 +411,21 @@ impl Drop for LockUi<'_> {
     }
 }
 
-/// Время и дата одной командой `date` (язык — из окружения сеанса).
-fn clock() -> (String, String) {
+/// Time and date in one `date` run; weekday and month names in `lang`
+/// (`mimshel_core::dates`).
+fn clock(lang: Language) -> (String, String) {
+    use mimshel_core::dates;
     let out = Command::new("date")
-        .arg("+%H:%M\n%A, %-d %B")
+        .arg(dates::prepare(&format!(
+            "+%H:%M\n{}",
+            dates::today_format(lang)
+        )))
         .stdin(Stdio::null())
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
+    let out = dates::fill(&out, lang);
     let mut lines = out.lines();
     (
         lines.next().unwrap_or("").to_string(),
@@ -566,7 +572,7 @@ pub fn snapshot(text: &str, file: &str) -> mimshel_x11::Result<()> {
     let layout = Layout::new(i64::from(w), i64::from(h));
     let bg = background(&config.wallpaper, &layout).unwrap_or_else(|| dark_frame(w, h));
     let mut fonts = Fonts::new(&config.font);
-    let (time, date) = clock();
+    let (time, date) = clock(config.language);
     let wrong = text.starts_with('!');
     let typed = text.strip_prefix('!').unwrap_or(text);
     let state = Frame {

@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Sender, SyncSender};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use mimshel_apps::App;
@@ -141,8 +141,13 @@ pub struct MenubarUi {
     network_panel: Option<NetworkPanel>,
     net: Sender<NetCmd>,
     net_state: Option<NetState>,
-    /// Названия месяцев и дней на языке системы (читаются один раз).
-    calendar_names: Arc<OnceLock<mimshel_menubar::Names>>,
+    /// Whether the system's week starts on Monday (read once, off the
+    /// main thread: it takes a run of `locale`).
+    monday_first: Arc<OnceLock<bool>>,
+    /// `[menubar] clock_format` and the language the clock thread writes
+    /// the names in (changed by `set_language`).
+    clock_format: String,
+    clock_language: Arc<Mutex<mimshel_core::i18n::Language>>,
     /// Today, refreshed with the clock every minute.
     today: Today,
     popup: Popup,
@@ -173,6 +178,13 @@ impl MenubarUi {
     pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
         self.language = lang;
         self.dirty = true;
+        // The clock now, not at the next minute.
+        *self
+            .clock_language
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = lang;
+        let (text, _, today) = clock(&self.clock_format, lang);
+        self.set_clock(text, today);
         self.popup_dirty = true;
         if let Some(p) = &mut self.control_panel {
             p.set_language(lang);
@@ -224,7 +236,9 @@ impl MenubarUi {
             network_panel: None,
             net: status::network_worker(tx.clone()),
             net_state: None,
-            calendar_names: Arc::new(OnceLock::new()),
+            monday_first: Arc::new(OnceLock::new()),
+            clock_format: config.clock_format.clone(),
+            clock_language: Arc::new(Mutex::new(config.language)),
             today: (
                 mimshel_menubar::Date {
                     year: 1970,
@@ -250,20 +264,22 @@ impl MenubarUi {
         d.watch_keyboard()?;
         ui.read_layouts(d);
         ui.bar.app_name = ui.app_name(d);
-        let (text, _, today) = clock(&config.clock_format);
+        let (text, _, today) = clock(&config.clock_format, config.language);
         ui.bar.clock = text;
         ui.today = today;
-        // The calendar's month and weekday names take three runs of `date`
-        // and `locale`: fetched once, off the main thread.
         {
-            let names = Arc::clone(&ui.calendar_names);
+            let monday_first = Arc::clone(&ui.monday_first);
             std::thread::spawn(move || {
-                let _ = names.set(calendar_names());
+                let _ = monday_first.set(system_monday_first());
             });
         }
         ui.bar.control = true;
         ui.refresh_hidden();
-        watch_clock(config.clock_format.clone(), tx.clone());
+        watch_clock(
+            config.clock_format.clone(),
+            Arc::clone(&ui.clock_language),
+            tx.clone(),
+        );
         status::watch_sound(tx.clone());
         status::watch_battery(tx.clone());
         status::watch_dnd(tx.clone());
@@ -1200,11 +1216,9 @@ impl MenubarUi {
     }
 
     fn open_calendar(&mut self, d: &Display, x: f32) -> Result<()> {
-        let names = match self.calendar_names.get() {
-            Some(names) => names.clone(),
-            // Opened in the first moments after start: read them now.
-            None => self.calendar_names.get_or_init(calendar_names).clone(),
-        };
+        // Opened in the first moments after start: read it now.
+        let monday_first = *self.monday_first.get_or_init(system_monday_first);
+        let names = calendar_names(self.language, monday_first);
         let (today, text) = self.today.clone();
         let panel = CalendarPanel::new(today, text, names);
         let size = panel.size();
@@ -1835,30 +1849,6 @@ fn run(command: &[String]) {
     }
 }
 
-/// Часы по формату `date` (на языке сеанса) и сколько секунд прошло в
-/// нынешней минуте.
-/// Вывод `date` с языком сеанса (`input` — строки для `-f -`).
-fn date(args: &[&str], input: &str) -> String {
-    use std::io::Write;
-    let child = Command::new("date")
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else {
-        return String::new();
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
-    }
-    child
-        .wait_with_output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default()
-}
-
 /// С большой буквы («октябрь» → «Октябрь»).
 fn capitalize(s: &str) -> String {
     let mut c = s.trim().chars();
@@ -1867,39 +1857,28 @@ fn capitalize(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Названия месяцев и дней недели на языке системы; не вышло — русские.
-fn calendar_names() -> mimshel_menubar::Names {
-    let mut names = mimshel_menubar::Names::default();
-    let months: Vec<String> = date(
-        &["-f", "-", "+%OB"],
-        &(1..=12)
-            .map(|m| format!("2026-{m:02}-01\n"))
-            .collect::<String>(),
-    )
-    .lines()
-    .map(capitalize)
-    .collect();
-    if let Ok(m) = <[String; 12]>::try_from(months) {
-        names.months = m;
+/// Month and weekday names for the calendar in the interface language.
+fn calendar_names(
+    lang: mimshel_core::i18n::Language,
+    monday_first: bool,
+) -> mimshel_menubar::Names {
+    use mimshel_core::dates::{Month, month, weekday};
+    mimshel_menubar::Names {
+        months: std::array::from_fn(|i| month(lang, i as u32 + 1, Month::Alone).to_string()),
+        weekdays: std::array::from_fn(|i| weekday(lang, i as u32 + 1, false).to_string()),
+        monday_first,
     }
-    // 7.12.2026 — понедельник.
-    let days: Vec<String> = date(
-        &["-f", "-", "+%a"],
-        &(7..=13)
-            .map(|d| format!("2026-12-{d:02}\n"))
-            .collect::<String>(),
-    )
-    .lines()
-    .map(capitalize)
-    .collect();
-    if let Ok(d) = <[String; 7]>::try_from(days) {
-        names.weekdays = d;
-    }
-    // locale: 1 — неделя с воскресенья, 2 — с понедельника.
-    if let Ok(out) = Command::new("locale").arg("first_weekday").output() {
-        names.monday_first = String::from_utf8_lossy(&out.stdout).trim() != "1";
-    }
-    names
+}
+
+/// Whether the system's week starts on Monday (`locale first_weekday`: 1 —
+/// Sunday, 2 — Monday).
+fn system_monday_first() -> bool {
+    Command::new("locale")
+        .arg("first_weekday")
+        .output()
+        .map_or(true, |out| {
+            String::from_utf8_lossy(&out.stdout).trim() != "1"
+        })
 }
 
 /// Сегодня: дата и она же словами («Пятница, 23 октября»).
@@ -1921,16 +1900,19 @@ fn parse_today(nums: &str, text: &str) -> Today {
 }
 
 /// One `date` run: the clock text, seconds into the minute, and today for
-/// the calendar (so opening it runs nothing on the main thread).
-fn clock(format: &str) -> (String, u64, Today) {
+/// the calendar (so opening it runs nothing on the main thread). Weekday
+/// and month names are in `lang` (`mimshel_core::dates`).
+fn clock(format: &str, lang: mimshel_core::i18n::Language) -> (String, u64, Today) {
+    use mimshel_core::dates;
+    let words = dates::today_format(lang);
     let out = Command::new("date")
-        .arg(format!("+%S|%Y %m %d|%A, %-d %B|{format}"))
+        .arg(dates::prepare(&format!("+%S|%Y %m %d|{words}|{format}")))
         .stdin(Stdio::null())
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
-    parse_clock(out.trim_end())
+    parse_clock(&dates::fill(out.trim_end(), lang))
 }
 
 /// What the calendar shows as today: the date and the same in words.
@@ -1948,14 +1930,15 @@ fn parse_clock(out: &str) -> (String, u64, Today) {
 }
 
 /// Обновлять часы в начале каждой минуты.
-fn watch_clock(format: String, tx: Sender<Msg>) {
+fn watch_clock(format: String, lang: Arc<Mutex<mimshel_core::i18n::Language>>, tx: Sender<Msg>) {
+    let lang = move || *lang.lock().unwrap_or_else(|p| p.into_inner());
     std::thread::spawn(move || {
         // Один запуск `date` в минуту: предыдущий ответ сообщает, сколько
         // секунд прошло в текущей минуте, — по ним и спим до границы.
         // `sleep` does not count time spent suspended, so it sleeps at most
         // CLOCK_STEP at a time and checks the wall-clock minute: after a
         // resume the clock is right within seconds, not up to a minute late.
-        let (_, mut secs, _) = clock(&format);
+        let (_, mut secs, _) = clock(&format, lang());
         let mut shown = wall_minute();
         loop {
             let left = Duration::from_secs(60 - secs.min(59)) + Duration::from_millis(50);
@@ -1963,7 +1946,7 @@ fn watch_clock(format: String, tx: Sender<Msg>) {
             while started.elapsed() < left && wall_minute() == shown {
                 std::thread::sleep(CLOCK_STEP.min(left.saturating_sub(started.elapsed())));
             }
-            let (text, s, today) = clock(&format);
+            let (text, s, today) = clock(&format, lang());
             secs = s;
             shown = wall_minute();
             if tx.send(Msg::Clock(text, today)).is_err() {

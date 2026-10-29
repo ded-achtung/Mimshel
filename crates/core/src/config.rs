@@ -172,18 +172,7 @@ impl Default for Config {
             .to_vec(),
             dgpu_apps: Vec::new(),
             no_dgpu_apps: Vec::new(),
-            rename_apps: {
-                let lang = Language::Auto.resolve();
-                let tr = |k: &'static str| crate::i18n::t(lang, k).to_string();
-                vec![
-                    ("thunar".to_string(), tr("app.file_manager")),
-                    ("mimshel-terminal".to_string(), tr("app.terminal")),
-                    ("xfce4-terminal".to_string(), tr("app.xfce_terminal")),
-                    ("org.xfce.mousepad".to_string(), tr("app.text_editor")),
-                    ("xfce-settings-manager".to_string(), tr("app.settings")),
-                    ("xfce4-taskmanager".to_string(), tr("app.task_manager")),
-                ]
-            },
+            rename_apps: default_renames(Language::Auto),
         }
     }
 }
@@ -435,7 +424,13 @@ impl Config {
                         .then(|| (app.to_string(), name.to_string()))
                 })
                 .collect();
-            c.rename_apps = renames;
+            c.rename_apps = renames
+                .into_iter()
+                .map(|(app, name)| {
+                    let name = follow_language(&app, name, c.language);
+                    (app, name)
+                })
+                .collect();
         }
         // Language-aware defaults: if the file does not set a lock placeholder
         // or app renames, they follow [look] language (not just system locale).
@@ -445,16 +440,7 @@ impl Config {
                 crate::i18n::t(c.language.resolve(), "lock.enter_password").to_string();
         }
         if get("apps", "rename").is_none() {
-            let lang = c.language.resolve();
-            let tr = |k: &'static str| crate::i18n::t(lang, k).to_string();
-            c.rename_apps = vec![
-                ("thunar".to_string(), tr("app.file_manager")),
-                ("mimshel-terminal".to_string(), tr("app.terminal")),
-                ("xfce4-terminal".to_string(), tr("app.xfce_terminal")),
-                ("org.xfce.mousepad".to_string(), tr("app.text_editor")),
-                ("xfce-settings-manager".to_string(), tr("app.settings")),
-                ("xfce4-taskmanager".to_string(), tr("app.task_manager")),
-            ];
+            c.rename_apps = default_renames(c.language);
         }
         for (name, old, _) in PARTS {
             // «mimshel» — наша часть; прежнее «shell» тоже.
@@ -627,6 +613,42 @@ fn scale_value(v: &Value) -> Option<Option<f32>> {
 }
 
 /// Инлайн-таблица `rename` для текста настроек: { ярлык = "Имя", … }.
+/// The programs we name ourselves (`[apps] rename` by default): shortcut
+/// id and the language table key of the name.
+const DEFAULT_RENAMES: [(&str, &str); 6] = [
+    ("thunar", "app.file_manager"),
+    ("mimshel-terminal", "app.terminal"),
+    ("xfce4-terminal", "app.xfce_terminal"),
+    ("org.xfce.mousepad", "app.text_editor"),
+    ("xfce-settings-manager", "app.settings"),
+    ("xfce4-taskmanager", "app.task_manager"),
+];
+
+fn default_renames(lang: Language) -> Vec<(String, String)> {
+    DEFAULT_RENAMES
+        .iter()
+        .map(|(app, key)| (app.to_string(), crate::i18n::t(lang, key).to_string()))
+        .collect()
+}
+
+/// A name from `[apps] rename` in `lang`: our own default name for that
+/// program in any language (a config file written from the defaults keeps
+/// them — «Проводник») follows the language like the default does; a name
+/// the user chose stays as it is.
+fn follow_language(app: &str, name: String, lang: Language) -> String {
+    let Some((_, key)) = DEFAULT_RENAMES.iter().find(|(id, _)| *id == app) else {
+        return name;
+    };
+    let ours = [Language::En, Language::Ru, Language::Zh, Language::ZhTw]
+        .iter()
+        .any(|&l| crate::i18n::t(l, key) == name);
+    if ours {
+        crate::i18n::t(lang, key).to_string()
+    } else {
+        name
+    }
+}
+
 fn renames_to_toml(renames: &[(String, String)]) -> String {
     let s = |v: &str| Value::from(v).to_string();
     let items: Vec<String> = renames
@@ -1401,22 +1423,43 @@ mod tests {
     }
 
     #[test]
+    fn default_renames_in_the_file_follow_the_language() {
+        // A file written from the Russian defaults, with one name of the
+        // user's own.
+        let file = |lang: &str| {
+            format!(
+                "[look]\nlanguage = \"{lang}\"\n[apps]\nrename = {{ thunar = \"Проводник\", \
+                 \"org.xfce.mousepad\" = \"Мой блокнот\", xfce4-terminal = \"Xfce 终端\" }}\n"
+            )
+        };
+        let names = |lang: &str| Config::from_toml(&file(lang)).rename_apps;
+        assert_eq!(
+            names("en"),
+            [
+                ("thunar".to_string(), "File Manager".to_string()),
+                ("org.xfce.mousepad".to_string(), "Мой блокнот".to_string()),
+                ("xfce4-terminal".to_string(), "Xfce Terminal".to_string()),
+            ]
+        );
+        assert_eq!(names("ru")[0].1, "Проводник");
+        assert_eq!(names("zh_TW")[0].1, "檔案管理員");
+        assert_eq!(names("zh")[2].1, "Xfce 终端");
+    }
+
+    #[test]
     fn lock_hide_rename_from_command() {
         assert!(setting_value("lock.idle_minutes", "0").is_err());
         assert!(setting_value("lock.idle_minutes", "601").is_err());
         assert!(setting_value("lock.idle_minutes", "30").is_ok());
         assert!(setting_value("lock.placeholder", "").is_err());
         let hide = setting_value("apps.hide", "a, b").unwrap();
-        let rename = setting_value("apps.rename", "thunar: Проводник, : bad").unwrap();
+        let rename = setting_value("apps.rename", "thunar: Файлы, : bad").unwrap();
         let text = set_value("[apps]\n", "apps", "hide", hide).unwrap();
         let text = set_value(&text, "apps", "rename", rename).unwrap();
         assert!(toml_error(&text).is_none(), "{text}");
         let c = Config::from_toml(&text);
         assert_eq!(c.hide_apps, ["a", "b"]);
-        assert_eq!(
-            c.rename_apps,
-            [("thunar".to_string(), "Проводник".to_string())]
-        );
+        assert_eq!(c.rename_apps, [("thunar".to_string(), "Файлы".to_string())]);
         // Пустые значения — сброс списков.
         let text = set_value(
             &text,

@@ -149,13 +149,16 @@ impl FolderUi {
     /// Hot reload (v2): switch language without restarting the daemon.
     /// Places are rebuilt and every open folder window is marked dirty,
     /// so the next flush redraws sidebar, title and status bar.
-    pub fn set_language(&mut self, lang: mimshel_core::i18n::Language) {
+    pub fn set_language(&mut self, d: &Display, lang: mimshel_core::i18n::Language) -> Result<()> {
         self.language = lang;
         self.update_places();
         for w in &mut self.windows {
             w.view.set_language(lang);
+            // The title names the file manager too ("ded — File Manager").
+            w.win.set_title(d, &w.view.title())?;
             w.dirty = true;
         }
+        Ok(())
     }
 
     /// Значки окна папки — заранее: первое окно открывается без задержки.

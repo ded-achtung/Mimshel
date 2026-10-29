@@ -32,6 +32,11 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 - A panic on any thread of the service restarts it (it used to leave a frozen dock or menu bar).
 - A hung program no longer freezes the global menu or the tray (D-Bus calls time out after 3 s).
 - `mimshel set look.wallpaper` sets the Xfce desktop and lock background again.
+- Dock: no more stripes or a ghost of the icon when a program like Chrome opens over it.
+  The dock keeps still until the new window has drawn, instead of waiting a fixed time.
+- Switching the language now also switches the clock, the calendar, the lock screen date,
+  the names Mimshel gives programs («Проводник» → File Manager) and the titles of open folder
+  windows.
 - The menu bar clock is right within seconds after waking from sleep.
 - Folder window: dragging onto another disk copies instead of moving.
 - A dead drag source no longer blocks every later drop until a restart.
