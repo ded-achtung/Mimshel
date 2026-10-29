@@ -314,6 +314,12 @@ impl Display {
             .max()
     }
 
+    /// The window was made by this connection (its id is from our range).
+    fn is_own(&self, window: Window) -> bool {
+        let setup = self.conn.setup();
+        window & !setup.resource_id_mask == setup.resource_id_base
+    }
+
     pub(crate) fn is_undrawn(&self, window: Window) -> bool {
         self.undrawn
             .lock()
@@ -325,6 +331,13 @@ impl Display {
     /// and its own map (to look at what it shows then).
     pub(crate) fn track_new_window(&self, window: Window) {
         use x11rb::protocol::damage::{ConnectionExt as _, ReportLevel};
+        // Our own windows (folder windows, About, Settings popups…) are
+        // not waited for: they have an opaque background from the start.
+        // And selecting on them below would replace the events they asked
+        // for — a folder window that ignored every click (lesson 11).
+        if self.is_own(window) {
+            return;
+        }
         let Ok(damage) = self.conn.generate_id() else {
             return;
         };
@@ -335,10 +348,17 @@ impl Display {
         {
             return;
         }
-        // Nothing of ours is selected on a window that was just created.
+        // Added to what this connection already selects on it (lessons 11
+        // and 16), never in place of it.
+        let mine = self
+            .conn
+            .get_window_attributes(window)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or(EventMask::NO_EVENT, |a| a.your_event_mask);
         let _ = self.conn.change_window_attributes(
             window,
-            &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+            &ChangeWindowAttributesAux::new().event_mask(mine | EventMask::STRUCTURE_NOTIFY),
         );
         let _ = self.conn.flush();
         self.undrawn

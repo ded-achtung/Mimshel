@@ -284,6 +284,49 @@ fn isolated_x11_primary_monitor() -> Result<()> {
 }
 
 #[test]
+#[ignore]
+fn isolated_x11_own_windows_keep_their_events() -> Result<()> {
+    use x11rb::protocol::xproto::EventMask;
+    if outer_run("isolated_x11_own_windows_keep_their_events", "800x600x24")? {
+        return Ok(());
+    }
+    // The service watches new windows; then it opens a folder window of its
+    // own. Watching must not take that window's clicks and keys away (it
+    // did: every folder window opened after the start ignored all input).
+    let d = std::sync::Arc::new(Display::connect()?);
+    d.watch_root()?;
+    d.watch_new_windows()?;
+    {
+        let d = std::sync::Arc::clone(&d);
+        std::thread::spawn(move || while d.next_event().is_ok() {});
+    }
+    let win = d.create_app_window("own-test", "Own", (300, 200), (100, 100))?;
+    win.show(&d)?;
+    d.sync()?;
+    std::thread::sleep(Duration::from_millis(300));
+    let (app, _) = RustConnection::connect(None)?;
+    let masks = app
+        .get_window_attributes(win.id())?
+        .reply()?
+        .all_event_masks;
+    for wanted in [
+        EventMask::BUTTON_PRESS,
+        EventMask::KEY_PRESS,
+        EventMask::EXPOSURE,
+    ] {
+        assert!(
+            masks.contains(wanted),
+            "{wanted:?} still selected: {masks:?}"
+        );
+    }
+    assert!(
+        d.undrawn_for(win.id()).is_none(),
+        "own windows are not waited for"
+    );
+    Ok(())
+}
+
+#[test]
 #[ignore = "нужен Xvfb; CI запускает отдельно"]
 fn isolated_x11_new_window_first_draw() -> Result<()> {
     use x11rb::protocol::xproto::{
