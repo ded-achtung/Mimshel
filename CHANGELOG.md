@@ -12,6 +12,11 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   power and Bluetooth open the Xfce dialogs. Most changes restart Mimshel for a second, and
   the window stays open; language and wallpaper switch on the fly. Theme lists, the
   shortcut and the menu and dock wiring are by Codex.
+- **Displays and Keyboard pages of its own** in System Settings. Displays: resolution,
+  refresh rate and rotation per monitor; with several, on/off, the main display and the
+  position. A new mode asks «Keep these display settings?» and goes back by itself after
+  15 s. Keyboard: layouts (add and remove), the switch keys, key repeat and Num Lock. Both
+  are kept in Xfce's settings. The display and keyboard back end is by Codex.
 
 ### Changed
 

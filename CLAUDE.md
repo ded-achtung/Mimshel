@@ -129,6 +129,11 @@ the environment; the service links the whole `setup` crate.
   System pages open the Xfce dialogs. The logo menu and the dock's settings icon open it
   (`mimshel-settings.desktop`, written by `apply launchers`). A frame redraws only the half
   that changed and sends only the changed rectangle (`MIMSHEL_TIMING=1` prints frame times).
+  Its own Displays and Keyboard pages (`settings_system.rs` on top of `setup::displays` /
+  `setup::keyboards`) write Xfce's xfconf channels (`displays`, `keyboard-layout`,
+  `keyboards`), so xfsettingsd keeps them. A display change must always go through
+  «Keep these display settings?» with the timed revert. After the first layout change,
+  layouts live in Xfce's `keyboard-layout` channel, not in localectl.
 - `~/.local/share/mimshel`: `apple.menu` + `menu/` (main menu), `backups/` (`mimshel
   backup|backups|restore [--dry-run]`; the first copy, «original», is plain Xfce),
   `wallpapers/`. `~/.local/state/mimshel`: logs, `desktop-icons` (icon cells),
