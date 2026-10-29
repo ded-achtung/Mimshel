@@ -121,8 +121,14 @@ the environment; the service links the whole `setup` crate.
   `mimshel config` lists settings; `mimshel apply [parts…]` (menubar dock notify desktop
   folders launchers lock power icons look wallpaper service; `greeter` separately, asks
   for sudo once). **Every `apply` restarts the service.** Hot reload without a restart
-  exists only for `look.language` and `look.wallpaper` (`mimshel reload`); the settings
-  window (roadmap step 7) needs more of it.
+  exists only for `look.language` and `look.wallpaper` (`mimshel reload`).
+- **System Settings window** `mimshel settings [PAGE]` (`crates/settings` without X11,
+  `apps/mimshel/src/settings_ui.rs`): its own process, so it survives the service
+  restarts its applies cause. It writes and applies through the same code as `mimshel set`
+  (`write_setting` / `apply_setting_checked`), one change at a time on a worker thread.
+  System pages open the Xfce dialogs. The logo menu and the dock's settings icon open it
+  (`mimshel-settings.desktop`, written by `apply launchers`). A frame redraws only the half
+  that changed and sends only the changed rectangle (`MIMSHEL_TIMING=1` prints frame times).
 - `~/.local/share/mimshel`: `apple.menu` + `menu/` (main menu), `backups/` (`mimshel
   backup|backups|restore [--dry-run]`; the first copy, «original», is plain Xfce),
   `wallpapers/`. `~/.local/state/mimshel`: logs, `desktop-icons` (icon cells),

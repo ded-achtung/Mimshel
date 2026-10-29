@@ -2,6 +2,28 @@
 
 Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
+## [Unreleased]
+
+### New
+
+- **System Settings window** (`mimshel settings`, the logo menu's «System Settings…» and the
+  dock's settings icon): appearance, wallpaper, menu bar, Dock, lock screen, the Apps
+  window, terminal and components, as in macOS. Displays, keyboard, mouse, sound, network,
+  power and Bluetooth open the Xfce dialogs. Most changes restart Mimshel for a second, and
+  the window stays open; language and wallpaper switch on the fly. Theme lists, the
+  shortcut and the menu and dock wiring are by Codex.
+
+### Changed
+
+- With «never hide», the Dock no longer reserves a strip at the bottom: maximized windows
+  take the whole height under it.
+
+### Fixed
+
+- A theme installed system-wide (`/usr/share/themes`) is applied, and a failed apply no
+  longer reports success.
+- One config change makes the service reload once, not twice.
+
 ## [v0.0.4-alpha] — 2026-10-29
 
 Fourth alpha: interface languages from the first outside contribution, menu bar icons that move
