@@ -54,6 +54,8 @@ pub enum FolderMsg {
         list: Vec<Place>,
         open: Option<(u32, String)>,
     },
+    /// An external disk was connected from Devices: open it in `window`.
+    Mounted { window: u32, path: PathBuf },
 }
 
 /// Пункты меню по правому щелчку.
@@ -265,6 +267,11 @@ impl FolderUi {
                 self.phones = list;
                 self.update_places();
             }
+            FolderMsg::Mounted { window, path } => {
+                self.open_phone = Some((window, path));
+                self.update_places();
+                scan_phones(self.tx.clone());
+            }
             FolderMsg::Files {
                 window,
                 dir,
@@ -420,7 +427,11 @@ impl FolderUi {
                     .iter()
                     .find(|p| p.remote.as_ref() == Some(&uri))
                     .map_or_else(|| uri.clone(), |p| p.name.clone());
-                mount(window, uri, name, self.tx.clone());
+                if uri.starts_with("/dev/") {
+                    open_disk(window, uri, name, self.tx.clone());
+                } else {
+                    mount(window, uri, name, self.tx.clone());
+                }
             }
             Action::Open(items) => {
                 for item in &items {
@@ -1077,13 +1088,111 @@ fn scan_phones(tx: Sender<Msg>) {
     });
 }
 
+/// Connect the external disk `dev` from Devices, then open it in `window`.
+fn open_disk(window: u32, dev: String, name: String, tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        if let Some(path) = mount_disk(&dev, &name, true) {
+            let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Mounted { window, path })));
+        } else {
+            scan_phones(tx);
+        }
+    });
+}
+
+/// Mount block device `dev` through udisks; returns where. If it cannot
+/// be mounted as usual — ntfs3 refuses an NTFS disk Windows did not shut
+/// down properly — mount it read-only: files can still be copied off it.
+/// Either case that needs explaining ends in a notification. `click`: the
+/// user asked, so polkit may ask for a password; automount must not.
+fn mount_disk(dev: &str, name: &str, click: bool) -> Option<PathBuf> {
+    let run = |read_only: bool| -> std::result::Result<PathBuf, String> {
+        let mut cmd = std::process::Command::new("udisksctl");
+        cmd.args(["mount", "-b", dev]);
+        if read_only {
+            cmd.args(["-o", "ro"]);
+        }
+        if !click {
+            cmd.arg("--no-user-interaction");
+        }
+        let out = cmd
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(udisks_reason(&String::from_utf8_lossy(&out.stderr)));
+        }
+        let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+        mimshel_folder::mount_point(&mounts, dev).ok_or_else(|| "no mount point".into())
+    };
+    let lang = mimshel_core::i18n::language_from_config();
+    let t = |key| mimshel_core::i18n::t(lang, key).replace("{name}", name);
+    match run(false) {
+        Ok(path) => Some(path),
+        Err(reason) => match run(true) {
+            Ok(path) => {
+                let body = if fs_type(dev) == "ntfs" {
+                    t("disk.readonly_windows")
+                } else {
+                    t("disk.readonly_other")
+                };
+                notify(&t("disk.readonly_title"), &body);
+                Some(path)
+            }
+            Err(_) => {
+                eprintln!("Не удалось подключить {dev}: {reason}");
+                notify(&t("disk.failed_title"), &reason);
+                None
+            }
+        },
+    }
+}
+
+/// The useful end of a udisks error: «Error mounting /dev/sda2:
+/// GDBus.Error:…: wrong fs type, bad option…» → «wrong fs type, bad option…».
+fn udisks_reason(stderr: &str) -> String {
+    let text = stderr.trim();
+    let tail = text
+        .rsplit_once("UDisks2.Error.")
+        .and_then(|(_, t)| t.split_once(": "))
+        .map_or(text, |(_, t)| t);
+    let tail = tail.rsplit_once(": ").map_or(tail, |(_, t)| t);
+    tail.trim_end_matches('.').to_string()
+}
+
+/// The file system on `dev` as udev sees it (`ntfs`, `vfat`…).
+fn fs_type(dev: &str) -> String {
+    std::process::Command::new("lsblk")
+        .args(["-no", "FSTYPE", dev])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// A banner from the service itself: through the notification server,
+/// ours or Xfce's, whichever runs.
+fn notify(summary: &str, body: &str) {
+    let mut cmd = std::process::Command::new("notify-send");
+    cmd.args([
+        "-a",
+        "Mimshel",
+        "-i",
+        "drive-removable-media",
+        summary,
+        body,
+    ]);
+    if let Err(e) = crate::ui::spawn_detached(cmd) {
+        eprintln!("Не удалось показать уведомление: {e}");
+    }
+}
+
 /// Mount USB sticks and memory cards when they are plugged in. Thunar's
 /// volume manager did it before, and it does not run with our folder
 /// windows. Only disks that appear after the start: one left unmounted on
 /// purpose stays so when the service restarts. The sidebar picks the new
-/// mount up by itself (`devices_state`).
-pub fn automount() {
-    std::thread::spawn(|| {
+/// mount up by itself (`devices_state`); a disk that would not mount is
+/// shown under Devices, so it is rescanned here.
+pub fn automount(tx: Sender<Msg>) {
+    std::thread::spawn(move || {
         let blocks = || -> HashSet<String> {
             std::fs::read_dir("/sys/class/block")
                 .map(|d| {
@@ -1112,25 +1221,18 @@ pub fn automount() {
                 else {
                     break;
                 };
-                let devices: Vec<String> =
-                    mimshel_folder::automount_devices(&String::from_utf8_lossy(&out.stdout))
+                let devices: Vec<(String, String)> =
+                    mimshel_folder::mountable(&String::from_utf8_lossy(&out.stdout))
                         .into_iter()
-                        .filter(|d| d.rsplit('/').next().is_some_and(|n| new.contains(n)))
+                        .filter(|(_, d)| d.rsplit('/').next().is_some_and(|n| new.contains(n)))
                         .collect();
                 if devices.is_empty() {
                     continue;
                 }
-                for dev in devices {
-                    let ok = std::process::Command::new("gio")
-                        .args(["mount", "-d", &dev])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .is_ok_and(|s| s.success());
-                    if !ok {
-                        eprintln!("Не удалось подключить {dev}");
-                    }
+                for (name, dev) in devices {
+                    mount_disk(&dev, &name, false);
                 }
+                let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Places)));
                 break;
             }
         }
@@ -1243,6 +1345,23 @@ fn watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn udisks_errors_shortened() {
+        let err = "Error mounting /dev/sda2: GDBus.Error:org.freedesktop.UDisks2.Error.Failed: \
+                   Error mounting /dev/sda2 at /run/media/ded/ADATA HD710 PRO: wrong fs type, \
+                   bad option, bad superblock on /dev/sda2, missing codepage or helper \
+                   program, or other error\n";
+        assert_eq!(
+            udisks_reason(err),
+            "wrong fs type, bad option, bad superblock on /dev/sda2, missing codepage or \
+             helper program, or other error"
+        );
+        assert_eq!(
+            udisks_reason("Error looking up object for device /dev/sdz1\n"),
+            "Error looking up object for device /dev/sdz1"
+        );
+    }
 
     #[test]
     fn pairs_skip_self_and_same_folder() {

@@ -241,7 +241,8 @@ fn uid() -> String {
         .to_string()
 }
 
-/// Connected phones and cameras (MTP, iPhone, PTP) as gvfs sees them.
+/// Connected phones and cameras (MTP, iPhone, PTP) as gvfs sees them, and
+/// external disks left unmounted.
 /// Slow — `gio mount -li` takes about half a second, so call it from a
 /// background thread.
 pub fn phones() -> Vec<Place> {
@@ -260,7 +261,8 @@ pub fn phones() -> Vec<Place> {
                 .collect()
         })
         .unwrap_or_default();
-    let mut list = phones_from(&String::from_utf8_lossy(&out.stdout), &gvfs, &entries);
+    let gio = String::from_utf8_lossy(&out.stdout);
+    let mut list = phones_from(&gio, &gvfs, &entries);
     // A phone usually has one storage («Internal shared storage») — open it
     // right away instead of a folder with a single folder inside.
     for p in list.iter_mut().filter(|p| p.removable) {
@@ -268,27 +270,34 @@ pub fn phones() -> Vec<Place> {
             p.path = only;
         }
     }
+    list.extend(unmounted_disks(&gio));
     list
 }
 
 /// Removable volumes that want mounting from the `gio mount -li` text:
 /// `can_mount=1` and `should_automount=1` (udisks sets it for USB sticks
-/// and memory cards, not for internal disks). Returns their devices
-/// (`/dev/sda1`).
-pub fn automount_devices(gio: &str) -> Vec<String> {
+/// and memory cards, not for internal disks; a mounted volume says
+/// `can_mount=0`). Returns (name, device): block devices only (`/dev/sda1`),
+/// not phones (they have an `activation_root`).
+pub fn mountable(gio: &str) -> Vec<(String, String)> {
+    #[derive(Default)]
     struct Volume {
+        name: String,
         device: Option<String>,
         can_mount: bool,
         automount: bool,
+        gvfs: bool,
     }
     let mut volumes: Vec<Volume> = Vec::new();
     let mut in_volume = false;
     for line in gio.lines().map(str::trim) {
-        if line.starts_with("Volume(") {
+        if let Some(rest) = line.strip_prefix("Volume(") {
             volumes.push(Volume {
-                device: None,
-                can_mount: false,
-                automount: false,
+                name: rest
+                    .split_once("): ")
+                    .map(|(_, n)| n.to_string())
+                    .unwrap_or_default(),
+                ..Volume::default()
             });
             in_volume = true;
         } else if line.starts_with("Drive(") || line.starts_with("Mount(") {
@@ -300,14 +309,51 @@ pub fn automount_devices(gio: &str) -> Vec<String> {
                 v.can_mount = true;
             } else if line == "should_automount=1" {
                 v.automount = true;
+            } else if line.starts_with("activation_root=") {
+                v.gvfs = true;
             }
         }
     }
     volumes
         .into_iter()
-        .filter(|v| v.can_mount && v.automount)
-        .filter_map(|v| v.device)
+        .filter(|v| v.can_mount && v.automount && !v.gvfs)
+        .filter_map(|v| {
+            let dev = v.device?;
+            (dev.starts_with("/dev/") && !dev.starts_with("/dev/bus/")).then(|| {
+                let name = if v.name.is_empty() {
+                    dev.clone()
+                } else {
+                    v.name
+                };
+                (name, dev)
+            })
+        })
         .collect()
+}
+
+/// External disks left unmounted (one Windows did not shut down cleanly
+/// fails to mount by itself), for Devices: a click connects them.
+/// `remote` holds the device, `path` too until it is mounted.
+fn unmounted_disks(gio: &str) -> Vec<Place> {
+    mountable(gio)
+        .into_iter()
+        .map(|(name, dev)| Place {
+            name,
+            path: PathBuf::from(&dev),
+            icon: "drive-removable-media-symbolic",
+            section: Section::Devices,
+            removable: false,
+            remote: Some(dev),
+        })
+        .collect()
+}
+
+/// Where block device `dev` is mounted, from `/proc/self/mounts` text.
+pub fn mount_point(mounts: &str, dev: &str) -> Option<PathBuf> {
+    mounts.lines().find_map(|l| {
+        let mut f = l.split_whitespace();
+        (f.next()? == dev).then(|| PathBuf::from(unescape(f.next().unwrap_or_default())))
+    })
 }
 
 fn single_subdir(dir: &Path) -> Option<PathBuf> {
@@ -468,6 +514,17 @@ mod tests {
     }
 
     #[test]
+    fn mount_point_of_a_device() {
+        let mounts = "/dev/nvme0n1p5 / ext4 rw 0 0\n\
+                      /dev/sda2 /run/media/ded/ADATA\\040HD710\\040PRO ntfs3 ro 0 0\n";
+        assert_eq!(
+            mount_point(mounts, "/dev/sda2"),
+            Some(PathBuf::from("/run/media/ded/ADATA HD710 PRO"))
+        );
+        assert_eq!(mount_point(mounts, "/dev/sda1"), None);
+    }
+
+    #[test]
     fn automount_only_plugged_sticks() {
         let gio = "Drive(0): KINGSTON\n  ids:\n   unix-device: '/dev/nvme0n1'\n\
                    \x20 Volume(0): Том 917 Гб\n    ids:\n     unix-device: '/dev/nvme0n1p3'\n\
@@ -480,7 +537,20 @@ mod tests {
                    \x20   Mount(0): DATA -> file:///run/media/ded/DATA\n\
                    \x20     can_unmount=1\n";
         // The internal disk does not ask for it, DATA is mounted already.
-        assert_eq!(automount_devices(gio), ["/dev/sda1"]);
+        assert_eq!(
+            mountable(gio),
+            [("EOS".to_string(), "/dev/sda1".to_string())]
+        );
+        // Left unmounted (EOS): in Devices, a click mounts the device.
+        let disks = unmounted_disks(gio);
+        assert_eq!(disks.len(), 1);
+        assert_eq!(disks[0].name, "EOS");
+        assert_eq!(disks[0].remote.as_deref(), Some("/dev/sda1"));
+        assert!(!disks[0].removable);
+        // A phone volume is not a disk, even when it asks for mounting.
+        let phone = "Volume(0): Xiaomi\n  ids:\n   unix-device: '/dev/bus/usb/003/005'\n\
+                     \x20 activation_root=mtp://Xiaomi/\n  can_mount=1\n  should_automount=1\n";
+        assert!(unmounted_disks(phone).is_empty());
     }
 
     #[test]

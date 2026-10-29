@@ -663,6 +663,38 @@ pub fn t(lang: Language, key: &str) -> &str {
         "transfer.mb" => ("MB", "МБ", "MB", "MB"),
         "transfer.gb" => ("GB", "ГБ", "GB", "GB"),
         "transfer.tb" => ("TB", "ТБ", "TB", "TB"),
+        "disk.readonly_title" => (
+            "“{name}” opened read-only",
+            "«{name}» открыт только для чтения",
+            "“{name}”已以只读方式打开",
+            "「{name}」已以唯讀方式開啟",
+        ),
+        "disk.readonly_windows" => (
+            "Windows did not shut this disk down properly, so nothing can be written to it. \
+             Files on it can be opened and copied. To write to it again, connect it to \
+             Windows and eject it safely there.",
+            "Windows не закрыла этот диск правильно, поэтому записывать на него нельзя. \
+             Файлы с него можно открывать и копировать. Чтобы снова записывать, подключите \
+             его к Windows и извлеките там безопасно.",
+            "Windows 未正确关闭此磁盘，因此无法向其写入。其中的文件仍可打开和复制。\
+             若要重新写入，请将其连接到 Windows 并在那里安全弹出。",
+            "Windows 未正確關閉此磁碟，因此無法寫入。其中的檔案仍可開啟及拷貝。\
+             若要重新寫入，請將其連接到 Windows 並在那裡安全退出。",
+        ),
+        "disk.readonly_other" => (
+            "The disk could not be opened for writing; it may have errors. Files on it \
+             can be opened and copied.",
+            "Диск не удалось открыть для записи — возможно, на нём есть ошибки. Файлы с \
+             него можно открывать и копировать.",
+            "无法以写入方式打开此磁盘，它可能有错误。其中的文件仍可打开和复制。",
+            "無法以寫入方式開啟此磁碟，它可能有錯誤。其中的檔案仍可開啟及拷貝。",
+        ),
+        "disk.failed_title" => (
+            "Could not connect “{name}”",
+            "Не удалось подключить «{name}»",
+            "无法连接“{name}”",
+            "無法連接「{name}」",
+        ),
         "desktop.transfer_exists" => (
             "Destination file {dest} already exists.",
             "Файл назначения {dest} уже существует.",
@@ -1039,6 +1071,10 @@ pub const KEYS: &[&str] = &[
     "transfer.mb",
     "transfer.gb",
     "transfer.tb",
+    "disk.readonly_title",
+    "disk.readonly_windows",
+    "disk.readonly_other",
+    "disk.failed_title",
     "app.terminal",
     "app.file_manager",
     "app.xfce_terminal",

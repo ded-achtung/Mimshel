@@ -2,6 +2,17 @@
 
 Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
+## [Unreleased]
+
+### New
+
+- **External disks in Devices even when they did not mount.** A disk left unmounted shows
+  under Devices in folder windows; a click connects and opens it. A disk that cannot be
+  mounted as usual — ntfs3 refuses an NTFS disk Windows did not shut down properly — is
+  mounted read-only, and a notification says why and how to fix it (eject it safely in
+  Windows). A disk that cannot be mounted at all ends in a notification with the reason,
+  instead of a silent line in the log.
+
 ## [v0.0.5-alpha] — 2026-10-29
 
 Fifth alpha: Mimshel's own System Settings window, a copy window with progress, and a

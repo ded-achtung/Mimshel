@@ -401,7 +401,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     };
     step("рабочий стол");
     let folders = if daemon && config.folders {
-        crate::folder_ui::automount();
+        crate::folder_ui::automount(tx.clone());
         Some(FolderUi::new(&display, &config, tx.clone())?)
     } else {
         None
