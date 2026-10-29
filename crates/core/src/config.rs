@@ -431,6 +431,12 @@ impl Config {
                     (app, name)
                 })
                 .collect();
+            for (app, key) in DEFAULT_RENAMES {
+                if OWN_SHORTCUTS.contains(&app) && !c.rename_apps.iter().any(|(a, _)| a == app) {
+                    let name = crate::i18n::t(c.language, key).to_string();
+                    c.rename_apps.push((app.to_string(), name));
+                }
+            }
         }
         // Language-aware defaults: if the file does not set a lock placeholder
         // or app renames, they follow [look] language (not just system locale).
@@ -615,14 +621,21 @@ fn scale_value(v: &Value) -> Option<Option<f32>> {
 /// Инлайн-таблица `rename` для текста настроек: { ярлык = "Имя", … }.
 /// The programs we name ourselves (`[apps] rename` by default): shortcut
 /// id and the language table key of the name.
-const DEFAULT_RENAMES: [(&str, &str); 6] = [
+const DEFAULT_RENAMES: [(&str, &str); 8] = [
     ("thunar", "app.file_manager"),
+    ("mimshel-folder", "app.file_manager"),
+    ("macos-launchpad", "panel.apps"),
     ("mimshel-terminal", "app.terminal"),
     ("xfce4-terminal", "app.xfce_terminal"),
     ("org.xfce.mousepad", "app.text_editor"),
     ("xfce-settings-manager", "app.settings"),
     ("xfce4-taskmanager", "app.task_manager"),
 ];
+
+/// Our own shortcuts (`mimshel apply` writes them with a Russian `Name`):
+/// named in the interface language even when `[apps] rename` in the file
+/// does not list them.
+const OWN_SHORTCUTS: [&str; 3] = ["mimshel-folder", "macos-launchpad", "mimshel-terminal"];
 
 fn default_renames(lang: Language) -> Vec<(String, String)> {
     DEFAULT_RENAMES
@@ -1433,14 +1446,18 @@ mod tests {
             )
         };
         let names = |lang: &str| Config::from_toml(&file(lang)).rename_apps;
+        let en = names("en");
         assert_eq!(
-            names("en"),
+            en[..3],
             [
                 ("thunar".to_string(), "File Manager".to_string()),
                 ("org.xfce.mousepad".to_string(), "Мой блокнот".to_string()),
                 ("xfce4-terminal".to_string(), "Xfce Terminal".to_string()),
             ]
         );
+        // Our own shortcuts are named even when the file does not list them.
+        assert!(en.contains(&("macos-launchpad".to_string(), "Apps".to_string())));
+        assert!(en.contains(&("mimshel-folder".to_string(), "File Manager".to_string())));
         assert_eq!(names("ru")[0].1, "Проводник");
         assert_eq!(names("zh_TW")[0].1, "檔案管理員");
         assert_eq!(names("zh")[2].1, "Xfce 终端");
@@ -1459,7 +1476,16 @@ mod tests {
         assert!(toml_error(&text).is_none(), "{text}");
         let c = Config::from_toml(&text);
         assert_eq!(c.hide_apps, ["a", "b"]);
-        assert_eq!(c.rename_apps, [("thunar".to_string(), "Файлы".to_string())]);
+        assert_eq!(
+            c.rename_apps[0],
+            ("thunar".to_string(), "Файлы".to_string())
+        );
+        // The rest are our own shortcuts, always named.
+        assert!(
+            c.rename_apps[1..]
+                .iter()
+                .all(|(app, _)| OWN_SHORTCUTS.contains(&app.as_str()))
+        );
         // Пустые значения — сброс списков.
         let text = set_value(
             &text,
