@@ -845,6 +845,7 @@ dependencies = [
  "mimshel-menubar",
  "mimshel-notify",
  "mimshel-render",
+ "mimshel-settings",
  "mimshel-setup",
  "mimshel-terminal",
  "mimshel-text",
@@ -979,6 +980,19 @@ name = "mimshel-render"
 version = "0.0.4-alpha"
 dependencies = [
  "tiny-skia",
+]
+
+[[package]]
+name = "mimshel-settings"
+version = "0.0.4-alpha"
+dependencies = [
+ "mimshel-core",
+ "mimshel-icons",
+ "mimshel-render",
+ "mimshel-text",
+ "mimshel-widgets",
+ "tiny-skia",
+ "toml_edit",
 ]
 
 [[package]]

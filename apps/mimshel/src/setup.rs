@@ -82,48 +82,76 @@ fn print_check(c: &Check) {
 /// `apply` = false (`mimshel set --no-apply`) — только записать: установщик
 /// пишет несколько настроек и применяет всё разом.
 pub fn set(key: &str, input: &str, apply: bool) -> i32 {
-    // Bare `mimshel set language en` is an alias for `look.language`.
-    let key_owned;
-    let key = if key == "language" {
-        key_owned = "look.language".to_string();
-        &key_owned
-    } else {
-        &config::current_key(key)
-    };
-    let value = match setting_value(key, input) {
-        Ok(v) => v,
-        Err(e) => {
+    let key = match write_setting(key, input) {
+        Ok(key) => key,
+        Err(SetError::Value(key, e)) => {
             println!("✘ {key}: {e}");
             if !SETTINGS.iter().any(|s| s.0 == key) {
                 print_settings();
             }
             return 2;
         }
-    };
-    // Создаст файл, если его ещё нет.
-    load_config();
-    let Some(path) = config_path() else {
-        println!("✘ Не найти папку настроек (нет HOME)");
-        return 1;
-    };
-    let (section, name) = key.split_once('.').expect("ключи из SETTINGS с точкой");
-    if let Err(e) = config_store(path.clone()).edit(|text| {
-        let text = set_value(text, section, name, value)
-            .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))?;
-        if key == "parts.folders" {
-            let shell = config::Config::from_toml(&text).folders;
-            return swap_file_manager(&text, shell)
-                .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"));
+        Err(SetError::Write(e)) => {
+            println!("✘ {e}");
+            return 1;
         }
-        Ok(text)
-    }) {
-        println!("✘ Не записать {}: {e}", path.display());
-        return 1;
-    }
+    };
     println!("✔ {key} = {}", input.trim());
     if !apply {
         return 0;
     }
+    apply_setting(&key)
+}
+
+/// Why a setting was not written.
+pub enum SetError {
+    /// The value does not fit the key (or there is no such key).
+    Value(String, String),
+    /// The config file could not be written.
+    Write(String),
+}
+
+/// Write `key = input` into the config file, as `mimshel set --no-apply`
+/// does; the key as it is called now (`language` → `look.language`).
+pub fn write_setting(key: &str, input: &str) -> Result<String, SetError> {
+    // Bare `mimshel set language en` is an alias for `look.language`.
+    let key = if key == "language" {
+        "look.language".to_string()
+    } else {
+        config::current_key(key).to_string()
+    };
+    let value = setting_value(&key, input).map_err(|e| SetError::Value(key.clone(), e))?;
+    // Создаст файл, если его ещё нет.
+    load_config();
+    let Some(path) = config_path() else {
+        return Err(SetError::Write("Не найти папку настроек (нет HOME)".into()));
+    };
+    let (section, name) = key.split_once('.').expect("ключи из SETTINGS с точкой");
+    config_store(path.clone())
+        .edit(|text| {
+            let text = set_value(text, section, name, value)
+                .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))?;
+            if key == "parts.folders" {
+                let shell = config::Config::from_toml(&text).folders;
+                return swap_file_manager(&text, shell)
+                    .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"));
+            }
+            Ok(text)
+        })
+        .map_err(|e| SetError::Write(format!("Не записать {}: {e}", path.display())))?;
+    Ok(key)
+}
+
+/// Whether applying `key` restarts the service (everything but the hot
+/// reload of the language and the wallpaper, and the terminal's settings).
+pub fn restarts_service(key: &str) -> bool {
+    !matches!(key, "look.language" | "look.wallpaper") && !key.starts_with("terminal.")
+}
+
+/// Apply a setting already written by [`write_setting`]; the exit code
+/// of `mimshel set`.
+pub fn apply_setting(key: &str) -> i32 {
+    let (section, name) = key.split_once('.').unwrap_or((key, ""));
     // Hot reload (v2): language and wallpaper switch without restarting
     // the daemon, the session or the machine. If no daemon is running,
     // the setting simply takes effect on the next login. The wallpaper
@@ -154,7 +182,6 @@ pub fn set(key: &str, input: &str, apply: bool) -> i32 {
         "dock" if !config.dock => vec!["dock"],
         // Тема значков — для всех программ (xsettings), не только для Mimshel.
         "look" if name == "icon_theme" || name == "png_icons" => vec!["icons"],
-        "look" if name == "wallpaper" => vec!["wallpaper"],
         "look" if name == "gtk_theme" || name == "cursor_theme" => vec!["look"],
         // Строка меню: и панель Xfce, и знак меню ставит apply menubar.
         "menubar" => vec!["menubar"],

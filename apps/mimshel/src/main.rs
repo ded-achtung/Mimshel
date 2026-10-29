@@ -14,6 +14,7 @@ mod ipc;
 mod lock_ui;
 mod menubar_ui;
 mod notify_ui;
+mod settings_ui;
 mod setup;
 mod status;
 mod term_ui;
@@ -33,6 +34,10 @@ const HELP: &str = "\
   mimshel snapshot search|apps ТЕКСТ ФАЙЛ.png
                         нарисовать окно с этим текстом в картинку
   mimshel --version       версия программы
+  mimshel settings [РАЗДЕЛ] окно «Системные настройки» (appearance wallpaper menubar dock
+                        lock apps terminal parts)
+  mimshel snapshot settings РАЗДЕЛ ФАЙЛ.png
+                        нарисовать окно настроек в картинку (проверка вида)
   mimshel terminal [ПАПКА] свой терминал (отдельное окно; оболочка — в папке);
                         mimshel terminal -e ПРОГРАММА … — запустить программу в нём
   mimshel folder [ПАПКА…] открыть папку в окне (по умолчанию — домашнюю; через службу,
@@ -191,6 +196,9 @@ fn main() {
         Some("--version" | "-V" | "version") => {
             println!("mimshel {}", env!("CARGO_PKG_VERSION"));
         }
+        Some("settings") if args.len() <= 2 => {
+            std::process::exit(settings_ui::run(args.get(1).map(String::as_str)))
+        }
         Some("terminal") => {
             let (dir, command) = term_ui::parse_args(&args[1..]);
             std::process::exit(term_ui::run(dir, command))
@@ -216,6 +224,9 @@ fn main() {
         Some("snapshot") if args.len() == 4 && args[1] == "folder" => exit_on_error(
             folder_ui::snapshot(std::path::Path::new(&args[2]), &args[3]),
         ),
+        Some("snapshot") if args.len() == 4 && args[1] == "settings" => {
+            exit_on_error(settings_ui::snapshot(&args[2], &args[3]))
+        }
         Some("snapshot") if args.len() == 4 && args[1] == "lock" => {
             exit_on_error(lock_ui::snapshot(&args[2], &args[3]))
         }
@@ -249,6 +260,7 @@ fn component(args: &[String]) -> &'static str {
         (Some("lock-screen"), _) => "lock-screen",
         (Some("terminal"), _) => "terminal",
         (Some("folder"), _) => "folder",
+        (Some("settings"), _) => "settings",
         _ => "cli",
     }
 }

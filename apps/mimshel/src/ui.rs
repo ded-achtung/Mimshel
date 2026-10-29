@@ -293,7 +293,7 @@ pub fn app_settings(config: &Config) -> Settings {
 
 /// Масштаб для крупных экранов — до создания окон: из настроек, при «auto» —
 /// по DPI системы. `MIMSHEL_SCALE` — задать для проверки, не трогая настройки.
-fn set_scale(config: &Config) {
+pub(crate) fn set_scale(config: &Config) {
     let forced = mimshel_core::names::env("SCALE")
         .and_then(|v| v.into_string().ok())
         .and_then(|v| v.replace(',', ".").parse::<f32>().ok());

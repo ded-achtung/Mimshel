@@ -1,0 +1,17 @@
+[package]
+name = "mimshel-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mimshel-core = { path = "../core" }
+mimshel-text = { path = "../text" }
+mimshel-render = { path = "../render" }
+mimshel-icons = { path = "../icons" }
+mimshel-widgets = { path = "../widgets" }
+tiny-skia = "0.12.0"
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+
+[lints]
+workspace = true

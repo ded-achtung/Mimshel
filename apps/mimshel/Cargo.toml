@@ -18,6 +18,7 @@ mimshel-menubar = { path = "../../crates/menubar" }
 mimshel-notify = { path = "../../crates/notify" }
 mimshel-widgets = { path = "../../crates/widgets" }
 mimshel-setup = { path = "../../crates/setup" }
+mimshel-settings = { path = "../../crates/settings" }
 mimshel-desktop = { path = "../../crates/desktop" }
 mimshel-folder = { path = "../../crates/folder" }
 mimshel-terminal = { path = "../../crates/terminal" }
