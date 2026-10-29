@@ -344,13 +344,18 @@ fn isolated_x11_new_window_first_draw() -> Result<()> {
     app.map_window(window)?;
     app.get_input_focus()?.reply()?;
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while d.undrawn_for(window).is_none() && std::time::Instant::now() < deadline {
+    // Known once it is seen mapped (and still empty).
+    while d.undrawn_over((100, 250, 500, 100)).is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(
         d.undrawn_for(window).is_some(),
         "the new window waits for its first drawing"
     );
+    // Something under it (a dock at the bottom) must wait too; something
+    // beside it need not.
+    assert!(d.undrawn_over((100, 250, 500, 100)).is_some());
+    assert!(d.undrawn_over((420, 0, 100, 100)).is_none());
     // Moving some other window must not reach the parts (the root's
     // substructure events are only for catching new windows).
     app.configure_window(old, &ConfigureWindowAux::new().x(50))?;
@@ -390,6 +395,7 @@ fn isolated_x11_new_window_first_draw() -> Result<()> {
     }
     assert!(drawn, "the first drawing arrives as Event::Drawn");
     assert!(d.undrawn_for(window).is_none());
+    assert!(d.undrawn_over((100, 250, 500, 100)).is_none());
     Ok(())
 }
 

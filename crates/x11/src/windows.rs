@@ -25,8 +25,16 @@ pub(crate) struct Undrawn {
     damage: u32,
     since: Instant,
     /// Points read at map time and their pixels then (window coordinates).
-    samples: Vec<((i16, i16), u32)>,
+    samples: Samples,
+    /// Where it is on the screen, once seen mapped and empty.
+    rect: Option<ScreenRect>,
 }
+
+/// `(x, y, w, h)` on the screen, in pixels.
+type ScreenRect = (i32, i32, u32, u32);
+
+/// Points of a window and their pixels.
+type Samples = Vec<((i16, i16), u32)>;
 
 /// Five points inside a `w`×`h` window, away from the edges (client-side
 /// shadows, title bars): the centre and halfway towards the corners.
@@ -256,7 +264,9 @@ impl Display {
             self.root,
             &ChangeWindowAttributesAux::new().event_mask(mine | EventMask::SUBSTRUCTURE_NOTIFY),
         )?;
-        self.conn.flush()?;
+        // Wait until the server has it: a window created right after this
+        // call must not be missed.
+        self.conn.get_input_focus()?.reply()?;
         Ok(())
     }
 
@@ -275,6 +285,33 @@ impl Display {
                 None
             }
         }
+    }
+
+    /// A new window that has not drawn yet covers part of `(x, y, w, h)`
+    /// (screen pixels): how much longer to wait for it. Until it draws, it
+    /// shows a frozen copy of what was under it when it appeared — anything
+    /// that changes under it there (a dock icon bouncing, the dock sliding
+    /// away) leaves its old picture visible through the window.
+    pub fn undrawn_over(&self, (x, y, w, h): (i32, i32, u32, u32)) -> Option<Duration> {
+        let covering: Vec<Window> = {
+            let undrawn = self.undrawn.lock().unwrap_or_else(|p| p.into_inner());
+            undrawn
+                .iter()
+                .filter(|(_, u)| {
+                    u.rect.is_some_and(|(rx, ry, rw, rh)| {
+                        rx < x + w as i32
+                            && x < rx + rw as i32
+                            && ry < y + h as i32
+                            && y < ry + rh as i32
+                    })
+                })
+                .map(|(w, _)| *w)
+                .collect()
+        };
+        covering
+            .into_iter()
+            .filter_map(|w| self.undrawn_for(w))
+            .max()
     }
 
     pub(crate) fn is_undrawn(&self, window: Window) -> bool {
@@ -313,6 +350,7 @@ impl Display {
                     damage,
                     since: Instant::now(),
                     samples: Vec::new(),
+                    rect: None,
                 },
             );
     }
@@ -325,9 +363,10 @@ impl Display {
         let empty = self.empty_start(window);
         let mut undrawn = self.undrawn.lock().unwrap_or_else(|p| p.into_inner());
         match empty {
-            Some(samples) => {
+            Some((samples, rect)) => {
                 if let Some(u) = undrawn.get_mut(&window) {
                     u.samples = samples;
+                    u.rect = Some(rect);
                 }
                 false
             }
@@ -381,9 +420,10 @@ impl Display {
             .remove(&window);
     }
 
-    /// The window's sample points and pixels when it still shows nothing of
-    /// its own; `None` when it already shows something (or cannot be read).
-    fn empty_start(&self, window: Window) -> Option<Vec<((i16, i16), u32)>> {
+    /// The window's sample points and pixels, and where it is on the screen,
+    /// when it still shows nothing of its own; `None` when it already shows
+    /// something (or cannot be read).
+    fn empty_start(&self, window: Window) -> Option<(Samples, ScreenRect)> {
         let geo = self.conn.get_geometry(window).ok()?.reply().ok()?;
         let at = self
             .conn
@@ -412,7 +452,13 @@ impl Display {
                     .zip(&mine)
                     .all(|(a, b)| a & 0xff_ffff == b & 0xff_ffff)
         };
-        empty.then(|| points.into_iter().zip(mine).collect())
+        let rect = (
+            i32::from(at.dst_x),
+            i32::from(at.dst_y),
+            u32::from(geo.width),
+            u32::from(geo.height),
+        );
+        empty.then(|| (points.into_iter().zip(mine).collect(), rect))
     }
 
     fn read_points(&self, drawable: Window, points: &[(i16, i16)]) -> Vec<u32> {

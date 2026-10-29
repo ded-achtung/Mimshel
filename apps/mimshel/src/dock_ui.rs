@@ -708,8 +708,15 @@ impl DockUi {
             }
         }
         if self.dirty {
-            self.dirty = false;
-            self.redraw(d, fonts, icons)?;
+            // Not while a new window that has not drawn covers the dock: it
+            // shows the dock as it was when it appeared (see `frozen`).
+            match self.frozen(d) {
+                Some(left) => self.wake_in(left),
+                None => {
+                    self.dirty = false;
+                    self.redraw(d, fonts, icons)?;
+                }
+            }
         }
         if self.drag_dirty {
             self.drag_dirty = false;
@@ -755,7 +762,8 @@ impl DockUi {
         Ok(())
     }
 
-    /// Look at hiding again after `left` (a new window that never draws).
+    /// Look at hiding and drawing again after `left` (a new window that
+    /// never draws).
     fn wake_in(&mut self, left: Duration) {
         let at = Instant::now() + left;
         if self.recheck_at.is_some_and(|t| t <= at) {
@@ -849,11 +857,9 @@ impl DockUi {
             || self.menu.is_some()
             || self.preview.is_some();
         let hide = should_hide(self.hide, bar, active, busy);
-        // A new window that has not drawn yet shows stale screen contents
-        // (Chrome: about a second); sliding the dock away over it left frozen
-        // copies of the dock there. Wait for its first drawing (`Event::Drawn`)
-        // — or for the limit, if it never draws.
-        if hide && let Some(left) = self.dock.active().and_then(|w| d.undrawn_for(w)) {
+        // Sliding away under a window that has not drawn yet left frozen
+        // copies of the dock in it: wait for its first drawing.
+        if hide && let Some(left) = self.frozen(d) {
             self.wake_in(left);
             return;
         }
@@ -862,6 +868,23 @@ impl DockUi {
         if self.dock.animating(now) {
             self.start_ticking();
         }
+    }
+
+    /// A new window that has not drawn yet covers the dock: how much longer
+    /// to keep the dock exactly as it is. Until its first drawing (Chrome:
+    /// up to a second) the window shows a frozen copy of the screen from when
+    /// it appeared; whatever of the dock changes under it — an icon bouncing,
+    /// the dock sliding away — stays visible there as a ghost. `Event::Drawn`
+    /// (or the time limit, if it never draws) lets the dock go on.
+    fn frozen(&self, d: &Display) -> Option<Duration> {
+        let (left, top) = self.window_origin();
+        let scale = d.scale();
+        d.undrawn_over((
+            (left * scale).round() as i32,
+            (top * scale).round() as i32,
+            d.px(self.area.2),
+            d.px(self.dock.window_height()),
+        ))
     }
 
     /// The dock window's top-left corner on the screen.
