@@ -8,5 +8,5 @@
 pub mod model;
 pub mod view;
 
-pub use model::{Control, Env, Group, LINKS, Page, PageKind, Row, pages, values};
+pub use model::{Control, Env, Group, LINKS, Monitor, Page, PageKind, Row, pages, values};
 pub use view::{Action, SettingsView};

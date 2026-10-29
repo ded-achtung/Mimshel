@@ -9,6 +9,7 @@
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
+use std::time::{Duration, Instant};
 
 use mimshel_core::i18n::{Language, t};
 use mimshel_icons::Icons;
@@ -18,7 +19,9 @@ use mimshel_text::Fonts;
 use mimshel_x11::{Display, Event};
 use tiny_skia::Pixmap;
 
+use crate::settings_system as system;
 use crate::ui::load_config;
+use mimshel_setup::displays::{self, Output};
 
 /// Class of the window: the dock and the menu bar know it by this.
 pub const WINDOW_CLASS: &str = "mimshel-settings";
@@ -36,10 +39,26 @@ enum Msg {
     X(Event),
     Thumb(String, Pixmap),
     /// A setting was applied: an error to show, if any.
-    Applied(&'static str, Result<(), String>),
+    Applied(String, Result<(), String>),
+    /// New display settings are on the screen; these were before them.
+    Tried(Vec<Output>),
+    /// A second went by (the countdown of «Keep these display settings?»).
+    Tick,
     /// The picture chosen for the wallpaper.
     Picked(Option<String>),
 }
+
+/// Work for the worker thread, done one after another.
+enum Job {
+    Set(String, String),
+    /// Keep the display settings on the screen (Xfce's profile).
+    SaveDisplays,
+    /// Go back to these display settings.
+    Restore(Vec<Output>),
+}
+
+/// How long «Keep these display settings?» waits before going back.
+const KEEP_SECONDS: u64 = 15;
 
 /// Exit code: 0 — closed, 1 — no screen.
 pub fn run(page: Option<&str>) -> i32 {
@@ -76,7 +95,8 @@ fn window(
     page: Option<&str>,
 ) -> mimshel_x11::Result<()> {
     let lang = config.language;
-    let mut view = SettingsView::new(lang, mimshel_settings::values(&config), env(&config));
+    let outputs = displays::outputs();
+    let mut view = SettingsView::new(lang, all_values(&config), env(&config, &outputs));
     if let Some(page) = page {
         view.show_page(page);
     }
@@ -104,6 +124,16 @@ fn window(
     }
     let jobs = worker(tx.clone());
     request_thumbs(&view, d.scale(), &tx);
+    {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            while tx.send(Msg::Tick).is_ok() {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+    }
+    // Display settings being tried: what to go back to, and by when.
+    let mut trying: Option<(Vec<Output>, Instant)> = None;
 
     let mut dirty = true;
     // The last frame sent (pixel size and RGBA), and whether the window
@@ -181,7 +211,7 @@ fn window(
                     if config.language != view.language() {
                         win.set_title(d, t(config.language, "settings.title"))?;
                     }
-                    view.set_values(config.language, mimshel_settings::values(&config));
+                    view.set_values(config.language, all_values(&config));
                     let lang = view.language();
                     view.set_status(Some(match result {
                         Ok(()) => t(lang, "settings.applied").to_string(),
@@ -192,8 +222,29 @@ fn window(
                     }
                     Action::Redraw
                 }
+                Msg::Tried(before) => {
+                    trying = Some((before, Instant::now() + Duration::from_secs(KEEP_SECONDS)));
+                    view.set_status(None);
+                    view.set_confirm(Some(KEEP_SECONDS as u32));
+                    Action::Redraw
+                }
+                Msg::Tick => match &trying {
+                    Some((_, by)) => {
+                        let left = by
+                            .saturating_duration_since(Instant::now())
+                            .as_secs_f32()
+                            .ceil() as u32;
+                        if left == 0 {
+                            Action::Revert
+                        } else {
+                            view.set_confirm(Some(left));
+                            Action::Redraw
+                        }
+                    }
+                    None => Action::Nothing,
+                },
                 Msg::Picked(Some(path)) => {
-                    let _ = jobs.send(("look.wallpaper", path));
+                    let _ = jobs.send(Job::Set("look.wallpaper".to_string(), path));
                     applying(&mut view, "look.wallpaper");
                     Action::Redraw
                 }
@@ -203,8 +254,22 @@ fn window(
                 Action::Nothing => {}
                 Action::Redraw => dirty = true,
                 Action::Set(key, value) => {
-                    let _ = jobs.send((key, value));
-                    applying(&mut view, key);
+                    applying(&mut view, &key);
+                    let _ = jobs.send(Job::Set(key, value));
+                    dirty = true;
+                }
+                Action::Keep => {
+                    if trying.take().is_some() {
+                        let _ = jobs.send(Job::SaveDisplays);
+                    }
+                    view.set_confirm(None);
+                    dirty = true;
+                }
+                Action::Revert => {
+                    if let Some((before, _)) = trying.take() {
+                        let _ = jobs.send(Job::Restore(before));
+                    }
+                    view.set_confirm(None);
                     dirty = true;
                 }
                 Action::PickWallpaper => pick_wallpaper(view.language(), tx.clone()),
@@ -218,6 +283,12 @@ fn window(
                     }
                 }
                 Action::Close => {
+                    // Closed while trying display settings: not kept.
+                    if let Some((before, _)) = trying.take()
+                        && let Err(e) = displays::apply(&before)
+                    {
+                        eprintln!("Не вернуть прежние настройки экранов: {e}");
+                    }
                     win.destroy(d)?;
                     return Ok(());
                 }
@@ -254,7 +325,7 @@ fn changed(before: &[u8], now: &Pixmap) -> Option<(u32, u32, u32, u32)> {
 /// «Applying…» — and whether Mimshel restarts for it.
 fn applying(view: &mut SettingsView, key: &str) {
     let lang = view.language();
-    let text = if crate::setup::restarts_service(key) {
+    let text = if !system::is_system(key) && crate::setup::restarts_service(key) {
         t(lang, "settings.restarting")
     } else {
         t(lang, "settings.applying")
@@ -263,22 +334,55 @@ fn applying(view: &mut SettingsView, key: &str) {
 }
 
 /// The thread that writes and applies settings, one at a time, in order.
-fn worker(tx: Sender<Msg>) -> Sender<(&'static str, String)> {
-    let (jobs, rx) = mpsc::channel::<(&'static str, String)>();
+fn worker(tx: Sender<Msg>) -> Sender<Job> {
+    let (jobs, rx) = mpsc::channel::<Job>();
     std::thread::spawn(move || {
-        while let Ok((key, value)) = rx.recv() {
-            let result = match crate::setup::write_setting(key, &value) {
-                Ok(key) => crate::setup::apply_setting_checked(&key),
-                Err(crate::setup::SetError::Value(_, e) | crate::setup::SetError::Write(e)) => {
-                    Err(e)
+        while let Ok(job) = rx.recv() {
+            let msg = match job {
+                Job::Set(key, value) if key.starts_with("display.") => {
+                    let before = displays::outputs();
+                    match system::changed_outputs(&before, &key, &value) {
+                        Some(new) => match displays::apply(&new) {
+                            Ok(()) => Msg::Tried(before),
+                            Err(e) => Msg::Applied(key, Err(e)),
+                        },
+                        None => Msg::Applied(key, Ok(())),
+                    }
                 }
+                Job::Set(key, value) if key.starts_with("keyboard.") => {
+                    let result = system::change_keyboard(&key, &value);
+                    Msg::Applied(key, result)
+                }
+                Job::Set(key, value) => {
+                    let result = match crate::setup::write_setting(&key, &value) {
+                        Ok(key) => crate::setup::apply_setting_checked(&key),
+                        Err(
+                            crate::setup::SetError::Value(_, e) | crate::setup::SetError::Write(e),
+                        ) => Err(e),
+                    };
+                    Msg::Applied(key, result)
+                }
+                Job::SaveDisplays => {
+                    Msg::Applied("display".into(), displays::save(&displays::outputs()))
+                }
+                Job::Restore(before) => Msg::Applied("display".into(), displays::apply(&before)),
             };
-            if tx.send(Msg::Applied(key, result)).is_err() {
+            if tx.send(msg).is_err() {
                 break;
             }
         }
     });
     jobs
+}
+
+/// The config's settings and the system pages' state, as the pages show them.
+fn all_values(config: &mimshel_core::config::Config) -> std::collections::HashMap<String, String> {
+    let mut v = mimshel_settings::values(config);
+    v.extend(system::values(
+        &displays::outputs(),
+        &mimshel_setup::keyboards::current(),
+    ));
+    v
 }
 
 /// Thumbnails of the wallpapers that have none yet, drawn off the main
@@ -351,7 +455,7 @@ fn pick_wallpaper(lang: Language, tx: Sender<Msg>) {
 }
 
 /// What the pages offer on this machine.
-fn env(config: &mimshel_core::config::Config) -> Env {
+fn env(config: &mimshel_core::config::Config, outputs: &[Output]) -> Env {
     let mut clocks: Vec<String> = CLOCKS.iter().map(|s| s.to_string()).collect();
     if !clocks.contains(&config.clock_format) {
         clocks.push(config.clock_format.clone());
@@ -367,6 +471,12 @@ fn env(config: &mimshel_core::config::Config) -> Env {
             .filter(|l| l.3.first().is_some_and(|p| themes::installed(p)))
             .map(|l| l.0)
             .collect(),
+        // Our own pages need xrandr and setxkbmap; without them the Xfce
+        // dialogs stay.
+        system: themes::installed("xrandr") && themes::installed("setxkbmap"),
+        monitors: system::monitors(outputs),
+        layouts: mimshel_setup::keyboards::available_layouts(),
+        switches: system::switches(config.language),
     }
 }
 
@@ -400,8 +510,8 @@ pub fn snapshot(page: &str, file: &str) -> mimshel_x11::Result<()> {
     let config = load_config();
     let mut view = SettingsView::new(
         config.language,
-        mimshel_settings::values(&config),
-        env(&config),
+        all_values(&config),
+        env(&config, &displays::outputs()),
     );
     view.show_page(page);
     let mut fonts = Fonts::new(&config.font);

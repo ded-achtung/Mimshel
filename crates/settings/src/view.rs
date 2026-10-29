@@ -79,11 +79,14 @@ pub enum Action {
     Nothing,
     Redraw,
     /// Write `key = value` (as `mimshel set` takes it) and apply it.
-    Set(&'static str, String),
+    Set(String, String),
     /// Ask for a picture file for the wallpaper.
     PickWallpaper,
     /// Run another program's settings window.
     Open(Vec<String>),
+    /// Keep the display settings just tried, or go back to the old ones.
+    Keep,
+    Revert,
     Close,
 }
 
@@ -98,6 +101,9 @@ enum Hit {
     Wallpaper(usize),
     Pick,
     Open,
+    /// The buttons of «Keep these display settings?».
+    Keep,
+    Revert,
 }
 
 /// A rectangle `(x, y, w, h)` in window points.
@@ -123,8 +129,14 @@ pub struct SettingsView {
     side_scroll: f32,
     side_h: f32,
     hover: Option<Hit>,
-    /// The row whose popup is open.
+    /// The row whose popup is open, and how far its list is scrolled
+    /// (`None` until drawn: then it shows the chosen option).
     open: Option<usize>,
+    popup_scroll: Option<f32>,
+    /// How far the open list can scroll (when it is taller than the window).
+    popup_range: f32,
+    /// «Keep these display settings?», seconds left before going back.
+    confirm: Option<u32>,
     /// The row being typed into.
     editing: Option<(usize, TextField)>,
     /// The slider being dragged and its value now.
@@ -154,18 +166,21 @@ pub struct SettingsView {
 
 /// What the sidebar looks like: page, hovered page, scroll, height, version.
 type SideKey = (usize, Option<usize>, u32, (u32, u32), u64);
-/// What the page looks like: page, hover, open popup, slider drag, the text
-/// being typed and its cursor, scroll, size, version.
-type PageKey = (
-    usize,
-    Option<Hit>,
-    Option<usize>,
-    Option<(usize, u32)>,
-    Option<(usize, String, usize)>,
-    u32,
-    (u32, u32),
-    u64,
-);
+/// What the page looks like.
+#[derive(Debug, Clone, PartialEq)]
+struct PageKey {
+    page: usize,
+    hover: Option<Hit>,
+    open: Option<usize>,
+    popup_scroll: Option<u32>,
+    drag: Option<(usize, u32)>,
+    /// The text being typed and where its cursor is.
+    editing: Option<(usize, String, usize)>,
+    scroll: u32,
+    confirm: Option<u32>,
+    size: (u32, u32),
+    version: u64,
+}
 
 impl SettingsView {
     pub fn new(lang: Language, values: HashMap<String, String>, env: Env) -> SettingsView {
@@ -183,6 +198,9 @@ impl SettingsView {
             side_h: 0.0,
             hover: None,
             open: None,
+            popup_scroll: None,
+            popup_range: 0.0,
+            confirm: None,
             editing: None,
             drag: None,
             hits: Vec::new(),
@@ -215,6 +233,16 @@ impl SettingsView {
 
     pub fn language(&self) -> Language {
         self.lang
+    }
+
+    /// «Keep these display settings?» with `seconds` left, or gone.
+    pub fn set_confirm(&mut self, seconds: Option<u32>) {
+        self.confirm = seconds;
+        if seconds.is_some() {
+            self.open = None;
+            self.drag = None;
+            self.editing = None;
+        }
     }
 
     pub fn set_status(&mut self, status: Option<String>) {
@@ -286,12 +314,12 @@ impl SettingsView {
 
     /// Something changed now: remember it right away, so the window shows
     /// it before the file is read back.
-    fn set(&mut self, key: &'static str, value: String) -> Action {
+    fn set(&mut self, key: String, value: String) -> Action {
         self.version += 1;
-        if self.value(key) == value {
+        if self.value(&key) == value {
             return Action::Redraw;
         }
-        self.values.insert(key.to_string(), value.clone());
+        self.values.insert(key.clone(), value.clone());
         let id = self.pages[self.page].id;
         self.pages = pages(self.lang, &self.values, &self.env);
         self.page = self.pages.iter().position(|p| p.id == id).unwrap_or(0);
@@ -303,7 +331,7 @@ impl SettingsView {
         let Some((row, field)) = self.editing.take() else {
             return Action::Nothing;
         };
-        let Some(key) = self.rows().get(row).map(|r| r.key) else {
+        let Some(key) = self.rows().get(row).map(|r| r.key.clone()) else {
             return Action::Redraw;
         };
         let text = field.text().trim().to_string();
@@ -315,11 +343,21 @@ impl SettingsView {
 
     pub fn press(&mut self, x: f32, y: f32) -> Action {
         let hit = self.hit(x, y);
+        // While «Keep these display settings?» is up, only its buttons work.
+        if self.confirm.is_some() {
+            return match hit {
+                Some(Hit::Keep) => Action::Keep,
+                Some(Hit::Revert) => Action::Revert,
+                _ => Action::Nothing,
+            };
+        }
         if let Some(row) = self.open.take() {
             if let Some(Hit::Option(i)) = hit {
                 let rows = self.rows();
                 let picked = rows.get(row).and_then(|r| match &r.control {
-                    Control::Choice(options) => options.get(i).map(|o| (r.key, o.0.clone())),
+                    Control::Choice(options) => {
+                        options.get(i).map(|o| (r.key.clone(), o.0.clone()))
+                    }
                     _ => None,
                 });
                 if let Some((key, value)) = picked {
@@ -350,10 +388,11 @@ impl SettingsView {
                 match row.control {
                     Control::Choice(_) => {
                         self.open = Some(i);
+                        self.popup_scroll = None;
                         Action::Redraw
                     }
                     Control::Switch { on, off } => {
-                        let value = if self.value(row.key) == off { on } else { off };
+                        let value = if self.value(&row.key) == off { on } else { off };
                         self.set(row.key, value)
                     }
                     Control::Slider { min, max } => {
@@ -361,9 +400,12 @@ impl SettingsView {
                         self.drag = Some((i, v));
                         Action::Redraw
                     }
+                    // An action, not a value: always sent.
+                    Control::Button(_) => Action::Set(row.key, String::new()),
+                    Control::None => Action::Nothing,
                     Control::Text => {
                         if self.editing.as_ref().is_none_or(|e| e.0 != i) {
-                            let text = self.value(row.key).to_string();
+                            let text = self.value(&row.key).to_string();
                             let n = text.chars().count();
                             self.editing = Some((i, TextField::with_text(&text, n)));
                         }
@@ -373,13 +415,15 @@ impl SettingsView {
             }
             Some(Hit::Wallpaper(i)) => {
                 let value = self.wallpapers().get(i).cloned();
-                value.map_or(Action::Nothing, |v| self.set("look.wallpaper", v))
+                value.map_or(Action::Nothing, |v| self.set("look.wallpaper".into(), v))
             }
             Some(Hit::Pick) => Action::PickWallpaper,
             Some(Hit::Open) => match &self.pages[self.page].kind {
                 PageKind::Link(command) => Action::Open(command.clone()),
                 _ => Action::Nothing,
             },
+            Some(Hit::Keep) => Action::Keep,
+            Some(Hit::Revert) => Action::Revert,
             Some(Hit::Option(_)) | None => Action::Nothing,
         }
     }
@@ -426,7 +470,7 @@ impl SettingsView {
         let Some((row, v)) = self.drag.take() else {
             return Action::Nothing;
         };
-        match self.rows().get(row).map(|r| r.key) {
+        match self.rows().get(row).map(|r| r.key.clone()) {
             Some(key) => self.set(key, v.to_string()),
             None => Action::Redraw,
         }
@@ -435,6 +479,15 @@ impl SettingsView {
     /// Mouse wheel at `x`: `down` scrolls the sidebar or the page down.
     pub fn wheel(&mut self, x: f32, down: bool) -> Action {
         let step = if down { SCROLL_STEP } else { -SCROLL_STEP };
+        if self.open.is_some() {
+            let now = self.popup_scroll.unwrap_or(0.0);
+            let to = (now + step).clamp(0.0, self.popup_range);
+            if to == now {
+                return Action::Nothing;
+            }
+            self.popup_scroll = Some(to);
+            return Action::Redraw;
+        }
         let (scroll, height) = if x < SIDEBAR_W {
             (&mut self.side_scroll, self.side_h)
         } else {
@@ -451,6 +504,13 @@ impl SettingsView {
     }
 
     pub fn key(&mut self, k: KeyPress) -> Action {
+        if self.confirm.is_some() {
+            return match k.key {
+                Key::Return => Action::Keep,
+                Key::Escape => Action::Revert,
+                _ => Action::Nothing,
+            };
+        }
         if let Some((_, field)) = &mut self.editing {
             return match k.key {
                 Key::Return => {
@@ -531,16 +591,18 @@ impl SettingsView {
             .editing
             .as_ref()
             .map(|(row, f)| (*row, f.text().to_string(), f.before_cursor().len()));
-        let page: PageKey = (
-            self.page,
-            self.hover.filter(|h| !matches!(h, Hit::Page(_))),
-            self.open,
-            self.drag,
+        let page = PageKey {
+            page: self.page,
+            hover: self.hover.filter(|h| !matches!(h, Hit::Page(_))),
+            open: self.open,
+            popup_scroll: self.popup_scroll.map(f32::to_bits),
+            drag: self.drag,
             editing,
-            self.scroll.to_bits(),
-            self.size,
-            self.version,
-        );
+            scroll: self.scroll.to_bits(),
+            confirm: self.confirm,
+            size: self.size,
+            version: self.version,
+        };
         let cw = (w as f32 - SIDEBAR_W).max(1.0) as u32;
         let content = match self.content.take() {
             Some(c) if (c.width(), c.height()) == (cw, self.size.1) => Some(c),
@@ -573,7 +635,7 @@ impl SettingsView {
         let mut y = 12.0 - self.side_scroll;
         let mut was_link = None;
         for i in 0..self.pages.len() {
-            let link = matches!(self.pages[i].kind, PageKind::Link(_));
+            let link = self.pages[i].system;
             if was_link != Some(link) {
                 let title = if link {
                     t(self.lang, "settings.group.system")
@@ -686,6 +748,10 @@ impl SettingsView {
             }
         }
         self.content_h = y + self.scroll + PAD;
+        if let Some(left) = self.confirm {
+            self.draw_confirm(pm, fonts, left);
+            return None;
+        }
         if let Some(status) = &self.status {
             let h = pm.height() as f32;
             fill(pm, (0.0, h - 30.0, w, 30.0), BG, 0.0);
@@ -729,17 +795,20 @@ impl SettingsView {
                 Some(right - x0),
             );
         }
-        let value = self.value(row.key).to_string();
+        let value = self.value(&row.key).to_string();
         let hover = self.hover == Some(Hit::Control(index));
         let content_x = SIDEBAR_W;
         let mut popup = None;
         match &row.control {
             Control::Choice(options) => {
-                let label = options
+                let mut label = options
                     .iter()
                     .find(|o| o.0 == value)
                     .map_or(value.as_str(), |o| o.1.as_str())
                     .to_string();
+                if label.is_empty() {
+                    label = t(self.lang, "settings.choose").to_string();
+                }
                 let bw = (self.texts.measure(fonts, &label, &TEXT) + 40.0).clamp(110.0, 280.0);
                 let r = (right - bw, control_y, bw, CONTROL_H);
                 fill(pm, r, if hover { BUTTON_HOVER } else { BUTTON }, 6.0);
@@ -821,6 +890,24 @@ impl SettingsView {
                     Hit::Control(index),
                 ));
             }
+            Control::Button(label) => {
+                let bw = self.texts.measure(fonts, label, &TEXT) + 28.0;
+                let r = (right - bw, control_y, bw, CONTROL_H);
+                fill(pm, r, if hover { BUTTON_HOVER } else { BUTTON }, 6.0);
+                let lw = self.texts.measure(fonts, label, &TEXT);
+                self.texts.draw(
+                    fonts,
+                    pm,
+                    label,
+                    &TEXT,
+                    r.0 + (bw - lw) / 2.0,
+                    r.1 + 4.0,
+                    None,
+                );
+                self.hits
+                    .push(((content_x + r.0, r.1, r.2, r.3), Hit::Control(index)));
+            }
+            Control::None => {}
             Control::Text => {
                 let fw = FIELD_W.min(right - x0 - 120.0).max(120.0);
                 let r = (right - fw, control_y, fw, CONTROL_H);
@@ -859,6 +946,56 @@ impl SettingsView {
         popup
     }
 
+    /// The page dimmed and a box over it: keep the display settings just
+    /// tried, or go back (by itself when the time is up).
+    fn draw_confirm(&mut self, pm: &mut Canvas, fonts: &mut Fonts, left: u32) {
+        let (w, h) = (pm.width() as f32, pm.height() as f32);
+        fill(pm, (0.0, 0.0, w, h), [0, 0, 0, 0x90], 0.0);
+        let (bw, bh) = (380.0_f32.min(w - 32.0), 150.0);
+        let (x, y) = ((w - bw) / 2.0, (h - bh) / 2.0);
+        fill(pm, (x, y, bw, bh), MENU, 12.0);
+        outline(pm, (x, y, bw, bh), MENU_EDGE, 12.0, 1.0);
+        let title = t(self.lang, "settings.keep_title");
+        let bold = Style {
+            weight: 700,
+            ..TEXT
+        };
+        self.texts
+            .draw(fonts, pm, title, &bold, x + 20.0, y + 20.0, Some(bw - 40.0));
+        let text = t(self.lang, "settings.keep_text").replace("{n}", &left.to_string());
+        self.texts.draw(
+            fonts,
+            pm,
+            &text,
+            &VALUE,
+            x + 20.0,
+            y + 48.0,
+            Some(bw - 40.0),
+        );
+        let keep = t(self.lang, "settings.keep");
+        let revert = t(self.lang, "settings.revert");
+        let kw = self.texts.measure(fonts, keep, &TEXT) + 32.0;
+        let rw = self.texts.measure(fonts, revert, &TEXT) + 32.0;
+        let by = y + bh - 20.0 - CONTROL_H - 2.0;
+        let kx = x + bw - 20.0 - kw;
+        self.button(
+            pm,
+            fonts,
+            (kx, by, kw, CONTROL_H + 2.0),
+            keep,
+            Hit::Keep,
+            true,
+        );
+        self.button(
+            pm,
+            fonts,
+            (kx - 10.0 - rw, by, rw, CONTROL_H + 2.0),
+            revert,
+            Hit::Revert,
+            false,
+        );
+    }
+
     fn draw_popup(&mut self, pm: &mut Canvas, fonts: &mut Fonts, row: usize, (x, y, bw): Rect3) {
         let rows = self.rows();
         let Some(Control::Choice(options)) = rows.get(row).map(|r| r.control.clone()) else {
@@ -866,16 +1003,29 @@ impl SettingsView {
         };
         let current = rows
             .get(row)
-            .map(|r| self.value(r.key).to_string())
+            .map(|r| self.value(&r.key).to_string())
             .unwrap_or_default();
         let widest = options
             .iter()
             .map(|o| self.texts.measure(fonts, &o.1, &TEXT))
             .fold(0.0, f32::max);
         let mw = (widest + 44.0).max(bw);
-        let mh = options.len() as f32 * OPTION_H + 10.0;
         let h = pm.height() as f32;
         let w = pm.width() as f32;
+        // A long list (keyboard layouts) is as tall as the window allows and
+        // scrolls; it opens with the chosen option in view.
+        let full = options.len() as f32 * OPTION_H + 10.0;
+        let mh = full.min(h - 16.0);
+        self.popup_range = full - mh;
+        let scroll = match self.popup_scroll {
+            Some(s) => s.clamp(0.0, self.popup_range),
+            None => {
+                let at = options.iter().position(|o| o.0 == current).unwrap_or(0);
+                let s = (at as f32 * OPTION_H - mh / 2.0).clamp(0.0, self.popup_range);
+                self.popup_scroll = Some(s);
+                s
+            }
+        };
         // Below the button, or above it when there is no room; never off
         // the window.
         let my = if y + mh <= h - 8.0 {
@@ -888,7 +1038,10 @@ impl SettingsView {
         fill(pm, r, MENU, 8.0);
         outline(pm, r, MENU_EDGE, 8.0, 1.0);
         for (i, (value, label)) in options.iter().enumerate() {
-            let oy = my + 5.0 + i as f32 * OPTION_H;
+            let oy = my + 5.0 + i as f32 * OPTION_H - scroll;
+            if oy < my + 2.0 || oy + OPTION_H > my + mh - 2.0 {
+                continue;
+            }
             let o = (mx + 5.0, oy, mw - 10.0, OPTION_H);
             if self.hover == Some(Hit::Option(i)) {
                 fill(pm, o, ACCENT, 5.0);
@@ -1282,7 +1435,10 @@ mod tests {
         assert_eq!(v.press(x, y), Action::Redraw);
         drawn(&mut v);
         let (x, y) = at(&v, Hit::Option(0));
-        assert_eq!(v.press(x, y), Action::Set("dock.hide", "never".into()));
+        assert_eq!(
+            v.press(x, y),
+            Action::Set("dock.hide".into(), "never".into())
+        );
         assert_eq!(v.value("dock.hide"), "never");
     }
 
@@ -1296,15 +1452,21 @@ mod tests {
         let (_, y) = at(&v, Hit::Control(0));
         assert_eq!(v.press(x0 + 1.0, y), Action::Redraw);
         assert_eq!(v.motion(x0 + w + 50.0, y), Action::Redraw);
-        assert_eq!(v.release(), Action::Set("dock.icon_size", "128".into()));
+        assert_eq!(
+            v.release(),
+            Action::Set("dock.icon_size".into(), "128".into())
+        );
         // Magnification off: the amount row goes away.
         drawn(&mut v);
         let (x, y) = at(&v, Hit::Control(1));
-        assert_eq!(v.press(x, y), Action::Set("dock.zoom", "false".into()));
+        assert_eq!(
+            v.press(x, y),
+            Action::Set("dock.zoom".into(), "false".into())
+        );
         assert_eq!(v.rows().len(), 3);
         drawn(&mut v);
         let (x, y) = at(&v, Hit::Control(1));
-        assert_eq!(v.press(x, y), Action::Set("dock.zoom", "140".into()));
+        assert_eq!(v.press(x, y), Action::Set("dock.zoom".into(), "140".into()));
     }
 
     #[test]
@@ -1320,7 +1482,7 @@ mod tests {
         }
         assert_eq!(
             v.key(KeyPress::plain(Key::Return)),
-            Action::Set("lock.placeholder", "Пароль".into())
+            Action::Set("lock.placeholder".into(), "Пароль".into())
         );
         // Escape leaves without writing.
         drawn(&mut v);
@@ -1393,6 +1555,65 @@ mod tests {
         assert_ne!(v.page_drawn, page_before);
     }
 
+    fn keyboard_view() -> SettingsView {
+        let layouts = (0..100)
+            .map(|i| (format!("l{i}"), format!("Layout {i}")))
+            .collect();
+        let env = Env {
+            system: true,
+            layouts,
+            ..Env::default()
+        };
+        let mut values = values(&Config::default());
+        values.insert("keyboard.layouts".into(), "l0,l1".into());
+        let mut v = SettingsView::new(Language::En, values, env);
+        v.show_page("keyboard");
+        v
+    }
+
+    #[test]
+    fn layout_buttons_and_a_long_list() {
+        let mut v = keyboard_view();
+        drawn(&mut v);
+        // «Remove» is an action: sent every time.
+        let (x, y) = at(&v, Hit::Control(1));
+        assert_eq!(
+            v.press(x, y),
+            Action::Set("keyboard.remove.1".into(), String::new())
+        );
+        // 98 layouts to add do not fit: the list scrolls.
+        let (x, y) = at(&v, Hit::Control(2));
+        assert_eq!(v.press(x, y), Action::Redraw);
+        drawn(&mut v);
+        assert!(v.popup_range > 0.0);
+        assert_eq!(v.wheel(500.0, true), Action::Redraw);
+        drawn(&mut v);
+        let first_shown = v.hits.iter().find_map(|(_, h)| match h {
+            Hit::Option(i) => Some(*i),
+            _ => None,
+        });
+        assert!(first_shown.is_some_and(|i| i > 0), "{first_shown:?}");
+    }
+
+    #[test]
+    fn keep_or_revert_the_displays() {
+        let mut v = keyboard_view();
+        v.set_confirm(Some(15));
+        drawn(&mut v);
+        // Only the box's buttons work meanwhile.
+        let (x, y) = at(&v, Hit::Page(0));
+        assert_eq!(v.press(x, y), Action::Nothing);
+        let (x, y) = at(&v, Hit::Keep);
+        assert_eq!(v.press(x, y), Action::Keep);
+        let (x, y) = at(&v, Hit::Revert);
+        assert_eq!(v.press(x, y), Action::Revert);
+        assert_eq!(v.key(KeyPress::plain(Key::Escape)), Action::Revert);
+        assert_eq!(v.key(KeyPress::plain(Key::Return)), Action::Keep);
+        v.set_confirm(None);
+        drawn(&mut v);
+        assert!(!v.hits.iter().any(|(_, h)| *h == Hit::Keep));
+    }
+
     #[test]
     fn wallpaper_pick() {
         let mut v = view();
@@ -1401,7 +1622,7 @@ mod tests {
         let (x, y) = at(&v, Hit::Wallpaper(2));
         assert_eq!(
             v.press(x, y),
-            Action::Set("look.wallpaper", "aurora".into())
+            Action::Set("look.wallpaper".into(), "aurora".into())
         );
         drawn(&mut v);
         let (x, y) = at(&v, Hit::Pick);

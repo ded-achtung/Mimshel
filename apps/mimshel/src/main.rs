@@ -14,6 +14,7 @@ mod ipc;
 mod lock_ui;
 mod menubar_ui;
 mod notify_ui;
+mod settings_system;
 mod settings_ui;
 mod setup;
 mod status;

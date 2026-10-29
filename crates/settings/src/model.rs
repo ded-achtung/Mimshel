@@ -17,12 +17,17 @@ pub enum Control {
     Slider { min: u32, max: u32 },
     /// Free text, written on Return or when the field is left.
     Text,
+    /// A button: a click sets the row's key to "" (it is an action).
+    Button(String),
+    /// Nothing to change (a layout that is the only one left).
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
-    /// `section.key`, as in `mimshel set`.
-    pub key: &'static str,
+    /// `section.key`, as in `mimshel set`; or `display.NAME.WHAT` and
+    /// `keyboard.WHAT` for the system pages.
+    pub key: String,
     pub label: String,
     /// A line of explanation under the row.
     pub hint: Option<String>,
@@ -52,6 +57,21 @@ pub struct Page {
     /// Icon name in the theme.
     pub icon: &'static str,
     pub kind: PageKind,
+    /// In the sidebar's System group (not Mimshel's own settings).
+    pub system: bool,
+}
+
+/// A monitor as the Displays page offers it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Monitor {
+    pub name: String,
+    /// What a person calls it («Ноутбук»).
+    pub label: String,
+    /// Resolutions (`"1920x1200"`) and the refresh rates of each
+    /// (`"165.00"`), in xrandr's order.
+    pub modes: Vec<(String, Vec<String>)>,
+    /// The monitor's own best resolution.
+    pub preferred: Option<String>,
 }
 
 /// What the pages offer that depends on the machine.
@@ -64,7 +84,17 @@ pub struct Env {
     pub clocks: Vec<(String, String)>,
     /// The system pages whose program is installed (ids from [`LINKS`]).
     pub links: Vec<&'static str>,
+    /// Our own Displays and Keyboard pages instead of Xfce's dialogs.
+    pub system: bool,
+    pub monitors: Vec<Monitor>,
+    /// Keyboard layouts that can be added: `(code, description)`.
+    pub layouts: Vec<(String, String)>,
+    /// Layout switch options: `(XKB option, label)`.
+    pub switches: Vec<(String, String)>,
 }
+
+/// The ids of the Xfce dialogs our own pages replace (when `Env::system`).
+const REPLACED: [&str; 2] = ["displays", "keyboard"];
 
 /// System pages that open another program: id, icon, title key, command.
 pub const LINKS: &[(&str, &str, &str, &[&str])] = &[
@@ -156,13 +186,13 @@ pub fn values(config: &Config) -> HashMap<String, String> {
 pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec<Page> {
     let tr = |key: &str| t(lang, key).to_string();
     let value = |key: &str| values.get(key).map_or("", String::as_str);
-    let row = |key: &'static str, label: &str, control: Control| Row {
-        key,
+    let row = |key: &str, label: &str, control: Control| Row {
+        key: key.to_string(),
         label: tr(label),
         hint: None,
         control,
     };
-    let choice = |key: &'static str, label: &str, options: Vec<(String, String)>| {
+    let choice = |key: &str, label: &str, options: Vec<(String, String)>| {
         row(
             key,
             label,
@@ -170,7 +200,7 @@ pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec
         )
     };
     let names = |list: &[String]| list.iter().map(|n| (n.clone(), n.clone())).collect();
-    let minutes = |key: &'static str, label: &str| {
+    let minutes = |key: &str, label: &str| {
         let options = [1, 2, 3, 5, 10, 15, 20, 30, 45, 60]
             .iter()
             .map(|n| {
@@ -182,7 +212,7 @@ pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec
             .collect();
         choice(key, label, options)
     };
-    let switch = |key: &'static str, label: &str, on: &str, off: &str| {
+    let switch = |key: &str, label: &str, on: &str, off: &str| {
         row(
             key,
             label,
@@ -355,6 +385,7 @@ pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec
         title: tr(title),
         icon,
         kind,
+        system: false,
     };
     let mut out = vec![
         page(
@@ -406,13 +437,213 @@ pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec
             PageKind::Rows(parts),
         ),
     ];
+    if env.system {
+        let system = |id, icon, title: &str, groups| Page {
+            system: true,
+            ..page(id, icon, title, PageKind::Rows(groups))
+        };
+        out.push(system(
+            "displays",
+            "preferences-desktop-display",
+            "settings.displays",
+            displays(lang, values, env),
+        ));
+        out.push(system(
+            "keyboard",
+            "preferences-desktop-keyboard",
+            "settings.keyboard",
+            keyboard(lang, values, env),
+        ));
+    }
     for (id, icon, title, command) in LINKS {
-        if env.links.contains(id) {
+        if env.links.contains(id) && !(env.system && REPLACED.contains(id)) {
             let command = command.iter().map(|s| s.to_string()).collect();
-            out.push(page(id, icon, title, PageKind::Link(command)));
+            let mut link = page(id, icon, title, PageKind::Link(command));
+            link.system = true;
+            out.push(link);
         }
     }
     out
+}
+
+/// One box per monitor: resolution, refresh rate, rotation — and with
+/// more than one, on/off, the main one and where it stands.
+fn displays(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec<Group> {
+    let tr = |key: &str| t(lang, key).to_string();
+    let several = env.monitors.len() > 1;
+    let mut groups = Vec::new();
+    for (i, m) in env.monitors.iter().enumerate() {
+        let key = |what: &str| format!("display.{}.{what}", m.name);
+        let value = |what: &str| values.get(&key(what)).cloned().unwrap_or_default();
+        let row = |what: &str, label: &str, control| Row {
+            key: key(what),
+            label: tr(label),
+            hint: None,
+            control,
+        };
+        let switch = || Control::Switch {
+            on: "true".into(),
+            off: "false".into(),
+        };
+        let mut rows = Vec::new();
+        let active = value("active") != "false";
+        if several {
+            rows.push(row("active", "settings.display_on", switch()));
+        }
+        if active {
+            let modes = m
+                .modes
+                .iter()
+                .map(|(mode, _)| {
+                    let mut label = mode.replace('x', " × ");
+                    if m.preferred.as_deref() == Some(mode) {
+                        label = format!("{label} {}", tr("settings.recommended"));
+                    }
+                    (mode.clone(), label)
+                })
+                .collect();
+            let mode = value("mode");
+            let rates = m
+                .modes
+                .iter()
+                .find(|(md, _)| *md == mode)
+                .map(|(_, rates)| {
+                    rates
+                        .iter()
+                        .map(|r| (r.clone(), tr("settings.hz").replace("{n}", &hz(r))))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let rotations = ["normal", "left", "right", "inverted"]
+                .iter()
+                .map(|r| (r.to_string(), tr(&format!("settings.rot_{r}"))))
+                .collect();
+            rows.push(row("mode", "settings.resolution", Control::Choice(modes)));
+            rows.push(row("rate", "settings.refresh", Control::Choice(rates)));
+            rows.push(row(
+                "rotation",
+                "settings.rotation",
+                Control::Choice(rotations),
+            ));
+            if several {
+                rows.push(row("primary", "settings.display_primary", switch()));
+            }
+            if several && i > 0 {
+                let mut sides = Vec::new();
+                for other in env.monitors.iter().filter(|o| o.name != m.name) {
+                    for side in ["right", "left", "above", "below", "mirror"] {
+                        let label =
+                            tr(&format!("settings.side_{side}")).replace("{name}", &other.label);
+                        sides.push((format!("{side}:{}", other.name), label));
+                    }
+                }
+                rows.push(row("side", "settings.arrangement", Control::Choice(sides)));
+            }
+        }
+        groups.push(Group {
+            title: Some(m.label.clone()),
+            rows,
+        });
+    }
+    groups
+}
+
+/// A refresh rate as a person reads it: "165.00" → "165", "59.95" stays.
+fn hz(rate: &str) -> String {
+    rate.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// Layouts (each removable while more than one is left, and one to add),
+/// the switch, key repeat and Num Lock.
+fn keyboard(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec<Group> {
+    let tr = |key: &str| t(lang, key).to_string();
+    let value = |key: &str| values.get(key).cloned().unwrap_or_default();
+    let row = |key: String, label: String, control| Row {
+        key,
+        label,
+        hint: None,
+        control,
+    };
+    let current: Vec<String> = value("keyboard.layouts")
+        .split(',')
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    let describe = |code: &str| {
+        env.layouts
+            .iter()
+            .find(|(c, _)| c == code)
+            .map_or(code.to_string(), |(_, d)| d.clone())
+    };
+    let mut layouts: Vec<Row> = current
+        .iter()
+        .enumerate()
+        .map(|(i, code)| {
+            let control = if current.len() > 1 {
+                Control::Button(tr("settings.remove"))
+            } else {
+                Control::None
+            };
+            row(format!("keyboard.remove.{i}"), describe(code), control)
+        })
+        .collect();
+    let addable = env
+        .layouts
+        .iter()
+        .filter(|(c, _)| !current.contains(c))
+        .cloned()
+        .collect();
+    layouts.push(row(
+        "keyboard.add".into(),
+        tr("settings.add_layout"),
+        Control::Choice(addable),
+    ));
+    let mut switches = vec![(String::new(), tr("settings.switch_none"))];
+    switches.extend(env.switches.iter().cloned());
+    let switch = value("keyboard.switch");
+    if !switch.is_empty() && !switches.iter().any(|(v, _)| *v == switch) {
+        switches.push((switch.clone(), switch));
+    }
+    layouts.push(row(
+        "keyboard.switch".into(),
+        tr("settings.layout_switch"),
+        Control::Choice(switches),
+    ));
+    vec![
+        Group {
+            title: Some(tr("settings.layouts")),
+            rows: layouts,
+        },
+        Group {
+            title: None,
+            rows: vec![
+                row(
+                    "keyboard.delay".into(),
+                    tr("settings.repeat_delay"),
+                    Control::Slider {
+                        min: 150,
+                        max: 1000,
+                    },
+                ),
+                row(
+                    "keyboard.rate".into(),
+                    tr("settings.repeat_rate"),
+                    Control::Slider { min: 5, max: 60 },
+                ),
+            ],
+        },
+        Group {
+            title: None,
+            rows: vec![row(
+                "keyboard.numlock".into(),
+                tr("settings.numlock"),
+                Control::Switch {
+                    on: "true".into(),
+                    off: "false".into(),
+                },
+            )],
+        },
+    ]
 }
 
 /// `options` with the current value in it: a value set by hand (a theme
@@ -472,7 +703,7 @@ mod tests {
                     assert!(
                         mimshel_core::config::SETTINGS
                             .iter()
-                            .any(|(k, _)| k == &row.key),
+                            .any(|(k, _)| *k == row.key),
                         "{}",
                         row.key
                     );
@@ -497,6 +728,106 @@ mod tests {
         };
         assert!(options.iter().any(|(v, _)| v == "1.3"));
         assert!(options.iter().any(|(v, l)| v == "1.5" && l == "150 %"));
+    }
+
+    fn monitor(name: &str, label: &str) -> Monitor {
+        Monitor {
+            name: name.into(),
+            label: label.into(),
+            modes: vec![
+                ("2560x1600".into(), vec!["165.00".into(), "60.00".into()]),
+                ("1920x1200".into(), vec!["165.00".into(), "59.95".into()]),
+            ],
+            preferred: Some("2560x1600".into()),
+        }
+    }
+
+    fn system_page(env: &Env, values: &HashMap<String, String>, id: &str) -> Vec<Group> {
+        pages(Language::Ru, values, env)
+            .into_iter()
+            .find(|p| p.id == id)
+            .map(|p| match p.kind {
+                PageKind::Rows(groups) => groups,
+                _ => panic!("{id} has rows"),
+            })
+            .expect("page is there")
+    }
+
+    #[test]
+    fn displays_page_rows_per_monitor() {
+        let mut env = Env {
+            system: true,
+            links: LINKS.iter().map(|l| l.0).collect(),
+            monitors: vec![monitor("eDP-1", "Ноутбук")],
+            ..Env::default()
+        };
+        let mut v = HashMap::new();
+        v.insert("display.eDP-1.mode".to_string(), "1920x1200".to_string());
+        let one = system_page(&env, &v, "displays");
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].title.as_deref(), Some("Ноутбук"));
+        assert_eq!(one[0].rows.len(), 3, "resolution, rate, rotation");
+        let Control::Choice(rates) = &one[0].rows[1].control else {
+            panic!("rate is a choice");
+        };
+        assert_eq!(rates[0], ("165.00".to_string(), "165 Гц".to_string()));
+        assert_eq!(rates[1].1, "59.95 Гц");
+        let Control::Choice(modes) = &one[0].rows[0].control else {
+            panic!("mode is a choice");
+        };
+        assert_eq!(modes[0].1, "2560 × 1600 (рекомендуется)");
+        // Our pages stand in for the Xfce dialogs, in the System group.
+        let all = pages(Language::Ru, &v, &env);
+        assert_eq!(all.iter().filter(|p| p.id == "displays").count(), 1);
+        assert!(
+            all.iter()
+                .find(|p| p.id == "keyboard")
+                .is_some_and(|p| p.system)
+        );
+
+        env.monitors.push(monitor("HDMI-1", "Dell"));
+        let two = system_page(&env, &v, "displays");
+        assert_eq!(two[0].rows.len(), 5, "on, resolution, rate, rotation, main");
+        assert_eq!(two[1].rows.len(), 6, "and where it stands");
+        let Control::Choice(sides) = &two[1].rows[5].control else {
+            panic!("position is a choice");
+        };
+        assert!(sides.contains(&("right:eDP-1".to_string(), "Справа от «Ноутбук»".to_string())));
+        v.insert("display.HDMI-1.active".to_string(), "false".to_string());
+        assert_eq!(
+            system_page(&env, &v, "displays")[1].rows.len(),
+            1,
+            "only «on»"
+        );
+    }
+
+    #[test]
+    fn keyboard_page_layouts() {
+        let env = Env {
+            system: true,
+            layouts: vec![
+                ("us".into(), "English (US)".into()),
+                ("ru".into(), "Russian".into()),
+                ("de".into(), "German".into()),
+            ],
+            switches: vec![("grp:alt_shift_toggle".into(), "Alt+Shift".into())],
+            ..Env::default()
+        };
+        let mut v = HashMap::new();
+        v.insert("keyboard.layouts".to_string(), "us,ru".to_string());
+        let page = system_page(&env, &v, "keyboard");
+        let rows = &page[0].rows;
+        assert_eq!(rows[0].label, "English (US)");
+        assert_eq!(rows[1].key, "keyboard.remove.1");
+        assert!(matches!(rows[1].control, Control::Button(_)));
+        let Control::Choice(add) = &rows[2].control else {
+            panic!("add is a choice");
+        };
+        assert_eq!(add, &[("de".to_string(), "German".to_string())]);
+        // The last layout cannot be removed.
+        v.insert("keyboard.layouts".to_string(), "us".to_string());
+        let page = system_page(&env, &v, "keyboard");
+        assert_eq!(page[0].rows[0].control, Control::None);
     }
 
     #[test]
