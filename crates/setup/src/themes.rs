@@ -17,6 +17,26 @@ pub fn cursor_themes() -> Vec<String> {
     cursor_themes_in(&bases("icons", ".icons"))
 }
 
+/// Where the GTK theme `name` is installed: the first place that has it,
+/// in the order GTK looks (`~/.themes` first).
+pub fn gtk_theme_dir(name: &str) -> Option<PathBuf> {
+    gtk_theme_dir_in(&bases("themes", ".themes"), name)
+}
+
+fn gtk_theme_dir_in(bases: &[PathBuf], name: &str) -> Option<PathBuf> {
+    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+        return None;
+    }
+    bases
+        .iter()
+        .map(|b| b.join(name))
+        .find(|p| is_gtk_theme(p) || p.join("index.theme").is_file())
+}
+
+fn is_gtk_theme(p: &Path) -> bool {
+    p.join("gtk-3.0/gtk.css").is_file() || p.join("gtk-4.0/gtk.css").is_file()
+}
+
 /// Whether an executable program can be found on PATH.
 pub fn installed(program: &str) -> bool {
     crate::sys::which(program).is_some()
@@ -56,9 +76,7 @@ fn scan(bases: &[PathBuf], matches: impl Fn(&Path) -> bool) -> Vec<String> {
 }
 
 fn gtk_themes_in(bases: &[PathBuf]) -> Vec<String> {
-    scan(bases, |p| {
-        p.join("gtk-3.0/gtk.css").is_file() || p.join("gtk-4.0/gtk.css").is_file()
-    })
+    scan(bases, is_gtk_theme)
 }
 
 fn icon_themes_in(bases: &[PathBuf]) -> Vec<String> {
@@ -151,6 +169,13 @@ mod tests {
         assert_eq!(gtk_themes_in(&bases), ["Agtk", "Zgtk"]);
         assert_eq!(icon_themes_in(&bases), ["hicolor", "Icons"]);
         assert_eq!(cursor_themes_in(&bases), ["Cursor"]);
+        // The first place wins; a name is never a path.
+        assert_eq!(
+            gtk_theme_dir_in(&bases, "Zgtk"),
+            Some(bases[0].join("Zgtk"))
+        );
+        assert_eq!(gtk_theme_dir_in(&bases, "Incomplete"), None);
+        assert_eq!(gtk_theme_dir_in(&bases, "../a/Zgtk"), None);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

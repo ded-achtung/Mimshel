@@ -203,10 +203,7 @@ fn worker(tx: Sender<Msg>) -> Sender<(&'static str, String)> {
     std::thread::spawn(move || {
         while let Ok((key, value)) = rx.recv() {
             let result = match crate::setup::write_setting(key, &value) {
-                Ok(key) => match crate::setup::apply_setting(&key) {
-                    0 => Ok(()),
-                    _ => Err(format!("mimshel set {key} {value}")),
-                },
+                Ok(key) => crate::setup::apply_setting_checked(&key),
                 Err(crate::setup::SetError::Value(_, e) | crate::setup::SetError::Write(e)) => {
                     Err(e)
                 }

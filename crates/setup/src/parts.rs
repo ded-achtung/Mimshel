@@ -66,6 +66,8 @@ struct Plan<'a> {
     config: &'a Config,
     paths: Paths,
     later: Vec<Vec<String>>,
+    /// What could not be applied: `apply` reports it instead of success.
+    failed: Vec<String>,
 }
 
 /// Set the wallpaper outside our own desktop without restarting the
@@ -77,6 +79,7 @@ pub fn apply_wallpaper(config: &Config) {
         config,
         paths: Paths::new(),
         later: Vec::new(),
+        failed: Vec::new(),
     };
     plan.wallpaper();
 }
@@ -88,6 +91,7 @@ pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
         config,
         paths: Paths::new(),
         later: Vec::new(),
+        failed: Vec::new(),
     };
     if config.shell_needed() && !plan.paths.shell_bin.exists() {
         return Err(format!(
@@ -137,7 +141,10 @@ pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     if want("power") {
         power();
     }
-    Ok(())
+    match plan.failed.is_empty() {
+        true => Ok(()),
+        false => Err(plan.failed.join("; ")),
+    }
 }
 
 impl Plan<'_> {
@@ -853,22 +860,24 @@ pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf>
 
 impl Plan<'_> {
     /// Тема окон и программ (GTK, xfwm4, GTK4) и курсор.
-    fn look(&self) {
+    fn look(&mut self) {
         let c = self.config;
         println!(
             "▶ Оформление: окна {}, курсор {}",
             c.gtk_theme, c.cursor_theme
         );
-        let theme_dir = self.paths.themes.join(&c.gtk_theme);
-        if !theme_dir.join("index.theme").exists() && !theme_dir.join("gtk-3.0").is_dir() {
+        // Ours in ~/.themes, or any installed one (/usr/share/themes…): the
+        // settings window offers them all.
+        let Some(theme_dir) = crate::themes::gtk_theme_dir(&c.gtk_theme) else {
+            let why = format!("нет темы окон {}", c.gtk_theme);
             println!(
-                "✘ Нет темы {} в {} — поставьте её (Colloid: \
+                "✘ Нет темы {} — поставьте её (Colloid: \
                  https://github.com/vinceliuice/Colloid-gtk-theme)",
-                c.gtk_theme,
-                self.paths.themes.display()
+                c.gtk_theme
             );
+            self.failed.push(why);
             return;
-        }
+        };
         xset("xsettings", "/Net/ThemeName", "string", &c.gtk_theme);
         xset("xfwm4", "/general/theme", "string", &c.gtk_theme);
         xset(

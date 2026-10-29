@@ -149,6 +149,17 @@ pub fn restarts_service(key: &str) -> bool {
 /// Apply a setting already written by [`write_setting`]; the exit code
 /// of `mimshel set`.
 pub fn apply_setting(key: &str) -> i32 {
+    match apply_setting_checked(key) {
+        Ok(()) => 0,
+        Err(e) => {
+            println!("✘ {e}");
+            1
+        }
+    }
+}
+
+/// The same, with what went wrong (the settings window shows it).
+pub fn apply_setting_checked(key: &str) -> Result<(), String> {
     let (section, name) = key.split_once('.').unwrap_or((key, ""));
     // Hot reload (v2): language and wallpaper switch without restarting
     // the daemon, the session or the machine. If no daemon is running,
@@ -164,7 +175,7 @@ pub fn apply_setting(key: &str) -> i32 {
         } else {
             println!("Служба не запущена — настройки применятся при следующем запуске");
         }
-        return 0;
+        return Ok(());
     }
     let config = load_config();
     // Что применить: часть, которую переключили, или прежнюю программу, чьи
@@ -189,11 +200,13 @@ pub fn apply_setting(key: &str) -> i32 {
             println!(
                 "Новые окна терминала возьмут настройку сами — уже открытые нужно открыть заново."
             );
-            return 0;
+            return Ok(());
         }
         _ => vec!["service"],
     };
-    run_apply(&config, &parts)
+    try_apply(&config, &parts)?;
+    println!("✔ Применено");
+    Ok(())
 }
 
 /// Свой Проводник включили (`mimshel`) или вернули Thunar: значок в доке —
@@ -293,21 +306,7 @@ fn apply_parts(parts: &[String]) -> i32 {
 }
 
 fn run_apply(config: &mimshel_core::config::Config, parts: &[&str]) -> i32 {
-    let mut updated = config.clone();
-    if (parts.is_empty() || parts.contains(&"launchers"))
-        && let Some(path) = config_path()
-    {
-        let store = config_store(path);
-        if let Err(e) = store.edit(|text| {
-            swap_settings(text)
-                .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))
-        }) {
-            println!("✘ Не записать настройки: {e}");
-            return 1;
-        }
-        updated = store.load();
-    }
-    match apply(&updated, parts) {
+    match try_apply(config, parts) {
         Ok(()) => {
             println!("✔ Применено");
             0
@@ -317,6 +316,24 @@ fn run_apply(config: &mimshel_core::config::Config, parts: &[&str]) -> i32 {
             1
         }
     }
+}
+
+/// `mimshel apply PARTS…`; what went wrong, for the settings window.
+fn try_apply(config: &mimshel_core::config::Config, parts: &[&str]) -> Result<(), String> {
+    let mut updated = config.clone();
+    if (parts.is_empty() || parts.contains(&"launchers"))
+        && let Some(path) = config_path()
+    {
+        let store = config_store(path);
+        store
+            .edit(|text| {
+                swap_settings(text)
+                    .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))
+            })
+            .map_err(|e| format!("Не записать настройки: {e}"))?;
+        updated = store.load();
+    }
+    apply(&updated, parts)
 }
 
 /// Replace only an existing settings pin, preserving its position.
