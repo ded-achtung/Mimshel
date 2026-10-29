@@ -1376,7 +1376,7 @@ mod tests {
         let mut v = view();
         v.show_page("dock");
         drawn(&mut v);
-        let side_before = v.side_drawn.clone();
+        let side_before = v.side_drawn;
         // The hover moves over the page: only the page is drawn again.
         let (x, y) = at(&v, Hit::Control(3));
         assert_eq!(v.motion(x, y), Action::Redraw);
