@@ -251,6 +251,9 @@ pub struct Display {
     shm: shm::Shm,
     /// Перетаскивание из других программ (XDND).
     drop: dnd::DropCell,
+    /// The monitors as last passed on to the UI (`Display::monitors_changed`):
+    /// RandR also sends events when nothing changed for us.
+    monitors_seen: Mutex<Option<windows::MonitorList>>,
     /// Масштаб (`mimshel_render::scale` при подключении): размеры окон и
     /// координаты мыши снаружи — в точках, серверу — в пикселях.
     scale: f32,
@@ -291,6 +294,7 @@ impl Display {
             keymap,
             shm,
             drop: dnd::DropCell::default(),
+            monitors_seen: Mutex::new(None),
             scale: mimshel_render::scale(),
         })
     }
@@ -538,9 +542,17 @@ impl Display {
                 }
             }
             XEvent::ConfigureNotify(e) => Event::Configure { window: e.window },
-            // Monitors changed (see `Display::watch_root`).
+            // Monitors changed (see `Display::watch_root`) — only if they really
+            // did: a program that queries the outputs (Chrome at startup) makes
+            // the server send RandR events with nothing changed, and each one
+            // re-placed the dock and redrew the menu bar and the desktop over
+            // the program's not yet drawn window — stripes of stale picture.
             XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_) => {
-                Event::Configure { window: self.root }
+                if self.monitors_changed() {
+                    Event::Configure { window: self.root }
+                } else {
+                    Event::Other
+                }
             }
             // Окно уничтожили снаружи (не через «закрыть») — забыть его.
             XEvent::DestroyNotify(e) => Event::Close { window: e.window },

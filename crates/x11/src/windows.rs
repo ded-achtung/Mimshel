@@ -14,6 +14,16 @@ use crate::{Display, Result};
 
 /// A rectangle: x, y, width, height.
 type Rect = (i32, i32, u32, u32);
+/// Monitors with the «primary» mark, as `Display::monitor_list` reads them.
+pub(crate) type MonitorList = Vec<(bool, Rect)>;
+
+/// `now` differs from what was `seen` (nothing seen yet counts as a change);
+/// `seen` becomes `now`.
+fn layout_changed(seen: &mut Option<MonitorList>, now: MonitorList) -> bool {
+    let changed = seen.as_ref() != Some(&now);
+    *seen = Some(now);
+    changed
+}
 
 /// The primary monitor of `list`, else the first; none — the whole screen.
 fn pick_primary(list: &[(bool, Rect)], screen: (u32, u32)) -> Rect {
@@ -35,6 +45,14 @@ impl Display {
     /// запуска внешнего xrandr при событиях изменения размера.
     pub fn monitors(&self) -> Vec<(i32, i32, u32, u32)> {
         self.monitor_list().into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Did the monitors change since the last call (or since `watch_root`)?
+    /// Remembers the new list.
+    pub(crate) fn monitors_changed(&self) -> bool {
+        let now = self.monitor_list();
+        let mut seen = self.monitors_seen.lock().unwrap_or_else(|p| p.into_inner());
+        layout_changed(&mut seen, now)
     }
 
     /// Monitors with the «primary» mark, in pixels.
@@ -149,6 +167,9 @@ impl Display {
             self.root,
             NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE | NotifyMask::OUTPUT_CHANGE,
         );
+        // The starting point for `monitors_changed`.
+        let now = self.monitor_list();
+        *self.monitors_seen.lock().unwrap_or_else(|p| p.into_inner()) = Some(now);
         self.conn.flush()?;
         Ok(())
     }
@@ -473,5 +494,24 @@ mod tests {
             (0, 0, 1920, 1080)
         );
         assert_eq!(pick_primary(&[], (1280, 800)), (0, 0, 1280, 800));
+    }
+
+    #[test]
+    fn only_real_monitor_changes_count() {
+        let one = vec![(true, (0, 0, 1920, 1200))];
+        let mut seen = None;
+        // Nothing seen yet: the first list is a change.
+        assert!(layout_changed(&mut seen, one.clone()));
+        // The same list again — what a program querying the outputs causes.
+        assert!(!layout_changed(&mut seen, one.clone()));
+        assert!(!layout_changed(&mut seen, one.clone()));
+        // A second monitor, then the primary mark moving: real changes.
+        let two = vec![(true, (0, 0, 1920, 1200)), (false, (1920, 0, 2560, 1440))];
+        assert!(layout_changed(&mut seen, two.clone()));
+        assert!(!layout_changed(&mut seen, two));
+        let moved = vec![(false, (0, 0, 1920, 1200)), (true, (1920, 0, 2560, 1440))];
+        assert!(layout_changed(&mut seen, moved));
+        // Back to one monitor.
+        assert!(layout_changed(&mut seen, one));
     }
 }
