@@ -240,8 +240,29 @@ pub fn supervise(exe: &Path) -> i32 {
 
 /// Name of the guard's «lock»: one per user and display.
 fn guard_name() -> String {
-    let display = std::env::var("DISPLAY").unwrap_or_default();
-    format!("mimshel-lock-guard-{}-{display}", crate::sys::uid())
+    format!(
+        "mimshel-lock-guard-{}-{}",
+        crate::sys::uid(),
+        display_number()
+    )
+}
+
+/// The X display number of `DISPLAY`, the same for every way to write it:
+/// xss-lock runs with `:0.0`, the Xfce session (and xflock4 from the power
+/// manager) with `:0`. Named by the raw string, the two guards did not see
+/// each other and both put up a lock screen: the password asked twice.
+fn display_number() -> String {
+    display_key(&std::env::var("DISPLAY").unwrap_or_default())
+}
+
+fn display_key(display: &str) -> String {
+    let after_host = display.rsplit_once(':').map_or(display, |(_, d)| d);
+    after_host
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// How long a guard that lost waits for the winner's lock screen: under
@@ -251,8 +272,11 @@ const LOSER_WAIT: Duration = Duration::from_secs(4);
 /// Name the lock screen holds while it covers the screen with the
 /// keyboard grabbed: one per user and display.
 fn locked_name() -> String {
-    let display = std::env::var("DISPLAY").unwrap_or_default();
-    format!("mimshel-lock-ready-{}-{display}", crate::sys::uid())
+    format!(
+        "mimshel-lock-ready-{}-{}",
+        crate::sys::uid(),
+        display_number()
+    )
 }
 
 /// Called by the lock screen once its window is shown and the keyboard
@@ -369,6 +393,17 @@ pub fn log(msg: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn one_guard_name_for_every_way_to_write_the_display() {
+        for d in [":0", ":0.0", "unix:0", "unix:0.0", "localhost:0.1"] {
+            assert_eq!(display_key(d), "0", "{d}");
+        }
+        assert_eq!(display_key(":1"), "1");
+        assert_ne!(display_key(":10.0"), display_key(":1.0"));
+        assert_eq!(display_key(""), "");
+    }
+
     use super::*;
 
     #[test]
