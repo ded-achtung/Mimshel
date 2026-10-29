@@ -23,9 +23,9 @@ pub const MIN_SIZE: (u32, u32) = (680, 440);
 
 const SIDEBAR_W: f32 = 230.0;
 const SIDE_PAD: f32 = 10.0;
-const SIDE_ROW: f32 = 32.0;
+const SIDE_ROW: f32 = 28.0;
 const SIDE_ICON: u32 = 20;
-const SIDE_HEADER: f32 = 28.0;
+const SIDE_HEADER: f32 = 24.0;
 const PAD: f32 = 24.0;
 const TITLE_H: f32 = 56.0;
 const ROW_H: f32 = 44.0;
@@ -119,6 +119,9 @@ pub struct SettingsView {
     scroll: f32,
     /// The page's height last drawn (to keep the scroll in range).
     content_h: f32,
+    /// The same for the sidebar (a small window does not fit every page).
+    side_scroll: f32,
+    side_h: f32,
     hover: Option<Hit>,
     /// The row whose popup is open.
     open: Option<usize>,
@@ -148,6 +151,8 @@ impl SettingsView {
             size: SIZE,
             scroll: 0.0,
             content_h: 0.0,
+            side_scroll: 0.0,
+            side_h: 0.0,
             hover: None,
             open: None,
             editing: None,
@@ -387,14 +392,20 @@ impl SettingsView {
         }
     }
 
-    /// Mouse wheel: `down` scrolls the page down.
-    pub fn wheel(&mut self, down: bool) -> Action {
-        let max = (self.content_h - self.size.1 as f32).max(0.0);
-        let to = (self.scroll + if down { SCROLL_STEP } else { -SCROLL_STEP }).clamp(0.0, max);
-        if to == self.scroll {
+    /// Mouse wheel at `x`: `down` scrolls the sidebar or the page down.
+    pub fn wheel(&mut self, x: f32, down: bool) -> Action {
+        let step = if down { SCROLL_STEP } else { -SCROLL_STEP };
+        let (scroll, height) = if x < SIDEBAR_W {
+            (&mut self.side_scroll, self.side_h)
+        } else {
+            (&mut self.scroll, self.content_h)
+        };
+        let max = (height - self.size.1 as f32).max(0.0);
+        let to = (*scroll + step).clamp(0.0, max);
+        if to == *scroll {
             return Action::Nothing;
         }
-        self.scroll = to;
+        *scroll = to;
         self.open = None;
         Action::Redraw
     }
@@ -469,7 +480,7 @@ impl SettingsView {
     fn draw_sidebar(&mut self, pm: &mut Canvas, fonts: &mut Fonts, icons: &mut Icons) {
         let h = self.size.1 as f32;
         fill(pm, (0.0, 0.0, SIDEBAR_W, h), SIDEBAR, 0.0);
-        let mut y = 12.0;
+        let mut y = 12.0 - self.side_scroll;
         let mut was_link = None;
         for i in 0..self.pages.len() {
             let link = matches!(self.pages[i].kind, PageKind::Link(_));
@@ -517,6 +528,7 @@ impl SettingsView {
             self.hits.push((r, Hit::Page(i)));
             y += SIDE_ROW + 2.0;
         }
+        self.side_h = y + self.side_scroll + 12.0;
     }
 
     /// Draws the page (scrolled); returns where the open popup goes:
@@ -1031,6 +1043,22 @@ mod tests {
             }),
             Action::Close
         );
+    }
+
+    #[test]
+    fn a_small_window_scrolls_the_sidebar() {
+        let env = Env {
+            links: crate::model::LINKS.iter().map(|l| l.0).collect(),
+            ..Env::default()
+        };
+        let mut v = SettingsView::new(Language::Ru, values(&Config::default()), env);
+        let mut fonts = Fonts::new("Inter");
+        let mut icons = Icons::new("hicolor");
+        v.render(MIN_SIZE, &mut fonts, &mut icons);
+        assert!(v.side_h > MIN_SIZE.1 as f32, "every page does not fit");
+        assert_eq!(v.wheel(10.0, true), Action::Redraw);
+        assert_eq!(v.wheel(10.0, false), Action::Redraw);
+        assert_eq!(v.wheel(10.0, false), Action::Nothing, "already at the top");
     }
 
     #[test]

@@ -13,6 +13,7 @@ use std::sync::mpsc::{self, Sender};
 use mimshel_core::i18n::{Language, t};
 use mimshel_icons::Icons;
 use mimshel_settings::{Action, Env, LINKS, SettingsView, view};
+use mimshel_setup::themes;
 use mimshel_text::Fonts;
 use mimshel_x11::{Display, Event};
 use tiny_skia::Pixmap;
@@ -122,8 +123,8 @@ fn window(
                 Event::Close { window } if window == win.id() => Action::Close,
                 Event::Button { x, y, button, .. } => match button {
                     1 => view.press(f32::from(x), f32::from(y)),
-                    4 => view.wheel(false),
-                    5 => view.wheel(true),
+                    4 => view.wheel(f32::from(x), false),
+                    5 => view.wheel(f32::from(x), true),
                     _ => Action::Nothing,
                 },
                 Event::Release { button: 1, .. } => view.release(),
@@ -295,13 +296,13 @@ fn env(config: &mimshel_core::config::Config) -> Env {
     }
     let samples = clock_samples(&clocks, config.language);
     Env {
-        gtk_themes: Vec::new(),
-        icon_themes: Vec::new(),
-        cursor_themes: Vec::new(),
+        gtk_themes: themes::gtk_themes(),
+        icon_themes: themes::icon_themes(),
+        cursor_themes: themes::cursor_themes(),
         clocks: clocks.into_iter().zip(samples).collect(),
         links: LINKS
             .iter()
-            .filter(|l| l.3.first().is_some_and(|p| on_path(p)))
+            .filter(|l| l.3.first().is_some_and(|p| themes::installed(p)))
             .map(|l| l.0)
             .collect(),
     }
@@ -330,16 +331,6 @@ fn clock_samples(formats: &[String], lang: Language) -> Vec<String> {
             }
         })
         .collect()
-}
-
-fn on_path(program: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| {
-            std::fs::metadata(dir.join(program))
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
-    })
 }
 
 /// `mimshel snapshot settings PAGE FILE.png`: the window as a picture.
