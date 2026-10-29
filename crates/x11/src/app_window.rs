@@ -172,6 +172,17 @@ impl AppWindow {
         put_pixmap(d, self.window, self.gc, image.image())
     }
 
+    /// Only the pixels `(x0, y0, x1, y1)` of a whole-window picture: the
+    /// rest of the window already shows it.
+    pub fn present_rect(
+        &self,
+        d: &Display,
+        image: &impl crate::Image,
+        rect: (u32, u32, u32, u32),
+    ) -> Result<()> {
+        crate::put_rect(d, self.window, self.gc, image.image(), rect)
+    }
+
     pub fn destroy(&self, d: &Display) -> Result<()> {
         d.conn.free_gc(self.gc)?;
         d.conn.destroy_window(self.window)?;

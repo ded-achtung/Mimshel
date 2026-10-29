@@ -908,6 +908,51 @@ pub(crate) fn put_at(
     Ok(())
 }
 
+/// The pixels `x0..x1` × `y0..y1` of `pixmap` into the same place of
+/// `window` (the rest of the window keeps what it has): a frame where only
+/// a hover highlight moved sends that much, not the whole window.
+pub(crate) fn put_rect(
+    d: &Display,
+    window: Window,
+    gc: u32,
+    pixmap: &Pixmap,
+    (x0, y0, x1, y1): (u32, u32, u32, u32),
+) -> Result<()> {
+    let (full, height) = (pixmap.width(), pixmap.height());
+    let (x0, x1) = (x0.min(full) as usize, x1.min(full) as usize);
+    let (y0, y1) = (y0.min(height) as usize, y1.min(height) as usize);
+    let (w, full) = (x1.saturating_sub(x0), full as usize);
+    if w == 0 || y1 <= y0 {
+        return Ok(());
+    }
+    let src = pixmap.data();
+    let mut data = Vec::with_capacity(w * (y1 - y0) * 4);
+    for y in y0..y1 {
+        data.extend_from_slice(&src[(y * full + x0) * 4..(y * full + x1) * 4]);
+    }
+    // tiny-skia хранит RGBA, X-сервер ждёт BGRA.
+    for px in data.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    let max = d.conn.maximum_request_bytes().saturating_sub(64);
+    let rows = (max / (w * 4)).max(1);
+    for (i, chunk) in data.chunks(rows * w * 4).enumerate() {
+        d.conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            window,
+            gc,
+            w as u16,
+            (chunk.len() / (w * 4)) as u16,
+            x0 as i16,
+            (y0 + i * rows) as i16,
+            0,
+            32,
+            chunk,
+        )?;
+    }
+    Ok(())
+}
+
 /// Через общую память выводим только большие картинки: на маленьких
 /// ожидание ответа сервера съедает выигрыш.
 const SHM_MIN_BYTES: usize = 2 * 1024 * 1024;

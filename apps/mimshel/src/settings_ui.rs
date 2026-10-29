@@ -56,7 +56,7 @@ pub fn run(page: Option<&str>) -> i32 {
     let open = d
         .client_list()
         .into_iter()
-        .find(|&w| d.window_info(w).is_some_and(|i| i.class == WINDOW_CLASS));
+        .find(|&w| d.window_info(w).is_some_and(|i| i.instance == WINDOW_CLASS));
     if let Some(w) = open {
         let _ = d.activate(w);
         return 0;
@@ -106,84 +106,149 @@ fn window(
     request_thumbs(&view, d.scale(), &tx);
 
     let mut dirty = true;
+    // The last frame sent (pixel size and RGBA), and whether the window
+    // lost what it showed (Expose: send it all).
+    let mut shown: Option<(u32, u32, Vec<u8>)> = None;
+    let mut exposed = true;
     loop {
         if dirty {
             dirty = false;
+            let start = std::time::Instant::now();
             let size = win.size(d).unwrap_or(view::SIZE);
             let frame = view.render(size, &mut fonts, &mut icons);
-            win.present(d, &frame)?;
-            d.sync()?;
+            let drawn = start.elapsed();
+            // Only what changed since the last frame (a hover moves a few
+            // rows); the whole window when its size changed or after Expose.
+            let pixmap = frame.pixmap();
+            let same = shown
+                .as_ref()
+                .is_some_and(|(w, h, _)| (*w, *h) == (pixmap.width(), pixmap.height()));
+            let rect = match (&shown, same && !exposed) {
+                (Some((_, _, before)), true) => changed(before, pixmap),
+                _ => Some((0, 0, pixmap.width(), pixmap.height())),
+            };
+            if let Some(rect) = rect {
+                win.present_rect(d, frame, rect)?;
+                d.sync()?;
+            }
+            match &mut shown {
+                Some((w, h, before)) if same => {
+                    before.copy_from_slice(pixmap.data());
+                    (*w, *h) = (pixmap.width(), pixmap.height());
+                }
+                _ => shown = Some((pixmap.width(), pixmap.height(), pixmap.data().to_vec())),
+            }
+            exposed = false;
+            if mimshel_core::names::flag("TIMING") {
+                eprintln!(
+                    "кадр {size:?}: рисование {drawn:?}, всего {:?}",
+                    start.elapsed()
+                );
+            }
         }
-        let Ok(msg) = rx.recv() else {
+        let Ok(first) = rx.recv() else {
             return Ok(());
         };
-        let action = match msg {
-            Msg::X(ev) => match ev {
-                Event::Expose { .. } | Event::Configure { .. } => Action::Redraw,
-                Event::Close { window } if window == win.id() => Action::Close,
-                Event::Button { x, y, button, .. } => match button {
-                    1 => view.press(f32::from(x), f32::from(y)),
-                    4 => view.wheel(f32::from(x), false),
-                    5 => view.wheel(f32::from(x), true),
+        // Everything that came meanwhile, then one frame: a fast pointer
+        // sends many motions, and drawing each would fall behind it.
+        let batch: Vec<Msg> = std::iter::once(first).chain(rx.try_iter()).collect();
+        for msg in batch {
+            let action = match msg {
+                Msg::X(ev) => match ev {
+                    Event::Expose { .. } | Event::Configure { .. } => {
+                        exposed = true;
+                        Action::Redraw
+                    }
+                    Event::Close { window } if window == win.id() => Action::Close,
+                    Event::Button { x, y, button, .. } => match button {
+                        1 => view.press(f32::from(x), f32::from(y)),
+                        4 => view.wheel(f32::from(x), false),
+                        5 => view.wheel(f32::from(x), true),
+                        _ => Action::Nothing,
+                    },
+                    Event::Release { button: 1, .. } => view.release(),
+                    Event::Motion { x, y, .. } => view.motion(f32::from(x), f32::from(y)),
+                    Event::Leave { .. } => view.leave(),
+                    Event::Key(k) => view.key(k),
                     _ => Action::Nothing,
                 },
-                Event::Release { button: 1, .. } => view.release(),
-                Event::Motion { x, y, .. } => view.motion(f32::from(x), f32::from(y)),
-                Event::Leave { .. } => view.leave(),
-                Event::Key(k) => view.key(k),
-                _ => Action::Nothing,
-            },
-            Msg::Thumb(value, pixmap) => {
-                view.set_thumb(value, pixmap);
-                Action::Redraw
-            }
-            Msg::Applied(key, result) => {
-                let config = load_config();
-                if config.language != view.language() {
-                    win.set_title(d, t(config.language, "settings.title"))?;
+                Msg::Thumb(value, pixmap) => {
+                    view.set_thumb(value, pixmap);
+                    Action::Redraw
                 }
-                view.set_values(config.language, mimshel_settings::values(&config));
-                let lang = view.language();
-                view.set_status(Some(match result {
-                    Ok(()) => t(lang, "settings.applied").to_string(),
-                    Err(e) => t(lang, "settings.failed").replace("{e}", &e),
-                }));
-                if key == "look.wallpaper" {
-                    request_thumbs(&view, d.scale(), &tx);
+                Msg::Applied(key, result) => {
+                    let config = load_config();
+                    if config.language != view.language() {
+                        win.set_title(d, t(config.language, "settings.title"))?;
+                    }
+                    view.set_values(config.language, mimshel_settings::values(&config));
+                    let lang = view.language();
+                    view.set_status(Some(match result {
+                        Ok(()) => t(lang, "settings.applied").to_string(),
+                        Err(e) => t(lang, "settings.failed").replace("{e}", &e),
+                    }));
+                    if key == "look.wallpaper" {
+                        request_thumbs(&view, d.scale(), &tx);
+                    }
+                    Action::Redraw
                 }
-                Action::Redraw
-            }
-            Msg::Picked(Some(path)) => {
-                let _ = jobs.send(("look.wallpaper", path));
-                applying(&mut view, "look.wallpaper");
-                Action::Redraw
-            }
-            Msg::Picked(None) => Action::Nothing,
-        };
-        match action {
-            Action::Nothing => {}
-            Action::Redraw => dirty = true,
-            Action::Set(key, value) => {
-                let _ = jobs.send((key, value));
-                applying(&mut view, key);
-                dirty = true;
-            }
-            Action::PickWallpaper => pick_wallpaper(view.language(), tx.clone()),
-            Action::Open(command) => {
-                if let Some((program, args)) = command.split_first() {
-                    let mut cmd = Command::new(program);
-                    cmd.args(args);
-                    if let Err(e) = crate::ui::spawn_detached(cmd) {
-                        eprintln!("Не удалось открыть «{program}»: {e}");
+                Msg::Picked(Some(path)) => {
+                    let _ = jobs.send(("look.wallpaper", path));
+                    applying(&mut view, "look.wallpaper");
+                    Action::Redraw
+                }
+                Msg::Picked(None) => Action::Nothing,
+            };
+            match action {
+                Action::Nothing => {}
+                Action::Redraw => dirty = true,
+                Action::Set(key, value) => {
+                    let _ = jobs.send((key, value));
+                    applying(&mut view, key);
+                    dirty = true;
+                }
+                Action::PickWallpaper => pick_wallpaper(view.language(), tx.clone()),
+                Action::Open(command) => {
+                    if let Some((program, args)) = command.split_first() {
+                        let mut cmd = Command::new(program);
+                        cmd.args(args);
+                        if let Err(e) = crate::ui::spawn_detached(cmd) {
+                            eprintln!("Не удалось открыть «{program}»: {e}");
+                        }
                     }
                 }
-            }
-            Action::Close => {
-                win.destroy(d)?;
-                return Ok(());
+                Action::Close => {
+                    win.destroy(d)?;
+                    return Ok(());
+                }
             }
         }
     }
+}
+
+/// Where `now` differs from `before` (a frame of the same size), in
+/// pixels `(x0, y0, x1, y1)`; `None` — nothing changed.
+fn changed(before: &[u8], now: &Pixmap) -> Option<(u32, u32, u32, u32)> {
+    let w = now.width() as usize;
+    let row = w * 4;
+    let data = now.data();
+    let (mut x0, mut x1, mut y0, mut y1) = (w, 0, None, 0);
+    for (y, (a, b)) in before.chunks(row).zip(data.chunks(row)).enumerate() {
+        if a == b {
+            continue;
+        }
+        y0.get_or_insert(y);
+        y1 = y + 1;
+        let px = |r: &[u8], x: usize| [r[x * 4], r[x * 4 + 1], r[x * 4 + 2], r[x * 4 + 3]];
+        if let Some(first) = (0..x0).find(|&x| px(a, x) != px(b, x)) {
+            x0 = first;
+        }
+        if let Some(last) = (x1..w).rev().find(|&x| px(a, x) != px(b, x)) {
+            x1 = last + 1;
+        }
+    }
+    let y0 = y0?;
+    Some((x0 as u32, y0 as u32, x1.max(x0 + 1) as u32, y1 as u32))
 }
 
 /// «Applying…» — and whether Mimshel restarts for it.

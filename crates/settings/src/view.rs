@@ -137,7 +137,35 @@ pub struct SettingsView {
     thumbs: HashMap<String, Pixmap>,
     /// One line at the bottom: «Applying…», «Applied», an error.
     status: Option<String>,
+    texts: Texts,
+    /// The last frame and its page half: drawn over again, not allocated
+    /// anew each frame.
+    frame: Option<Canvas>,
+    content: Option<Canvas>,
+    /// The sidebar's clickable places (drawn apart from the page's).
+    side_hits: Vec<(Rect, Hit)>,
+    /// What each half was last drawn from: a frame where only the other
+    /// half changed (the hover moving over the page) reuses its pixels.
+    side_drawn: Option<SideKey>,
+    page_drawn: Option<PageKey>,
+    /// Bumped on everything the keys do not see (values, status, thumbnails).
+    version: u64,
 }
+
+/// What the sidebar looks like: page, hovered page, scroll, height, version.
+type SideKey = (usize, Option<usize>, u32, (u32, u32), u64);
+/// What the page looks like: page, hover, open popup, slider drag, the text
+/// being typed and its cursor, scroll, size, version.
+type PageKey = (
+    usize,
+    Option<Hit>,
+    Option<usize>,
+    Option<(usize, u32)>,
+    Option<(usize, String, usize)>,
+    u32,
+    (u32, u32),
+    u64,
+);
 
 impl SettingsView {
     pub fn new(lang: Language, values: HashMap<String, String>, env: Env) -> SettingsView {
@@ -161,12 +189,20 @@ impl SettingsView {
             tracks: HashMap::new(),
             thumbs: HashMap::new(),
             status: None,
+            texts: Texts::default(),
+            frame: None,
+            content: None,
+            side_hits: Vec::new(),
+            side_drawn: None,
+            page_drawn: None,
+            version: 0,
         }
     }
 
     /// The settings as the file has them now (after a write, or another
     /// program changed them), and the language they are shown in.
     pub fn set_values(&mut self, lang: Language, values: HashMap<String, String>) {
+        self.version += 1;
         let id = self.pages.get(self.page).map(|p| p.id);
         self.lang = lang;
         self.values = values;
@@ -182,6 +218,7 @@ impl SettingsView {
     }
 
     pub fn set_status(&mut self, status: Option<String>) {
+        self.version += 1;
         self.status = status;
     }
 
@@ -205,6 +242,7 @@ impl SettingsView {
 
     /// A thumbnail `thumb_size` pixels for wallpaper `value`.
     pub fn set_thumb(&mut self, value: String, pixmap: Pixmap) {
+        self.version += 1;
         self.thumbs.insert(value, pixmap);
     }
 
@@ -241,6 +279,7 @@ impl SettingsView {
         self.hits
             .iter()
             .rev()
+            .chain(&self.side_hits)
             .find(|(r, _)| inside(*r, x, y))
             .map(|(_, h)| *h)
     }
@@ -248,6 +287,7 @@ impl SettingsView {
     /// Something changed now: remember it right away, so the window shows
     /// it before the file is read back.
     fn set(&mut self, key: &'static str, value: String) -> Action {
+        self.version += 1;
         if self.value(key) == value {
             return Action::Redraw;
         }
@@ -458,23 +498,73 @@ impl SettingsView {
         }
     }
 
-    /// The whole window, `(w, h)` points.
-    pub fn render(&mut self, (w, h): (u32, u32), fonts: &mut Fonts, icons: &mut Icons) -> Canvas {
+    /// The whole window, `(w, h)` points. A half whose look did not change
+    /// since the last frame keeps its pixels (most frames only move the
+    /// hover within one half).
+    pub fn render(&mut self, (w, h): (u32, u32), fonts: &mut Fonts, icons: &mut Icons) -> &Canvas {
         self.size = (w.max(1), h.max(1));
-        self.hits.clear();
-        self.tracks.clear();
-        let mut pm = Canvas::new(self.size.0, self.size.1).expect("size is not zero");
-        pm.fill(color(BG));
-        self.draw_sidebar(&mut pm, fonts, icons);
-        let cw = (w as f32 - SIDEBAR_W).max(1.0) as u32;
-        let mut content = Canvas::new(cw, self.size.1).expect("size is not zero");
-        content.fill(color(BG));
-        let popup = self.draw_page(&mut content, fonts);
-        if let Some((row, x, y, bw)) = popup {
-            self.draw_popup(&mut content, fonts, row, (x, y, bw));
+        let (mut pm, fresh) = match self.frame.take() {
+            Some(c) if (c.width(), c.height()) == self.size => (c, false),
+            _ => {
+                let mut c = Canvas::new(self.size.0, self.size.1).expect("size is not zero");
+                c.fill(color(BG));
+                (c, true)
+            }
+        };
+        let hover_page = match self.hover {
+            Some(Hit::Page(i)) => Some(i),
+            _ => None,
+        };
+        let side: SideKey = (
+            self.page,
+            hover_page,
+            self.side_scroll.to_bits(),
+            self.size,
+            self.version,
+        );
+        if fresh || self.side_drawn.as_ref() != Some(&side) {
+            self.side_hits.clear();
+            self.draw_sidebar(&mut pm, fonts, icons);
+            self.side_drawn = Some(side);
         }
-        pm.draw_canvas(SIDEBAR_W, 0.0, &content, &PixmapPaint::default());
-        pm
+        let editing = self
+            .editing
+            .as_ref()
+            .map(|(row, f)| (*row, f.text().to_string(), f.before_cursor().len()));
+        let page: PageKey = (
+            self.page,
+            self.hover.filter(|h| !matches!(h, Hit::Page(_))),
+            self.open,
+            self.drag,
+            editing,
+            self.scroll.to_bits(),
+            self.size,
+            self.version,
+        );
+        let cw = (w as f32 - SIDEBAR_W).max(1.0) as u32;
+        let content = match self.content.take() {
+            Some(c) if (c.width(), c.height()) == (cw, self.size.1) => Some(c),
+            _ => None,
+        };
+        let content = match content {
+            Some(c) if !fresh && self.page_drawn.as_ref() == Some(&page) => c,
+            reuse => {
+                let mut c = reuse
+                    .unwrap_or_else(|| Canvas::new(cw, self.size.1).expect("size is not zero"));
+                self.hits.clear();
+                self.tracks.clear();
+                c.fill(color(BG));
+                let popup = self.draw_page(&mut c, fonts);
+                if let Some((row, x, y, bw)) = popup {
+                    self.draw_popup(&mut c, fonts, row, (x, y, bw));
+                }
+                self.page_drawn = Some(page);
+                c
+            }
+        };
+        copy(&mut pm, &content, SIDEBAR_W);
+        self.content = Some(content);
+        self.frame.insert(pm)
     }
 
     fn draw_sidebar(&mut self, pm: &mut Canvas, fonts: &mut Fonts, icons: &mut Icons) {
@@ -493,7 +583,8 @@ impl SettingsView {
                 if was_link.is_some() {
                     y += 8.0;
                 }
-                fonts.draw(pm, title, &HEADER, SIDE_PAD + 10.0, y + 8.0, None);
+                self.texts
+                    .draw(fonts, pm, title, &HEADER, SIDE_PAD + 10.0, y + 8.0, None);
                 y += SIDE_HEADER;
                 was_link = Some(link);
             }
@@ -525,7 +616,7 @@ impl SettingsView {
                 ty,
                 Some(r.2 - (tx - SIDE_PAD) - 8.0),
             );
-            self.hits.push((r, Hit::Page(i)));
+            self.side_hits.push((r, Hit::Page(i)));
             y += SIDE_ROW + 2.0;
         }
         self.side_h = y + self.side_scroll + 12.0;
@@ -552,7 +643,15 @@ impl SettingsView {
                 let mut index = 0;
                 for group in groups {
                     if let Some(title) = &group.title {
-                        fonts.draw(pm, title, &SMALL, PAD + 4.0, y, Some(w - 2.0 * PAD));
+                        self.texts.draw(
+                            fonts,
+                            pm,
+                            title,
+                            &SMALL,
+                            PAD + 4.0,
+                            y,
+                            Some(w - 2.0 * PAD),
+                        );
                         y += GROUP_TITLE_H - 8.0;
                     }
                     let heights: Vec<f32> = group.rows.iter().map(row_height).collect();
@@ -576,10 +675,11 @@ impl SettingsView {
             }
             PageKind::Link(_) => {
                 let text = t(self.lang, "settings.link_text");
-                fonts.draw(pm, text, &VALUE, PAD, y, Some(w - 2.0 * PAD));
+                self.texts
+                    .draw(fonts, pm, text, &VALUE, PAD, y, Some(w - 2.0 * PAD));
                 y += 32.0;
                 let label = t(self.lang, "settings.open");
-                let bw = fonts.measure(label, &TEXT) + 32.0;
+                let bw = self.texts.measure(fonts, label, &TEXT) + 32.0;
                 let r = (PAD, y, bw, CONTROL_H + 2.0);
                 self.button(pm, fonts, r, label, Hit::Open, true);
                 y += 40.0;
@@ -589,7 +689,15 @@ impl SettingsView {
         if let Some(status) = &self.status {
             let h = pm.height() as f32;
             fill(pm, (0.0, h - 30.0, w, 30.0), BG, 0.0);
-            fonts.draw(pm, status, &STATUS, PAD, h - 24.0, Some(w - 2.0 * PAD));
+            self.texts.draw(
+                fonts,
+                pm,
+                status,
+                &STATUS,
+                PAD,
+                h - 24.0,
+                Some(w - 2.0 * PAD),
+            );
         }
         popup
     }
@@ -608,9 +716,18 @@ impl SettingsView {
         let ly = y + (ROW_H - TEXT.line_height()) / 2.0;
         let control_y = y + (ROW_H - CONTROL_H) / 2.0;
         let label_w = (right - x0 - 200.0).max(120.0);
-        fonts.draw(pm, &row.label, &TEXT, x0, ly, Some(label_w));
+        self.texts
+            .draw(fonts, pm, &row.label, &TEXT, x0, ly, Some(label_w));
         if let Some(hint) = &row.hint {
-            fonts.draw(pm, hint, &SMALL, x0, y + ROW_H - 10.0, Some(right - x0));
+            self.texts.draw(
+                fonts,
+                pm,
+                hint,
+                &SMALL,
+                x0,
+                y + ROW_H - 10.0,
+                Some(right - x0),
+            );
         }
         let value = self.value(row.key).to_string();
         let hover = self.hover == Some(Hit::Control(index));
@@ -623,10 +740,18 @@ impl SettingsView {
                     .find(|o| o.0 == value)
                     .map_or(value.as_str(), |o| o.1.as_str())
                     .to_string();
-                let bw = (fonts.measure(&label, &TEXT) + 40.0).clamp(110.0, 280.0);
+                let bw = (self.texts.measure(fonts, &label, &TEXT) + 40.0).clamp(110.0, 280.0);
                 let r = (right - bw, control_y, bw, CONTROL_H);
                 fill(pm, r, if hover { BUTTON_HOVER } else { BUTTON }, 6.0);
-                fonts.draw(pm, &label, &TEXT, r.0 + 10.0, r.1 + 4.0, Some(bw - 34.0));
+                self.texts.draw(
+                    fonts,
+                    pm,
+                    &label,
+                    &TEXT,
+                    r.0 + 10.0,
+                    r.1 + 4.0,
+                    Some(bw - 34.0),
+                );
                 chevrons(pm, r.0 + bw - 16.0, r.1 + CONTROL_H / 2.0);
                 self.hits
                     .push(((content_x + r.0, r.1, r.2, r.3), Hit::Control(index)));
@@ -681,7 +806,7 @@ impl SettingsView {
                     );
                 }
                 let text = v.to_string();
-                let vw = fonts.measure(&text, &VALUE);
+                let vw = self.texts.measure(fonts, &text, &VALUE);
                 fonts.draw(
                     pm,
                     &text,
@@ -710,11 +835,19 @@ impl SettingsView {
                 let (text, cursor) = match editing {
                     Some((_, f)) => (
                         f.text().to_string(),
-                        Some(fonts.measure(f.before_cursor(), &TEXT)),
+                        Some(self.texts.measure(fonts, f.before_cursor(), &TEXT)),
                     ),
                     None => (value.clone(), None),
                 };
-                fonts.draw(pm, &text, &TEXT, r.0 + 8.0, r.1 + 4.0, Some(fw - 16.0));
+                self.texts.draw(
+                    fonts,
+                    pm,
+                    &text,
+                    &TEXT,
+                    r.0 + 8.0,
+                    r.1 + 4.0,
+                    Some(fw - 16.0),
+                );
                 if let Some(cx) = cursor {
                     let cx = (r.0 + 8.0 + cx).min(r.0 + fw - 6.0);
                     fill(pm, (cx, r.1 + 5.0, 1.5, CONTROL_H - 10.0), WHITE, 0.0);
@@ -737,7 +870,7 @@ impl SettingsView {
             .unwrap_or_default();
         let widest = options
             .iter()
-            .map(|o| fonts.measure(&o.1, &TEXT))
+            .map(|o| self.texts.measure(fonts, &o.1, &TEXT))
             .fold(0.0, f32::max);
         let mw = (widest + 44.0).max(bw);
         let mh = options.len() as f32 * OPTION_H + 10.0;
@@ -763,7 +896,15 @@ impl SettingsView {
             if *value == current {
                 check(pm, o.0 + 12.0, oy + OPTION_H / 2.0);
             }
-            fonts.draw(pm, label, &TEXT, o.0 + 26.0, oy + 4.0, Some(o.2 - 32.0));
+            self.texts.draw(
+                fonts,
+                pm,
+                label,
+                &TEXT,
+                o.0 + 26.0,
+                oy + 4.0,
+                Some(o.2 - 32.0),
+            );
             self.hits
                 .push(((SIDEBAR_W + o.0, o.1, o.2, o.3), Hit::Option(i)));
         }
@@ -798,7 +939,7 @@ impl SettingsView {
                 Some(thumb) => pm.draw_icon(thumb.as_ref(), x, ty, &PixmapPaint::default()),
                 None => fill(pm, r, BOX, 8.0),
             }
-            let lw = fonts.measure(label, &TEXT).min(tw);
+            let lw = self.texts.measure(fonts, label, &TEXT).min(tw);
             fonts.draw(
                 pm,
                 label,
@@ -813,7 +954,7 @@ impl SettingsView {
         let lines = list.len().div_ceil(per_row) as f32;
         y += lines * (th + 44.0) + 8.0;
         let label = t(self.lang, "settings.wallpaper_pick");
-        let bw = fonts.measure(label, &TEXT) + 32.0;
+        let bw = self.texts.measure(fonts, label, &TEXT) + 32.0;
         self.button(
             pm,
             fonts,
@@ -841,7 +982,7 @@ impl SettingsView {
             (false, false) => BUTTON,
         };
         fill(pm, r, bg, 6.0);
-        let lw = fonts.measure(label, &TEXT);
+        let lw = self.texts.measure(fonts, label, &TEXT);
         fonts.draw(
             pm,
             label,
@@ -851,6 +992,123 @@ impl SettingsView {
             None,
         );
         self.hits.push(((SIDEBAR_W + r.0, r.1, r.2, r.3), hit));
+    }
+}
+
+/// Lines of text already drawn, by text, style and width limit. Most
+/// frames only move the hover highlight, and laying text out is most of a
+/// frame's work, so each line is drawn once and then copied.
+#[derive(Default)]
+struct Texts {
+    drawn: HashMap<(String, u32, [u8; 4], u16, u32), Canvas>,
+    widths: HashMap<(String, u32, u16), f32>,
+}
+
+/// More lines than one window shows in every language: start over.
+const TEXTS_MAX: usize = 1024;
+
+impl Texts {
+    fn measure(&mut self, fonts: &mut Fonts, text: &str, style: &Style) -> f32 {
+        let key = (text.to_string(), style.size.to_bits(), style.weight);
+        if let Some(w) = self.widths.get(&key) {
+            return *w;
+        }
+        if self.widths.len() > TEXTS_MAX {
+            self.widths.clear();
+        }
+        let w = fonts.measure(text, style);
+        self.widths.insert(key, w);
+        w
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &mut self,
+        fonts: &mut Fonts,
+        pm: &mut Canvas,
+        text: &str,
+        style: &Style,
+        x: f32,
+        y: f32,
+        max: Option<f32>,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let key = (
+            text.to_string(),
+            style.size.to_bits(),
+            style.color,
+            style.weight,
+            max.map_or(0, f32::to_bits),
+        );
+        if !self.drawn.contains_key(&key) {
+            if self.drawn.len() > TEXTS_MAX {
+                self.drawn.clear();
+            }
+            let w = self.measure(fonts, text, style);
+            let w = max.map_or(w, |m| w.min(m));
+            let Some(mut line) =
+                Canvas::new(w.ceil() as u32 + 2, style.line_height().ceil() as u32 + 2)
+            else {
+                return;
+            };
+            fonts.draw(&mut line, text, style, 0.0, 0.0, max);
+            self.drawn.insert(key.clone(), line);
+        }
+        // On whole pixels: a line copied half a pixel off would blur.
+        let k = pm.scale();
+        if let Some(line) = self.drawn.get(&key) {
+            over(pm, line, (x * k).round() as i64, (y * k).round() as i64);
+        }
+    }
+}
+
+/// `src` (opaque, as tall as `dst`) into `dst` from `x` points on: whole
+/// rows copied. tiny-skia's `draw_pixmap` takes ~5 ms for this (it blends
+/// and samples every pixel); a copy is a few hundred microseconds.
+fn copy(dst: &mut Canvas, src: &Canvas, x: f32) {
+    let x0 = (x * dst.scale()).round() as usize;
+    let (dw, sw) = (dst.pixmap().width() as usize, src.pixmap().width() as usize);
+    let rows = dst.pixmap().height().min(src.pixmap().height()) as usize;
+    let w = sw.min(dw.saturating_sub(x0));
+    let from = src.pixmap().data();
+    let to = dst.pixmap_mut().data_mut();
+    for y in 0..rows {
+        let d = (y * dw + x0) * 4;
+        let s = y * sw * 4;
+        to[d..d + w * 4].copy_from_slice(&from[s..s + w * 4]);
+    }
+}
+
+/// `src` drawn over `dst` with its top-left corner at pixel `(x, y)`:
+/// plain source-over on premultiplied pixels, for the cached text lines.
+fn over(dst: &mut Canvas, src: &Canvas, x: i64, y: i64) {
+    let (dw, dh) = (dst.pixmap().width() as i64, dst.pixmap().height() as i64);
+    let (sw, sh) = (src.pixmap().width() as i64, src.pixmap().height() as i64);
+    let from = src.pixmap().data();
+    let to = dst.pixmap_mut().data_mut();
+    for sy in 0..sh {
+        let dy = y + sy;
+        if dy < 0 || dy >= dh {
+            continue;
+        }
+        for sx in 0..sw {
+            let dx = x + sx;
+            if dx < 0 || dx >= dw {
+                continue;
+            }
+            let s = ((sy * sw + sx) * 4) as usize;
+            let a = u32::from(from[s + 3]);
+            if a == 0 {
+                continue;
+            }
+            let d = ((dy * dw + dx) * 4) as usize;
+            for c in 0..4 {
+                let under = u32::from(to[d + c]) * (255 - a);
+                to[d + c] = (u32::from(from[s + c]) + (under + 127) / 255).min(255) as u8;
+            }
+        }
     }
 }
 
@@ -873,15 +1131,62 @@ fn fill(pm: &mut Canvas, (x, y, w, h): Rect, c: [u8; 4], r: f32) {
     if w <= 0.0 || h <= 0.0 {
         return;
     }
-    if let Some(path) = rounded(x, y, w, h, r) {
-        pm.fill_path(
-            &path,
-            &paint(c),
-            tiny_skia::FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+    let r = r.max(0.0).min(w / 2.0).min(h / 2.0);
+    if r == 0.0 {
+        if let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) {
+            pm.fill_rect(rect, &paint(c), Transform::identity(), None);
+        }
+        return;
     }
+    let solid = |pm: &mut Canvas, path: Option<tiny_skia::Path>| {
+        if let Some(path) = path {
+            pm.fill_path(
+                &path,
+                &paint(c),
+                tiny_skia::FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    };
+    // Only the rounded ends need a path; the band between them is a plain
+    // rectangle, many times cheaper (a big box as one path took about a
+    // millisecond). The seams fall on whole pixels.
+    let k = pm.scale();
+    let top = ((y + r) * k).ceil() / k;
+    let bottom = ((y + h - r) * k).floor() / k;
+    if r > 0.0 && bottom - top >= 4.0 {
+        solid(pm, cap(x, y, w, top, r));
+        solid(pm, cap(x, y + h, w, bottom, r));
+        if let Some(rect) = tiny_skia::Rect::from_xywh(x, top, w, bottom - top) {
+            pm.fill_rect(rect, &paint(c), Transform::identity(), None);
+        }
+    } else {
+        solid(pm, rounded(x, y, w, h, r));
+    }
+}
+
+/// One rounded end of a box `w` wide: from its edge `edge` (the top or the
+/// bottom of the box) to the straight part at `inner`, corners of radius `r`.
+fn cap(x: f32, edge: f32, w: f32, inner: f32, r: f32) -> Option<tiny_skia::Path> {
+    let s = if inner > edge { 1.0 } else { -1.0 };
+    let k = r * 0.552_284_8;
+    let mut pb = PathBuilder::new();
+    pb.move_to(x, inner);
+    pb.line_to(x, edge + s * r);
+    pb.cubic_to(x, edge + s * (r - k), x + r - k, edge, x + r, edge);
+    pb.line_to(x + w - r, edge);
+    pb.cubic_to(
+        x + w - r + k,
+        edge,
+        x + w,
+        edge + s * (r - k),
+        x + w,
+        edge + s * r,
+    );
+    pb.line_to(x + w, inner);
+    pb.close();
+    pb.finish()
 }
 
 fn outline(pm: &mut Canvas, (x, y, w, h): Rect, c: [u8; 4], r: f32, width: f32) {
@@ -947,7 +1252,12 @@ mod tests {
 
     /// The centre of the first place that gives `hit`.
     fn at(v: &SettingsView, hit: Hit) -> (f32, f32) {
-        let (r, _) = v.hits.iter().find(|(_, h)| *h == hit).expect("drawn");
+        let (r, _) = v
+            .hits
+            .iter()
+            .chain(&v.side_hits)
+            .find(|(_, h)| *h == hit)
+            .expect("drawn");
         (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0)
     }
 
@@ -1059,6 +1369,28 @@ mod tests {
         assert_eq!(v.wheel(10.0, true), Action::Redraw);
         assert_eq!(v.wheel(10.0, false), Action::Redraw);
         assert_eq!(v.wheel(10.0, false), Action::Nothing, "already at the top");
+    }
+
+    #[test]
+    fn a_half_that_did_not_change_keeps_its_pixels_and_clicks() {
+        let mut v = view();
+        v.show_page("dock");
+        drawn(&mut v);
+        let side_before = v.side_drawn.clone();
+        // The hover moves over the page: only the page is drawn again.
+        let (x, y) = at(&v, Hit::Control(3));
+        assert_eq!(v.motion(x, y), Action::Redraw);
+        drawn(&mut v);
+        assert_eq!(v.side_drawn, side_before);
+        let (x, y) = at(&v, Hit::Page(0));
+        assert_eq!(v.press(x, y), Action::Redraw);
+        assert_eq!(v.pages[v.page].id, "appearance");
+        // A value set from outside shows at once.
+        drawn(&mut v);
+        let page_before = v.page_drawn.clone();
+        v.set_status(Some("Применено".into()));
+        drawn(&mut v);
+        assert_ne!(v.page_drawn, page_before);
     }
 
     #[test]
