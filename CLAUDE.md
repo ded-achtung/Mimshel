@@ -141,7 +141,9 @@ the environment; the service links the whole `setup` crate.
   clock) move into the Control Center by dragging them down out of the bar and back by
   dragging them up from its «Hidden icons» row; `[menubar] hidden` keeps their names
   (`tray:ID` uses the item's StatusNotifierItem `Id`). These icons act on release, not on
-  press, so a drag does not also click them.
+  press, so a drag does not also click them. A drop anywhere below the bar or onto the
+  Control Center icon hides it. Hidden nm-applet/blueman icons stay in that row even though
+  the Control Center has Wi-Fi and Bluetooth tiles (user, 2026-10-29).
 - Big images go through MIT-SHM (`crates/x11/src/shm.rs`, no `unsafe`, falls back to
   PutImage; `MIMSHEL_NO_SHM=1` turns it off).
 - The dock matches windows to apps by `GIO_LAUNCHED_DESKTOP_FILE`/pid environment,
