@@ -730,7 +730,8 @@ impl Ui<'_> {
     fn flush(&mut self) -> Result<()> {
         let timing = mimshel_core::names::flag("TIMING");
         let t = Instant::now();
-        self.transfers.flush(self.display, &mut self.fonts)?;
+        self.transfers
+            .flush(self.display, &mut self.fonts, &mut self.icons)?;
         self.about
             .flush(self.display, &mut self.fonts, &mut self.icons)?;
         // Окна папок — первыми: их ждут (только что открыли папку).

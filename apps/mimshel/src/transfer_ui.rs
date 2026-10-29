@@ -136,7 +136,12 @@ impl TransferUi {
         self.tick(d)
     }
 
-    pub fn flush(&mut self, d: &Display, fonts: &mut Fonts) -> Result<()> {
+    pub fn flush(
+        &mut self,
+        d: &Display,
+        fonts: &mut Fonts,
+        icons: &mut mimshel_icons::Icons,
+    ) -> Result<()> {
         if !self.dirty {
             return Ok(());
         }
@@ -153,7 +158,7 @@ impl TransferUi {
             let size = win
                 .size(d)
                 .unwrap_or((transfer::WIDTH, transfer::height(rows.len())));
-            if let Some(frame) = transfer::render(&rows, size, fonts, self.language) {
+            if let Some(frame) = transfer::render(&rows, size, fonts, icons, self.language) {
                 win.present(d, &frame)?;
             }
             d.sync()?;
@@ -167,10 +172,12 @@ pub fn snapshot(file: &str) -> Result<()> {
     crate::ui::set_scale(&config);
     let row = transfer::example();
     let mut fonts = Fonts::new(&config.font);
+    let mut icons = mimshel_icons::Icons::new(&config.icon_theme);
     transfer::render(
         &[row],
         (transfer::WIDTH, transfer::height(1)),
         &mut fonts,
+        &mut icons,
         config.language,
     )
     .ok_or("could not allocate transfer snapshot")?
@@ -209,7 +216,8 @@ mod tests {
         ui.tick(&display)?;
         let window = ui.win.as_ref().unwrap().id();
         let mut fonts = Fonts::new("DejaVu Sans");
-        ui.flush(&display, &mut fonts)?;
+        let mut icons = mimshel_icons::Icons::new("hicolor");
+        ui.flush(&display, &mut fonts, &mut icons)?;
         let screenshot = display
             .capture_window(window)
             .ok_or("no transfer window image")?;
@@ -224,18 +232,19 @@ mod tests {
         ui.tick(&display)?;
         assert_eq!(ui.win.as_ref().unwrap().id(), window);
         assert_eq!(ui.rows.len(), 2);
-        ui.flush(&display, &mut fonts)?;
+        ui.flush(&display, &mut fonts, &mut icons)?;
         assert_eq!(
             ui.win.as_ref().unwrap().size(&display).unwrap().1,
             transfer::height(2)
         );
-        for y in [100, 100 + transfer::ROW_HEIGHT as i16] {
+        for i in 0..2 {
+            let (x, y) = transfer::stop_center(i, transfer::WIDTH);
             ui.event(
                 &display,
                 Event::Button {
                     window,
-                    x: 530,
-                    y,
+                    x: x as i16,
+                    y: y as i16,
                     button: 1,
                 },
             )?;

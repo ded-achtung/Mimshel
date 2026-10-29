@@ -647,10 +647,10 @@ pub fn t(lang: Language, key: &str) -> &str {
         ),
         "transfer.stop" => ("Stop", "Остановить", "停止", "停止"),
         "transfer.amount" => (
-            "{done} of {total} · {files} of {all_files} files",
-            "{done} из {total} · файлов: {files} из {all_files}",
-            "{done} / {total} · 文件：{files} / {all_files}",
-            "{done} / {total} · 檔案：{files} / {all_files}",
+            "{done} of {total}",
+            "{done} из {total}",
+            "{done} / {total}",
+            "{done} / {total}",
         ),
         "transfer.remaining" => (
             " — about {minutes} min remaining",

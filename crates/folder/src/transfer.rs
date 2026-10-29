@@ -3,13 +3,24 @@
 use std::time::Duration;
 
 use mimshel_core::i18n::{Language, t};
+use mimshel_icons::Icons;
 use mimshel_render::Canvas;
 use mimshel_text::{Fonts, Style};
 use mimshel_widgets::shape::{paint, rounded};
 use tiny_skia::{Color, FillRule, Transform};
 
-pub const WIDTH: u32 = 620;
-pub const ROW_HEIGHT: u32 = 126;
+/// The window as macOS Finder's copy window: a row per transfer — the
+/// item's icon, the title, a thin bar with a round stop button beside it,
+/// the amount and the time left under it.
+pub const WIDTH: u32 = 460;
+pub const ROW_HEIGHT: u32 = 72;
+/// Above the first row and below the last one.
+const EDGE: f32 = 6.0;
+const ICON: u32 = 40;
+const TEXT_X: f32 = 16.0 + ICON as f32 + 12.0;
+/// The stop button: a circle this far left of the right edge, its radius.
+const STOP_RIGHT: f32 = 26.0;
+const STOP_R: f32 = 9.0;
 pub const DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,6 +51,8 @@ pub enum Phase {
 #[derive(Clone, Debug)]
 pub struct Row {
     pub name: String,
+    /// The item is a folder (its icon in the row).
+    pub is_dir: bool,
     pub folder: String,
     pub moving: bool,
     pub phase: Phase,
@@ -158,93 +171,148 @@ fn bytes(n: u64, lang: Language) -> String {
 }
 
 pub fn height(rows: usize) -> u32 {
-    24u32.saturating_add(ROW_HEIGHT.saturating_mul(u32::try_from(rows.max(1)).unwrap_or(u32::MAX)))
+    let rows = u32::try_from(rows.max(1)).unwrap_or(u32::MAX);
+    ((2.0 * EDGE) as u32).saturating_add(ROW_HEIGHT.saturating_mul(rows))
+}
+
+/// Top of row `index`.
+fn row_top(index: usize) -> f32 {
+    EDGE + index as f32 * ROW_HEIGHT as f32
+}
+
+/// The bar's middle, in row coordinates (the stop button sits on it).
+const BAR_Y: f32 = 34.0;
+
+/// The middle of row `index`'s stop button in a window `width` wide.
+pub fn stop_center(index: usize, width: u32) -> (f32, f32) {
+    (width as f32 - STOP_RIGHT, row_top(index) + BAR_Y)
 }
 
 pub fn stop_hit(index: usize, width: u32, x: f32, y: f32) -> bool {
-    let top = 12.0 + index as f32 * ROW_HEIGHT as f32;
-    x >= width as f32 - 144.0 && x < width as f32 - 28.0 && y >= top + 76.0 && y < top + 102.0
+    let (cx, cy) = stop_center(index, width);
+    // A little more than the circle: easy to hit.
+    (x - cx).powi(2) + (y - cy).powi(2) <= (STOP_R + 4.0).powi(2)
 }
 
-pub fn render(rows: &[Row], size: (u32, u32), fonts: &mut Fonts, lang: Language) -> Option<Canvas> {
+pub fn render(
+    rows: &[Row],
+    size: (u32, u32),
+    fonts: &mut Fonts,
+    icons: &mut Icons,
+    lang: Language,
+) -> Option<Canvas> {
     let mut frame = Canvas::new(size.0.max(1), size.1.max(1))?;
-    frame.fill(Color::from_rgba8(0x1e, 0x1e, 0x20, 255));
-    let text = Style {
+    frame.fill(Color::from_rgba8(0x26, 0x26, 0x29, 255));
+    let title = Style {
         size: 13.0,
         color: [0xf2, 0xf2, 0xf7, 255],
-        weight: 600,
+        weight: 400,
     };
     let small = Style {
         size: 11.0,
         color: [0x98, 0x98, 0x9f, 255],
         weight: 400,
     };
+    let w = size.0 as f32;
+    let bar_w = (w - TEXT_X - STOP_RIGHT - STOP_R - 12.0).max(40.0);
     for (i, row) in rows.iter().enumerate() {
-        let y = 12.0 + i as f32 * ROW_HEIGHT as f32;
-        let w = size.0 as f32;
-        box_fill(
-            &mut frame,
-            (12.0, y, w - 24.0, 114.0),
-            10.0,
-            [255, 255, 255, 13],
-        );
+        let y = row_top(i);
+        if i > 0 {
+            box_fill(
+                &mut frame,
+                (TEXT_X, y, w - TEXT_X, 1.0),
+                0.0,
+                [255, 255, 255, 20],
+            );
+        }
+        let icon = if row.is_dir {
+            "folder"
+        } else {
+            "text-x-generic"
+        };
+        if let Some(pm) = icons.get(icon, ICON) {
+            frame.draw_icon(
+                pm.as_ref(),
+                16.0,
+                y + (ROW_HEIGHT as f32 - ICON as f32) / 2.0,
+                &tiny_skia::PixmapPaint::default(),
+            );
+        }
         fonts.draw(
             &mut frame,
             &row.title(lang),
-            &text,
-            28.0,
-            y + 14.0,
-            Some(w - 56.0),
+            &title,
+            TEXT_X,
+            y + 10.0,
+            Some(w - TEXT_X - 16.0),
         );
+        // A thin bar on a grey track, as in Finder.
+        let bar_y = y + BAR_Y - 2.5;
         box_fill(
             &mut frame,
-            (28.0, y + 43.0, w - 56.0, 6.0),
-            3.0,
-            [255, 255, 255, 30],
+            (TEXT_X, bar_y, bar_w, 5.0),
+            2.5,
+            [255, 255, 255, 34],
         );
         let progress = if row.phase == Phase::Counting {
-            0.15
+            0.0
         } else {
             row.fraction() as f32
         };
         if progress > 0.0 {
             box_fill(
                 &mut frame,
-                (28.0, y + 43.0, (w - 56.0) * progress, 6.0),
-                3.0,
+                (TEXT_X, bar_y, (bar_w * progress).max(5.0), 5.0),
+                2.5,
                 [10, 132, 255, 255],
             );
         }
+        stop_button(&mut frame, (w - STOP_RIGHT, y + BAR_Y), row.stoppable());
         fonts.draw(
             &mut frame,
             &row.detail(lang),
             &small,
-            28.0,
-            y + 56.0,
-            Some(w - 56.0),
-        );
-        let enabled = row.stoppable();
-        box_fill(
-            &mut frame,
-            (w - 144.0, y + 76.0, 116.0, 26.0),
-            6.0,
-            [255, 255, 255, if enabled { 28 } else { 10 }],
-        );
-        let button = Style {
-            size: 12.0,
-            color: if enabled { text.color } else { small.color },
-            weight: 400,
-        };
-        fonts.draw(
-            &mut frame,
-            t(lang, "transfer.stop"),
-            &button,
-            w - 132.0,
-            y + 81.0,
-            Some(96.0),
+            TEXT_X,
+            y + 44.0,
+            Some(w - TEXT_X - 16.0),
         );
     }
     Some(frame)
+}
+
+/// The round grey stop button with a cross; dimmer when stopping is not
+/// possible (the originals are being removed).
+fn stop_button(frame: &mut Canvas, (cx, cy): (f32, f32), enabled: bool) {
+    let (bg, cross) = if enabled {
+        ([255, 255, 255, 46], [0xd8, 0xd8, 0xdc, 255])
+    } else {
+        ([255, 255, 255, 16], [0x70, 0x70, 0x75, 255])
+    };
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.push_circle(cx, cy, STOP_R);
+    if let Some(path) = pb.finish() {
+        frame.fill_path(
+            &path,
+            &paint(bg),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    let d = 3.2;
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(cx - d, cy - d);
+    pb.line_to(cx + d, cy + d);
+    pb.move_to(cx + d, cy - d);
+    pb.line_to(cx - d, cy + d);
+    if let Some(path) = pb.finish() {
+        let stroke = tiny_skia::Stroke {
+            width: 1.6,
+            line_cap: tiny_skia::LineCap::Round,
+            ..tiny_skia::Stroke::default()
+        };
+        frame.stroke_path(&path, &paint(cross), &stroke, Transform::identity(), None);
+    }
 }
 
 fn box_fill(frame: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), radius: f32, color: [u8; 4]) {
@@ -262,6 +330,7 @@ fn box_fill(frame: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), radius: f32,
 pub fn example() -> Row {
     Row {
         name: "DCIM".into(),
+        is_dir: true,
         folder: "Desktop".into(),
         moving: false,
         phase: Phase::Copying,
@@ -285,7 +354,16 @@ mod tests {
     #[test]
     fn invalid_canvas_dimensions_fail_without_panicking() {
         let mut fonts = Fonts::new("DejaVu Sans");
-        assert!(render(&[], (u32::MAX, u32::MAX), &mut fonts, Language::En).is_none());
+        assert!(
+            render(
+                &[],
+                (u32::MAX, u32::MAX),
+                &mut fonts,
+                &mut Icons::new("hicolor"),
+                Language::En
+            )
+            .is_none()
+        );
         assert_eq!(height(usize::MAX), u32::MAX);
     }
 
@@ -335,7 +413,7 @@ mod tests {
         row.folder = "Desktop".into();
         row.moving = true;
         assert_eq!(row.title(Language::En), "Moving “DCIM” to “Desktop”");
-        assert!(row.detail(Language::En).contains("480 of 1200 files"));
+        assert!(row.detail(Language::En).starts_with("1.4 GB of 3.4 GB"));
         row.phase = Phase::Counting;
         assert_eq!(row.detail(Language::Ru), "Подсчёт…");
         row.phase = Phase::Removing;
@@ -351,12 +429,17 @@ mod tests {
             &[row],
             (WIDTH, height(1)),
             &mut Fonts::new("DejaVu Sans"),
+            &mut Icons::new("hicolor"),
             Language::En,
         )
         .unwrap();
         assert_eq!(frame.width(), WIDTH);
-        assert!(stop_hit(0, WIDTH, 520.0, 90.0));
-        assert!(!stop_hit(1, WIDTH, 520.0, 90.0));
-        assert!(!stop_hit(0, WIDTH, 20.0, 90.0));
+        // The round button beside the bar of each row.
+        let (x, y) = (WIDTH as f32 - STOP_RIGHT, row_top(0) + BAR_Y);
+        assert!(stop_hit(0, WIDTH, x, y));
+        assert!(stop_hit(0, WIDTH, x + STOP_R, y));
+        assert!(!stop_hit(1, WIDTH, x, y));
+        assert!(stop_hit(1, WIDTH, x, y + ROW_HEIGHT as f32));
+        assert!(!stop_hit(0, WIDTH, 20.0, y));
     }
 }

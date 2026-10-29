@@ -94,6 +94,7 @@ impl Job {
             started: Instant::now(),
             state: Arc::new(Mutex::new(State {
                 row: Row {
+                    is_dir: pairs.first().is_some_and(|p| p.0.is_dir()),
                     name: pairs
                         .first()
                         .and_then(|p| p.0.file_name())
@@ -198,6 +199,7 @@ impl Job {
     pub fn item(&self, src: &Path, dest: &Path) {
         let mut state = self.handle.state.lock().unwrap_or_else(|p| p.into_inner());
         state.row.name = src.file_name().unwrap_or_default().to_string_lossy().into();
+        state.row.is_dir = src.is_dir();
         state.row.folder = dest
             .parent()
             .and_then(Path::file_name)
