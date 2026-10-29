@@ -32,6 +32,11 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   CPU: the Dock only stores the new title (1.97 % → 0.33 %).
 - Mimshel's terminal draws and sends only the rows that changed: a spinner costs 1 % CPU
   instead of 6.5 % (work by Codex).
+- Folder windows opened after the service started ignored every click and key (since the
+  Dock began watching new windows); they work again, a phone under Devices opens.
+- The folder window's scrollbar can be dragged with the mouse.
+- Before sleep the password was asked twice again: xss-lock (`DISPLAY=:0.0`) and Xfce
+  (`:0`) got two lock guards. One guard per display now, however it is written.
 
 ## [v0.0.4-alpha] — 2026-10-29
 

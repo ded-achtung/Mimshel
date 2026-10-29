@@ -293,7 +293,9 @@ The numbers are referenced from code comments; keep them.
     `xkbcomp -xkb $DISPLAY - | grep xkb_symbols` (want `us+ru:2`); restore with lesson 9's
     command.
 16. Lesson 11 again: subscribing to app windows turned off clicks on the menu bar.
-    `watch_window` now **adds** to the existing mask (`your_event_mask`).
+    `watch_window` now **adds** to the existing mask (`your_event_mask`). A third time
+    (2026-10-29): watching *new* windows (`track_new_window`) caught the service's own
+    folder windows and took their clicks; own windows (our resource-id range) are skipped.
 17. **A service restarted over SSH lives outside the graphical session** (lesson 3) and
     survived logout; the guard kept restarting it until it attached to the next
     session's X. Now the guard holds a quiet X connection (`ServerWatch`) and exits when X
@@ -334,7 +336,9 @@ The numbers are referenced from code comments; keep them.
 27. **Before sleep two programs ask to lock at once** — xss-lock and the Xfce power
     manager (via xflock4). A process-list check let both through: two lock screens, the
     password asked twice. One guard per user and display through an abstract socket
-    (`lock::single_guard`); the kernel frees it when the process ends.
+    (`lock::single_guard`); the kernel frees it when the process ends. The display is
+    named by its number only: xss-lock has `DISPLAY=:0.0`, Xfce `:0` — named by the raw
+    string, both guards won (2026-10-29).
 28. **Colloid-Dark and Colloid contain relative symlinks into Colloid-Light** (mimetypes,
     apps…). Deleting Colloid-Light as "unused" broke the dock's Apps icon (2026-10-26).
     Before deleting any theme, check for broken links with `find -L THEMES -type l`. Twelve
