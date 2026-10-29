@@ -28,6 +28,10 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 - A theme installed system-wide (`/usr/share/themes`) is applied, and a failed apply no
   longer reports success.
 - One config change makes the service reload once, not twice.
+- A program retitling its window (a terminal with a spinner) no longer costs the service
+  CPU: the Dock only stores the new title (1.97 % → 0.33 %).
+- Mimshel's terminal draws and sends only the rows that changed: a spinner costs 1 % CPU
+  instead of 6.5 % (work by Codex).
 
 ## [v0.0.4-alpha] — 2026-10-29
 
