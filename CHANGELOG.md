@@ -2,14 +2,21 @@
 
 Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
-## [Unreleased]
+## [v0.0.5-alpha] — 2026-10-29
+
+Fifth alpha: Mimshel's own System Settings window, a copy window with progress, and a
+much lighter terminal and Dock. Tested on the same laptop (Tanshi X669, EndeavourOS,
+Xfce 4.20, X11).
+
+**After updating, run `mimshel apply launchers` once:** it adds the System Settings
+shortcut and points the logo menu and the Dock's settings icon at the new window.
 
 ### New
 
 - **System Settings window** (`mimshel settings`, the logo menu's «System Settings…» and the
   dock's settings icon): appearance, wallpaper, menu bar, Dock, lock screen, the Apps
-  window, terminal and components, as in macOS. Displays, keyboard, mouse, sound, network,
-  power and Bluetooth open the Xfce dialogs. Most changes restart Mimshel for a second, and
+  window, terminal and components, as in macOS. Mouse, sound, network, power and Bluetooth
+  open the Xfce dialogs. Most changes restart Mimshel for a second, and
   the window stays open; language and wallpaper switch on the fly. Theme lists, the
   shortcut and the menu and dock wiring are by Codex.
 - **Displays and Keyboard pages of its own** in System Settings. Displays: resolution,
@@ -17,7 +24,6 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   position. A new mode asks «Keep these display settings?» and goes back by itself after
   15 s. Keyboard: layouts (add and remove), the switch keys, key repeat and Num Lock. Both
   are kept in Xfce's settings. The display and keyboard back end is by Codex.
-
 - **A copy window** like Finder's: copying or moving files that takes longer than a second
   shows the item's icon, a progress bar, the amount and the time left, and a round stop
   button. Stop removes only the unfinished copy; a move between disks deletes the originals
@@ -38,8 +44,9 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   CPU: the Dock only stores the new title (1.97 % → 0.33 %).
 - Mimshel's terminal draws and sends only the rows that changed: a spinner costs 1 % CPU
   instead of 6.5 % (work by Codex).
-- Folder windows opened after the service started ignored every click and key (since the
-  Dock began watching new windows); they work again, a phone under Devices opens.
+- Folder windows opened after the service started ignored every click and key — a bug of
+  0.0.4 (the Dock had begun watching new windows); they work again, a phone under Devices
+  opens.
 - The folder window's scrollbar can be dragged with the mouse.
 - Before sleep the password was asked twice again: xss-lock (`DISPLAY=:0.0`) and Xfce
   (`:0`) got two lock guards. One guard per display now, however it is written.
