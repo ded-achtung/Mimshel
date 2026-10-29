@@ -396,6 +396,25 @@ impl Session {
         crate::screen::render(&term, glyphs, &self.palette, size, focused, cursor_on)
     }
 
+    /// Update a retained frame, consuming damage under the same terminal lock.
+    pub fn render_damage(
+        &self,
+        screen: &mut crate::screen::Screen,
+        glyphs: &mut Glyphs,
+        size: (u32, u32),
+        focused: bool,
+        cursor_on: bool,
+    ) -> Option<()> {
+        screen.update(
+            &mut self.term.lock(),
+            glyphs,
+            &self.palette,
+            size,
+            focused,
+            cursor_on,
+        )
+    }
+
     /// The program asked for a blinking cursor (DECSCUSR, `CSI ?12h`).
     pub fn cursor_blinking(&self) -> bool {
         self.term.lock().cursor_style().blinking

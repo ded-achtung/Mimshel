@@ -6,7 +6,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 pub type Rgb = [u8; 3];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Palette {
     pub background: Rgb,
     pub foreground: Rgb,

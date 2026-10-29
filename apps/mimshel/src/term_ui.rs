@@ -167,6 +167,16 @@ enum BarHit {
     Plus,
 }
 
+#[derive(PartialEq)]
+struct Decoration {
+    tab: u64,
+    count: usize,
+    hover: Option<BarHit>,
+    scrollbar_active: bool,
+    history: (usize, usize),
+    scale: f32,
+}
+
 /// The window's tabs and how to draw them.
 struct Tabs {
     list: Vec<Tab>,
@@ -182,6 +192,12 @@ struct Tabs {
     hover: Option<BarHit>,
     /// The mouse is over the scrollbar or drags it — draw it wide.
     sb_active: bool,
+    screen: mimshel_terminal::screen::Screen,
+    frame: Option<tiny_skia::Pixmap>,
+    decoration: Option<Decoration>,
+    scrollbar_mask: Option<tiny_skia::Mask>,
+    title_dirty: bool,
+    damage: Vec<mimshel_terminal::screen::DamageRect>,
 }
 
 impl Tabs {
@@ -269,42 +285,123 @@ impl Tabs {
         (x >= plus && x < plus + PLUS_W * scale).then_some(BarHit::Plus)
     }
 
-    /// Window frame `w`×`h` pixels: the tab strip and the active tab.
+    /// Update only damaged rows unless window decorations changed.
     fn render(
         &mut self,
         glyphs: &mut Glyphs,
-        (w, h): (u32, u32),
+        size: (u32, u32),
         scale: f32,
         focused: bool,
         cursor_on: bool,
-    ) -> Option<tiny_skia::Pixmap> {
+    ) -> Option<&tiny_skia::Pixmap> {
         let bar = self.bar_h(scale);
-        let session = &self.active().session;
-        let mut term = session.render(glyphs, (w, h.saturating_sub(bar)), focused, cursor_on)?;
-        // Scrollback scrollbar on the right (only when there is history).
-        let (history, offset) = session.history();
-        if history > 0 {
-            let len = term.height() as f32 - 4.0 * scale;
-            let (y, th) = thumb(2.0 * scale, len, history, session.size().1, offset);
-            let bw = if self.sb_active { SB_WIDE } else { SB_THIN } * scale;
-            let alpha = if self.sb_active || offset > 0 {
-                0xb0
-            } else {
-                0x60
-            };
-            if let Some(r) = rounded_rect(w as f32 - bw - 3.0 * scale, y, bw, th, bw / 2.0) {
-                let mut p = Paint::default();
-                p.set_color(Color::from_rgba8(0xcd, 0xd6, 0xf4, alpha));
-                p.anti_alias = true;
-                term.fill_path(
-                    &r,
-                    &p,
-                    tiny_skia::FillRule::Winding,
-                    Transform::identity(),
-                    None,
+        let history = self.active().session.history();
+        let decoration = Decoration {
+            tab: self.active().id,
+            count: self.list.len(),
+            hover: self.hover,
+            scrollbar_active: self.sb_active,
+            history,
+            scale,
+        };
+        let full = self.decoration.as_ref() != Some(&decoration)
+            || self
+                .frame
+                .as_ref()
+                .is_none_or(|p| (p.width(), p.height()) != size);
+        if full {
+            self.screen.invalidate();
+        }
+        self.list[self.active].session.render_damage(
+            &mut self.screen,
+            glyphs,
+            (size.0, size.1.saturating_sub(bar)),
+            focused,
+            cursor_on,
+        )?;
+        self.damage = self
+            .screen
+            .damage
+            .iter()
+            .map(|&(x0, y0, x1, y1)| (x0, y0 + bar, x1, y1 + bar))
+            .collect();
+        if full || self.screen.damage == [(0, 0, size.0, size.1.saturating_sub(bar))] {
+            self.frame = self.render_full(size, scale);
+            self.title_dirty = false;
+            self.damage = vec![(0, 0, size.0, size.1)];
+        } else {
+            let source = self.screen.image.as_ref()?;
+            let frame = self.frame.as_mut()?;
+            let stride = size.0 as usize * 4;
+            for &(_, y0, _, y1) in &self.screen.damage {
+                let src = y0 as usize * stride..y1 as usize * stride;
+                let dst = (y0 + bar) as usize * stride..(y1 + bar) as usize * stride;
+                frame.data_mut()[dst].copy_from_slice(&source.data()[src]);
+            }
+            // Reapply the translucent overlay only where underlying rows were replaced.
+            if history.0 > 0 && !self.damage.is_empty() {
+                if self
+                    .scrollbar_mask
+                    .as_ref()
+                    .is_none_or(|m| (m.width(), m.height()) != size)
+                {
+                    self.scrollbar_mask = Some(tiny_skia::Mask::new(size.0, size.1)?);
+                }
+                let mask = self.scrollbar_mask.as_mut()?;
+                for &(_, y0, _, y1) in &self.damage {
+                    mask.data_mut()[y0 as usize * size.0 as usize..y1 as usize * size.0 as usize]
+                        .fill(255);
+                }
+                draw_scrollbar(
+                    frame,
+                    scale,
+                    bar,
+                    history,
+                    self.list[self.active].session.size().1,
+                    self.sb_active,
+                    Some(mask),
                 );
+                for &(_, y0, _, y1) in &self.damage {
+                    mask.data_mut()[y0 as usize * size.0 as usize..y1 as usize * size.0 as usize]
+                        .fill(0);
+                }
             }
         }
+        self.decoration = Some(decoration);
+        if self.title_dirty {
+            self.refresh_titles(size, scale)?;
+        }
+        self.frame.as_ref()
+    }
+
+    /// Replace only the tab strip when a program changes its title.
+    fn refresh_titles(&mut self, size: (u32, u32), scale: f32) -> Option<()> {
+        self.title_dirty = false;
+        let bar = self.bar_h(scale);
+        if bar == 0 {
+            return Some(());
+        }
+        let rendered = self.render_full(size, scale)?;
+        let bytes = (bar * size.0 * 4) as usize;
+        self.frame.as_mut()?.data_mut()[..bytes].copy_from_slice(&rendered.data()[..bytes]);
+        self.damage.push((0, 0, size.0, bar));
+        Some(())
+    }
+
+    /// Window frame `w`×`h` pixels: the tab strip and the active tab.
+    fn render_full(&mut self, (w, h): (u32, u32), scale: f32) -> Option<tiny_skia::Pixmap> {
+        let bar = self.bar_h(scale);
+        let session = &self.active().session;
+        let mut term = self.screen.image.clone()?;
+        draw_scrollbar(
+            &mut term,
+            scale,
+            0,
+            session.history(),
+            session.size().1,
+            self.sb_active,
+            None,
+        );
         if bar == 0 {
             return Some(term);
         }
@@ -421,6 +518,37 @@ impl Tabs {
             canvas.stroke_path(&path, &p, &stroke, Transform::identity(), None);
         }
         Some(canvas.into_pixmap())
+    }
+}
+
+/// Paint the scrollbar, optionally clipped to freshly replaced rows.
+fn draw_scrollbar(
+    image: &mut tiny_skia::Pixmap,
+    scale: f32,
+    bar: u32,
+    (history, offset): (usize, usize),
+    lines: usize,
+    active: bool,
+    mask: Option<&tiny_skia::Mask>,
+) {
+    if history == 0 {
+        return;
+    }
+    let len = (image.height() - bar) as f32 - 4.0 * scale;
+    let (y, th) = thumb(bar as f32 + 2.0 * scale, len, history, lines, offset);
+    let bw = if active { SB_WIDE } else { SB_THIN } * scale;
+    let alpha = if active || offset > 0 { 0xb0 } else { 0x60 };
+    if let Some(r) = rounded_rect(image.width() as f32 - bw - 3.0 * scale, y, bw, th, bw / 2.0) {
+        let mut p = Paint::default();
+        p.set_color(Color::from_rgba8(0xcd, 0xd6, 0xf4, alpha));
+        p.anti_alias = true;
+        image.fill_path(
+            &r,
+            &p,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            mask,
+        );
     }
 }
 
@@ -577,6 +705,7 @@ struct Window {
     /// Window size in pixels.
     size: (u32, u32),
     dirty: bool,
+    exposed: bool,
     press: Press,
     last_click: Option<(Instant, (usize, usize), u8)>,
     shown_title: String,
@@ -655,6 +784,7 @@ impl Window {
         }
         self.font_size = size;
         self.glyphs.set_size((size * self.scale).round());
+        self.tabs.screen.invalidate();
         let cell = self.cell();
         self.tabs.cell = cell;
         let bar = self.tabs.bar_h(self.scale);
@@ -721,7 +851,14 @@ impl Window {
         let bar = self.tabs.bar_h(scale);
         match ev {
             Event::Close { window } if window == me => return Ok(false),
-            Event::Expose { window } if window == me => self.dirty = true,
+            Event::Property {
+                what: mimshel_x11::Property::ActiveWindow,
+                ..
+            } => self.dirty = true,
+            Event::Expose { window } if window == me => {
+                self.exposed = true;
+                self.dirty = true;
+            }
             Event::Configure { window } if window == me => {
                 if let Some((w, h)) = self.win.size(&self.d) {
                     self.size = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
@@ -912,11 +1049,11 @@ impl Window {
                 TermEvent::Redraw => self.dirty |= i == self.tabs.active,
                 TermEvent::Title(t) => {
                     self.tabs.list[i].title = t;
-                    self.dirty = true;
+                    self.tabs.title_dirty = true;
                 }
                 TermEvent::ResetTitle => {
                     self.tabs.list[i].title = TITLE.to_string();
-                    self.dirty = true;
+                    self.tabs.title_dirty = true;
                 }
                 TermEvent::Copy(text) => mimshel_x11::copy_text(text, false),
                 TermEvent::Bell => {}
@@ -928,29 +1065,50 @@ impl Window {
     }
 
     fn flush(&mut self) -> mimshel_x11::Result<()> {
-        if !self.dirty {
-            return Ok(());
-        }
-        self.dirty = false;
         let title = self.tabs.active().title.clone();
         if title != self.shown_title {
             self.win.set_title(&self.d, &title)?;
             self.shown_title = title;
         }
+        if !self.dirty {
+            if self.tabs.title_dirty && self.tabs.frame.is_some() {
+                self.tabs.damage.clear();
+                let _ = self.tabs.refresh_titles(self.size, self.scale);
+                if let Some(frame) = &self.tabs.frame {
+                    for &rect in &self.tabs.damage {
+                        self.win.present_rect(&self.d, frame, rect)?;
+                    }
+                }
+                self.d.sync()?;
+            }
+            return Ok(());
+        }
+        self.dirty = false;
         let focused = self.d.active_window() == Some(self.win.id());
         let blinking = focused && self.tabs.active().session.cursor_blinking();
         self.blink.store(blinking, Ordering::Relaxed);
         if !blinking {
             self.cursor_on = true;
         }
-        if let Some(frame) = self.tabs.render(
-            &mut self.glyphs,
-            self.size,
-            self.scale,
-            focused,
-            self.cursor_on,
-        ) {
-            self.win.present(&self.d, &frame)?;
+        let drawn = self
+            .tabs
+            .render(
+                &mut self.glyphs,
+                self.size,
+                self.scale,
+                focused,
+                self.cursor_on,
+            )
+            .is_some();
+        if drawn && let Some(frame) = &self.tabs.frame {
+            if self.exposed {
+                self.win.present(&self.d, frame)?;
+            } else {
+                for &rect in &self.tabs.damage {
+                    self.win.present_rect(&self.d, frame, rect)?;
+                }
+            }
+            self.exposed = false;
             self.d.sync()?;
         }
         Ok(())
@@ -959,6 +1117,7 @@ impl Window {
 
 fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::Result<()> {
     let d = Arc::new(Display::connect()?);
+    d.watch_root()?;
     let scale = d.scale();
     let (tx, rx) = mpsc::channel::<Wake>();
     let fonts_tx = tx.clone();
@@ -991,6 +1150,12 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         ui_fonts: None,
         hover: None,
         sb_active: false,
+        screen: Default::default(),
+        frame: None,
+        decoration: None,
+        scrollbar_mask: None,
+        title_dirty: false,
+        damage: Vec::new(),
     };
     tabs.open_with(dir, START, command)?;
     {
@@ -1034,6 +1199,7 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
         scale,
         size: px(START),
         dirty: true,
+        exposed: true,
         press: Press::None,
         last_click: None,
         shown_title: String::new(),
@@ -1065,7 +1231,10 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::
                     None => true,
                 },
                 Wake::Fonts => {
-                    w.dirty |= w.glyphs.refresh();
+                    if w.glyphs.refresh() {
+                        w.tabs.screen.invalidate();
+                        w.dirty = true;
+                    }
                     true
                 }
                 Wake::Blink => {
@@ -1114,6 +1283,12 @@ mod tests {
             ui_fonts: None,
             hover: None,
             sb_active: false,
+            screen: Default::default(),
+            frame: None,
+            decoration: None,
+            scrollbar_mask: None,
+            title_dirty: false,
+            damage: Vec::new(),
         };
         tabs.open(None, (60, 10)).unwrap();
         assert_eq!(tabs.bar_h(1.0), 0, "one tab — no strip");
@@ -1155,6 +1330,12 @@ mod tests {
             ui_fonts: None,
             hover: None,
             sb_active: false,
+            screen: Default::default(),
+            frame: None,
+            decoration: None,
+            scrollbar_mask: None,
+            title_dirty: false,
+            damage: Vec::new(),
         };
         tabs.open(None, (50, 12)).unwrap();
         let session = &tabs.list[0].session;
@@ -1181,6 +1362,112 @@ mod tests {
         assert!(lit, "scrollbar thumb is drawn");
         tabs.list[0].session.scroll_end(false);
         assert_eq!(tabs.list[0].session.history().1, 0);
+    }
+
+    #[test]
+    fn retained_frame_matches_full_with_decorations() {
+        let (tx, _rx) = mpsc::channel();
+        let mut glyphs = Glyphs::new("DejaVu Sans Mono", 14.0, || {});
+        let mut tabs = Tabs {
+            list: Vec::new(),
+            active: 0,
+            next_id: 0,
+            cell: glyphs.cell,
+            tx,
+            osc52: Osc52::Allow,
+            ui_fonts: None,
+            hover: None,
+            sb_active: false,
+            screen: Default::default(),
+            frame: None,
+            decoration: None,
+            scrollbar_mask: None,
+            title_dirty: false,
+            damage: Vec::new(),
+        };
+        let command = vec![
+            "sh".into(),
+            "-c".into(),
+            r"seq 1 100; printf '\033[Hhttps://example.org'; exec sleep 30".into(),
+        ];
+        for _ in 0..2 {
+            tabs.open_with(None, (50, 12), Some(command.clone()))
+                .unwrap();
+            let start = Instant::now();
+            while tabs.active().session.url_at((2, 0)).is_none()
+                && start.elapsed() < Duration::from_secs(5)
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(tabs.active().session.url_at((2, 0)).is_some());
+        }
+        let size = (500, 300);
+        tabs.render(&mut glyphs, size, 1.0, true, true).unwrap();
+        let preview = std::env::var_os("MIMSHEL_DAMAGE_PNG").map(|path| {
+            let display = Display::connect().unwrap();
+            let window = display
+                .create_app_window(WINDOW_CLASS, "Terminal damage", size, size)
+                .unwrap();
+            window.show(&display).unwrap();
+            window
+                .present(&display, tabs.frame.as_ref().unwrap())
+                .unwrap();
+            (display, window, path)
+        });
+        tabs.render(&mut glyphs, size, 1.0, true, false).unwrap();
+        assert!(
+            tabs.damage
+                .iter()
+                .all(|&(_, y0, _, y1)| y0 >= BAR_H as u32 && y1 - y0 == glyphs.cell.1)
+        );
+        if let Some((display, window, path)) = preview {
+            for &rect in &tabs.damage {
+                window
+                    .present_rect(&display, tabs.frame.as_ref().unwrap(), rect)
+                    .unwrap();
+            }
+            display.sync().unwrap();
+            let captured = display.capture_window(window.id()).unwrap();
+            assert_eq!(captured.data(), tabs.frame.as_ref().unwrap().data());
+            captured.save_png(path).unwrap();
+            window.destroy(&display).unwrap();
+        }
+        let partial = tabs.frame.as_ref().unwrap().clone();
+        let bar = tabs.bar_h(1.0);
+        tabs.screen.image =
+            tabs.active()
+                .session
+                .render(&mut glyphs, (size.0, size.1 - bar), true, false);
+        assert_eq!(
+            partial.data(),
+            tabs.render_full(size, 1.0).unwrap().data(),
+            "blink and translucent scrollbar"
+        );
+        let grid = tabs.screen.image.as_ref().unwrap().clone();
+        tabs.list[0].title = "new title".into();
+        tabs.title_dirty = true;
+        tabs.damage.clear();
+        tabs.refresh_titles(size, 1.0).unwrap();
+        assert_eq!(tabs.damage, [(0, 0, size.0, bar)]);
+        assert_eq!(
+            tabs.screen.image.as_ref().unwrap().data(),
+            grid.data(),
+            "title leaves grid intact"
+        );
+        for case in 0..4 {
+            match case {
+                0 => tabs.hover = Some(BarHit::Plus),
+                1 => tabs.sb_active = true,
+                2 => tabs.active = 0,
+                _ => tabs.active().session.scroll(10),
+            }
+            tabs.render(&mut glyphs, size, 1.0, true, true).unwrap();
+            assert_eq!(
+                tabs.damage,
+                [(0, 0, size.0, size.1)],
+                "decoration fallback {case}"
+            );
+        }
     }
 
     #[test]
