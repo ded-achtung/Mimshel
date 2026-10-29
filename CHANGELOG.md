@@ -18,6 +18,12 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   15 s. Keyboard: layouts (add and remove), the switch keys, key repeat and Num Lock. Both
   are kept in Xfce's settings. The display and keyboard back end is by Codex.
 
+- **A copy window** like Finder's: copying or moving files that takes longer than a second
+  shows the item's icon, a progress bar, the amount and the time left, and a round stop
+  button. Stop removes only the unfinished copy; a move between disks deletes the originals
+  only after the copy is checked, and cannot be stopped then. Work by Codex, look redone
+  in review.
+
 ### Changed
 
 - With «never hide», the Dock no longer reserves a strip at the bottom: maximized windows
