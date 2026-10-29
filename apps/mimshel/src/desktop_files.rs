@@ -1,8 +1,4 @@
-//! Файлы на рабочем столе: слежение за папкой «Рабочий стол» (inotify —
-//! ядро само сообщает о переменах) и действия со значками: открыть,
-//! переименовать, в корзину, новая папка, переложить в папку, вставить из
-//! буфера обмена, терминал в этой папке; места значков в файле. Всё, что может ждать (окна zenity, копирование),
-//! — в отдельных потоках; перемены в папке служба увидит через слежение.
+//! Desktop file actions, background transfers and directory watching.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -305,16 +301,40 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
     });
 }
 
-/// Файловая операция выполняется последовательно для всей группы.
-/// Ошибки возвращаются вызывающему: тесты не открывают окна zenity.
+/// gvfs may expose one device for multiple phones and does not guarantee
+/// renames even within a mount. Moves involving it always use two phases.
+fn rename_transfer(src: &Path, dest: &Path) -> bool {
+    let gvfs = mimshel_folder::gvfs_dir();
+    !src.starts_with(&gvfs)
+        && !dest.starts_with(&gvfs)
+        && same_device(src, dest.parent().unwrap_or(Path::new(".")))
+}
+
+/// Run the group sequentially; callers display the returned errors.
 fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
+    transfer_tracked(pairs, moving).0
+}
+
+fn transfer_tracked(pairs: &[(PathBuf, PathBuf)], moving: bool) -> (Vec<String>, bool) {
+    // Renames neither inventory their sources nor register a progress window.
+    let tracked = !pairs.is_empty()
+        && (!moving || pairs.iter().any(|(src, dest)| !rename_transfer(src, dest)));
+    let mut job = tracked.then(|| crate::transfer_job::Job::new(pairs, moving));
+    if let Some(job) = &mut job {
+        job.count(pairs);
+    }
     let mut errors = Vec::new();
-    for (src, dest) in pairs {
-        // GNU coreutils на Ubuntu CI может быть старше 9.5: --update=none-fail
-        // недоступен. Проверка препятствует ложному успеху для уже занятых путей,
-        // а --no-clobber защищает назначение от конкурентной записи.
-        // symlink_metadata учитывает битые ссылки. Нельзя считать ошибки
-        // доступа «свободным именем», а отсутствие источника — успехом.
+    for (index, (src, dest)) in pairs.iter().enumerate() {
+        if job.as_ref().is_some_and(|j| j.stopped()) {
+            break;
+        }
+        if let Some(job) = &job {
+            job.item(src, dest);
+        }
+        // Older GNU coreutils lacks --update=none-fail. Check occupied names
+        // explicitly and keep --no-clobber to protect against concurrent writes.
+        // symlink_metadata includes dangling links. Permission errors do not
+        // mean a name is free, and a missing source is never success.
         match std::fs::symlink_metadata(dest) {
             Ok(_) => {
                 errors.push(
@@ -350,24 +370,41 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
             );
             continue;
         }
-        let mut cmd = Command::new(if moving { "mv" } else { "cp" });
+        let rename = moving && rename_transfer(src, dest);
+        let mut cmd = Command::new(if rename { "mv" } else { "cp" });
         cmd.args(["--no-clobber", "-T"]);
-        if !moving {
+        if !rename {
             // Phones (MTP over gvfs) do not keep owners and permissions:
             // `cp -a` would copy the file and still report a failure.
             let phone = dest.starts_with(mimshel_folder::gvfs_dir());
             cmd.arg(if phone { "-r" } else { "-a" });
         }
-        let ok = cmd
-            .arg("--")
-            .arg(src)
-            .arg(dest)
-            .status()
-            .is_ok_and(|s| s.success());
-        // GNU cp/mv --no-clobber может возвращать код 0, пропустив
-        // существующий файл. Проверяем фактическое состояние после команды.
+        let ok = if !rename {
+            job.as_ref().is_some_and(|job| {
+                job.copy_item(&mut cmd, src, dest, index, moving)
+                    .unwrap_or(false)
+            })
+        } else {
+            cmd.arg("--")
+                .arg(src)
+                .arg(dest)
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        if job.as_ref().is_some_and(|j| j.stopped()) {
+            break;
+        }
+        // GNU cp/mv --no-clobber may return zero after skipping an occupied
+        // name. Always check the actual state after the command.
         let actually_done = std::fs::symlink_metadata(dest).is_ok()
             && (!moving || std::fs::symlink_metadata(src).is_err());
+        if ok
+            && actually_done
+            && rename
+            && let Some(job) = &job
+        {
+            job.finished_item(index);
+        }
         if !ok || !actually_done {
             let name = src.file_name().unwrap_or_default().to_string_lossy();
             errors.push(
@@ -379,14 +416,15 @@ fn transfer(pairs: &[(PathBuf, PathBuf)], moving: bool) -> Vec<String> {
             );
         }
     }
-    errors
+    let stopped = job.as_ref().is_some_and(|j| j.stopped());
+    (errors, stopped)
 }
 
 /// Перенести или скопировать и отправить событие XDND только после операции.
 pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool, ticket: u64, tx: Sender<Msg>) {
     std::thread::spawn(move || {
-        let errors = transfer(&pairs, moving);
-        let success = errors.is_empty();
+        let (errors, stopped) = transfer_tracked(&pairs, moving);
+        let success = errors.is_empty() && !stopped;
         for message in errors {
             error(&message);
         }
@@ -445,29 +483,32 @@ pub fn save_places(places: &HashMap<String, Slot>) {
     }
 }
 
-/// Вставить файлы из буфера обмена (скопированные или вырезанные в
-/// Проводнике): копировать или переместить в папку стола. Имя занято —
-/// «имя 2».
+/// Paste copied or cut files as one transfer, reserving distinct free names.
 pub fn paste(dir: PathBuf) {
     std::thread::spawn(move || {
         let Some((cut, files)) = mimshel_x11::clipboard_files() else {
             return;
         };
+        let mut pairs = Vec::new();
         for src in files {
             let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else {
                 continue;
             };
-            // Вырезанный со стола обратно на стол — он уже здесь, ничего не
-            // делать; скопированный — копия рядом, «имя 2» (как на Mac).
+            // Cutting back into the same folder is a no-op; copying creates
+            // another item beside the original with a free name.
             if cut && src.parent() == Some(dir.as_path()) {
                 continue;
             }
-            let dest = free_name(&dir, &name);
-            // Единый путь проверки конфликтов и результатов для вставки,
-            // XDND и переноса в папку. Не полагаемся на код возврата cp -n.
-            for message in transfer(&[(src, dest)], cut) {
-                error(&message);
+            let mut dest = free_name(&dir, &name);
+            let mut suffix = 2;
+            while pairs.iter().any(|(_, reserved)| reserved == &dest) {
+                dest = free_name(&dir, &format!("{name} {suffix}"));
+                suffix += 1;
             }
+            pairs.push((src, dest));
+        }
+        for message in transfer(&pairs, cut) {
+            error(&message);
         }
     });
 }
@@ -536,6 +577,16 @@ pub fn spawn(args: &[&str], dir: Option<&Path>) {
 #[cfg(test)]
 mod transfer_tests {
     use super::*;
+
+    #[test]
+    fn moves_involving_gvfs_never_use_plain_rename() {
+        let gvfs = mimshel_folder::gvfs_dir();
+        let source = gvfs.join("mtp-phone/DCIM");
+        let dest = gvfs.join("mtp-phone/Pictures/DCIM");
+        assert!(!rename_transfer(&source, &dest));
+        assert!(!rename_transfer(&source, Path::new("/local/DCIM")));
+        assert!(!rename_transfer(Path::new("/local/DCIM"), &dest));
+    }
 
     #[test]
     fn same_device_for_files_in_one_folder() {

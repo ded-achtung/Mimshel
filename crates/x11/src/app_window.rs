@@ -5,8 +5,8 @@
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, PropMode, Window,
-    WindowClass,
+    AtomEnum, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask,
+    PropMode, Window, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -141,6 +141,18 @@ impl AppWindow {
             AtomEnum::WM_NAME,
             d.atoms.UTF8_STRING,
             title.as_bytes(),
+        )?;
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// Resize an application window in points, preserving its position.
+    pub fn resize(&self, d: &Display, size: (u32, u32)) -> Result<()> {
+        d.conn.configure_window(
+            self.window,
+            &ConfigureWindowAux::new()
+                .width(d.px(size.0).max(1))
+                .height(d.px(size.1).max(1)),
         )?;
         d.conn.flush()?;
         Ok(())

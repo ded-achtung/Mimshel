@@ -115,6 +115,8 @@ pub(crate) enum Msg {
     ShowAbout,
     /// Сведения для «Об этом компьютере» собраны.
     About(Box<mimshel_setup::actions::About>),
+    TransferStarted(crate::transfer_job::Handle),
+    TransferTick,
     /// Перенос брошенных файлов закончен — сообщить источнику (XDND).
     DropFinished {
         ticket: u64,
@@ -144,6 +146,7 @@ impl Msg {
             Msg::OpenFolder(_) => "открыть папку".into(),
             Msg::Reload => "перезагрузка настроек".into(),
             Msg::ShowAbout | Msg::About(_) => "об этом компьютере".into(),
+            Msg::TransferStarted(_) | Msg::TransferTick => "transfer progress".into(),
             Msg::DropFinished { .. } => "перенос".into(),
         }
     }
@@ -336,6 +339,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         })
     };
     let (tx, rx) = mpsc::channel();
+    crate::transfer_job::connect(tx.clone());
 
     // When the config file was last read (see the hot reload watcher).
     let config_seen = Arc::new(Mutex::new(None));
@@ -480,6 +484,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         menubar,
         notify,
         about: crate::about_ui::AboutUi::new(config.language),
+        transfers: crate::transfer_ui::TransferUi::new(config.language),
         tx: tx.clone(),
         app_settings: settings,
         config_seen,
@@ -575,6 +580,7 @@ struct Ui<'a> {
     menubar: Option<MenubarUi>,
     notify: Option<NotifyUi>,
     about: crate::about_ui::AboutUi,
+    transfers: crate::transfer_ui::TransferUi,
     /// Для потоков, которые служба запускает сама (сведения «Об этом компьютере»).
     tx: Sender<Msg>,
     /// How app shortcuts are read (`[apps] hide` and `rename`), shared with
@@ -724,6 +730,7 @@ impl Ui<'_> {
     fn flush(&mut self) -> Result<()> {
         let timing = mimshel_core::names::flag("TIMING");
         let t = Instant::now();
+        self.transfers.flush(self.display, &mut self.fonts)?;
         self.about
             .flush(self.display, &mut self.fonts, &mut self.icons)?;
         // Окна папок — первыми: их ждут (только что открыли папку).
@@ -792,6 +799,7 @@ impl Ui<'_> {
             folders.set_language(self.display, lang)?;
         }
         self.about.set_language(lang);
+        self.transfers.set_language(lang);
         self.terminal = terminal_command(&config);
         // The program names we give (`[apps] rename`: «Проводник», "File
         // Manager") follow the language; the list is read again off the main
@@ -871,6 +879,11 @@ impl Ui<'_> {
                 Ok(())
             }
             Msg::About(info) => self.about.show(self.display, *info),
+            Msg::TransferStarted(handle) => {
+                self.transfers.started(handle);
+                self.transfers.tick(self.display)
+            }
+            Msg::TransferTick => self.transfers.tick(self.display),
             Msg::OpenFolder(path) => match &mut self.folders {
                 Some(folders) => folders.open(self.display, path),
                 // Свой Проводник выключен — прежний (Thunar).
@@ -1035,6 +1048,9 @@ impl Ui<'_> {
         {
             desktop.event(self.display, &mut self.fonts, ev)?;
             handled = true;
+        }
+        if !to_panel && self.transfers.wants(self.display, &ev) {
+            return self.transfers.event(self.display, ev);
         }
         if !to_panel && self.about.wants(self.display, &ev) {
             return self.about.event(self.display, ev);

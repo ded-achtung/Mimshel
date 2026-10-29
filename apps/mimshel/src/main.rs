@@ -19,6 +19,8 @@ mod settings_ui;
 mod setup;
 mod status;
 mod term_ui;
+mod transfer_job;
+mod transfer_ui;
 mod ui;
 
 use std::collections::HashMap;
@@ -37,6 +39,7 @@ const HELP: &str = "\
   mimshel --version       версия программы
   mimshel settings [РАЗДЕЛ] окно «Системные настройки» (appearance wallpaper menubar dock
                         lock apps terminal parts)
+  mimshel snapshot transfer ФАЙЛ.png
   mimshel snapshot settings РАЗДЕЛ ФАЙЛ.png
                         нарисовать окно настроек в картинку (проверка вида)
   mimshel terminal [ПАПКА] свой терминал (отдельное окно; оболочка — в папке);
@@ -221,6 +224,9 @@ fn main() {
             if !ui::ask_daemon(panel) {
                 exit_on_error(ui::run(Some(panel)));
             }
+        }
+        Some("snapshot") if args.len() == 3 && args[1] == "transfer" => {
+            exit_on_error(transfer_ui::snapshot(&args[2]))
         }
         Some("snapshot") if args.len() == 4 && args[1] == "folder" => exit_on_error(
             folder_ui::snapshot(std::path::Path::new(&args[2]), &args[3]),
