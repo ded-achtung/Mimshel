@@ -621,7 +621,7 @@ fn scale_value(v: &Value) -> Option<Option<f32>> {
 /// Инлайн-таблица `rename` для текста настроек: { ярлык = "Имя", … }.
 /// The programs we name ourselves (`[apps] rename` by default): shortcut
 /// id and the language table key of the name.
-const DEFAULT_RENAMES: [(&str, &str); 8] = [
+const DEFAULT_RENAMES: [(&str, &str); 9] = [
     ("thunar", "app.file_manager"),
     ("mimshel-folder", "app.file_manager"),
     ("macos-launchpad", "panel.apps"),
@@ -629,13 +629,19 @@ const DEFAULT_RENAMES: [(&str, &str); 8] = [
     ("xfce4-terminal", "app.xfce_terminal"),
     ("org.xfce.mousepad", "app.text_editor"),
     ("xfce-settings-manager", "app.settings"),
+    ("mimshel-settings", "app.settings"),
     ("xfce4-taskmanager", "app.task_manager"),
 ];
 
 /// Our own shortcuts (`mimshel apply` writes them with a Russian `Name`):
 /// named in the interface language even when `[apps] rename` in the file
 /// does not list them.
-const OWN_SHORTCUTS: [&str; 3] = ["mimshel-folder", "macos-launchpad", "mimshel-terminal"];
+const OWN_SHORTCUTS: [&str; 4] = [
+    "mimshel-folder",
+    "macos-launchpad",
+    "mimshel-terminal",
+    "mimshel-settings",
+];
 
 fn default_renames(lang: Language) -> Vec<(String, String)> {
     DEFAULT_RENAMES
@@ -1456,6 +1462,7 @@ mod tests {
             ]
         );
         // Our own shortcuts are named even when the file does not list them.
+        assert!(en.contains(&("mimshel-settings".to_string(), "Settings".to_string())));
         assert!(en.contains(&("macos-launchpad".to_string(), "Apps".to_string())));
         assert!(en.contains(&("mimshel-folder".to_string(), "File Manager".to_string())));
         assert_eq!(names("ru")[0].1, "Проводник");

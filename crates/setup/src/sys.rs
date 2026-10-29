@@ -214,11 +214,14 @@ pub fn bus_owner(name: &str) -> String {
         .to_string()
 }
 
-/// Где программа в `PATH`.
+/// Find an executable file in `PATH`.
 pub fn which(program: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(program))
-        .find(|p| p.is_file())
+        .find(|p| {
+            p.metadata()
+                .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+        })
 }
 
 /// Текст файла, если он есть.

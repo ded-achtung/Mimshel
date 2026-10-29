@@ -17,3 +17,4 @@ pub mod png_icons;
 pub mod report;
 mod sys;
 pub mod terminal;
+pub mod themes;

@@ -45,10 +45,8 @@ pub fn doctor(fix: bool) -> i32 {
             p => APPLY_PARTS.iter().copied().find(|a| *a == p),
         })
         .collect();
-    if !mine.is_empty()
-        && let Err(e) = apply(&config, &mine)
-    {
-        println!("✘ {e}");
+    if !mine.is_empty() {
+        run_apply(&config, &mine);
     }
     // Службе и панели нужно время, чтобы подняться.
     std::thread::sleep(std::time::Duration::from_secs(3));
@@ -295,7 +293,21 @@ fn apply_parts(parts: &[String]) -> i32 {
 }
 
 fn run_apply(config: &mimshel_core::config::Config, parts: &[&str]) -> i32 {
-    match apply(config, parts) {
+    let mut updated = config.clone();
+    if (parts.is_empty() || parts.contains(&"launchers"))
+        && let Some(path) = config_path()
+    {
+        let store = config_store(path);
+        if let Err(e) = store.edit(|text| {
+            swap_settings(text)
+                .ok_or_else(|| std::io::Error::other("не удалось изменить настройки"))
+        }) {
+            println!("✘ Не записать настройки: {e}");
+            return 1;
+        }
+        updated = store.load();
+    }
+    match apply(&updated, parts) {
         Ok(()) => {
             println!("✔ Применено");
             0
@@ -305,6 +317,42 @@ fn run_apply(config: &mimshel_core::config::Config, parts: &[&str]) -> i32 {
             1
         }
     }
+}
+
+/// Replace only an existing settings pin, preserving its position.
+fn swap_settings(text: &str) -> Option<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    let Some(apps) = doc
+        .get_mut("dock")
+        .and_then(|t| t.get_mut("apps"))
+        .and_then(|v| v.as_array_mut())
+    else {
+        return Some(text.to_string());
+    };
+    let mut seen = false;
+    let mut remove = Vec::new();
+    for (index, value) in apps.iter_mut().enumerate() {
+        let Some(app) = value.as_str() else {
+            continue;
+        };
+        if matches!(
+            config::dock_entry(app),
+            "xfce-settings-manager" | "mimshel-settings"
+        ) {
+            if seen {
+                remove.push(index);
+            } else {
+                seen = true;
+                if config::dock_entry(app) == "xfce-settings-manager" {
+                    *value = toml_edit::Value::from("mimshel-settings");
+                }
+            }
+        }
+    }
+    for index in remove.into_iter().rev() {
+        apps.remove(index);
+    }
+    Some(doc.to_string())
 }
 
 /// `mimshel config`: где файл, что в нём и что можно менять.
@@ -387,6 +435,20 @@ pub fn restore(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_swap_preserves_position_and_is_idempotent() {
+        let text = "[dock]\napps = [\"firefox\", \"xfce-settings-manager.desktop\", \"thunar\", \"mimshel-settings\"]\n";
+        let once = swap_settings(text).unwrap();
+        assert_eq!(
+            config::Config::from_toml(&once).dock_apps,
+            ["firefox", "mimshel-settings", "thunar"]
+        );
+        assert_eq!(swap_settings(&once).unwrap(), once);
+        let absent = "[dock]\napps = [\"firefox\"]\n";
+        assert_eq!(swap_settings(absent).unwrap(), absent);
+        assert_eq!(swap_settings("# empty\n").unwrap(), "# empty\n");
+    }
 
     #[test]
     fn file_manager_swap_keeps_other_entries() {

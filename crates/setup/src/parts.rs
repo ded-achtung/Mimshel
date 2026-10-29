@@ -614,9 +614,18 @@ impl Plan<'_> {
         }
     }
 
-    /// Сочетания Super+Пробел и Super+A, значок «Программы» в доке и меню яблока.
+    /// Search and Apps shortcuts, our application launchers and the logo menu.
     fn launchers(&mut self) {
         self.apple_menu();
+        write(
+            &self.paths.applications.join("mimshel-settings.desktop"),
+            &desktop_entry(
+                "Системные настройки",
+                &format!("{} settings", self.paths.shell_bin.display()),
+                "preferences-system",
+                &format!("StartupWMClass=mimshel-settings\nCategories=Settings;\n{MANAGED_MARK}\n"),
+            ),
+        );
         let c = self.config;
         let engine = |ours: bool| if ours { "Mimshel" } else { "rofi" };
         println!(

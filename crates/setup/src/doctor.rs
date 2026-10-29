@@ -405,6 +405,13 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "mimshel apply launchers",
         );
     }
+    add(
+        "menu",
+        "ярлык системных настроек",
+        read(&paths.applications.join("mimshel-settings.desktop"))
+            .contains(&format!("Exec={} settings\n", paths.shell_bin.display())),
+        "mimshel apply launchers",
+    );
     let apps_desktop = paths
         .applications
         .join(format!("{}.desktop", crate::parts::APPS_DESKTOP));

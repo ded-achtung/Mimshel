@@ -28,7 +28,7 @@ pub fn action(name: &str, shell: &Path) -> i32 {
                 "--width=420",
             ]);
         }
-        "settings" => spawn(&["xfce4-settings-manager"]),
+        "settings" => spawn(&[&shell, "settings"]),
         "forcequit" => spawn(&["xfce4-taskmanager"]),
         "sleep" => {
             if in_vm() {
