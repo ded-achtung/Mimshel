@@ -1074,6 +1074,66 @@ fn scan_phones(tx: Sender<Msg>) {
     });
 }
 
+/// Mount USB sticks and memory cards when they are plugged in. Thunar's
+/// volume manager did it before, and it does not run with our folder
+/// windows. Only disks that appear after the start: one left unmounted on
+/// purpose stays so when the service restarts. The sidebar picks the new
+/// mount up by itself (`devices_state`).
+pub fn automount() {
+    std::thread::spawn(|| {
+        let blocks = || -> HashSet<String> {
+            std::fs::read_dir("/sys/class/block")
+                .map(|d| {
+                    d.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut known = blocks();
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let now = blocks();
+            let new: HashSet<String> = now.difference(&known).cloned().collect();
+            known = now;
+            if new.is_empty() {
+                continue;
+            }
+            // udisks and gvfs need a moment to see the new partitions.
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_secs(1));
+                let Ok(out) = std::process::Command::new("gio")
+                    .args(["mount", "-li"])
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                else {
+                    break;
+                };
+                let devices: Vec<String> =
+                    mimshel_folder::automount_devices(&String::from_utf8_lossy(&out.stdout))
+                        .into_iter()
+                        .filter(|d| d.rsplit('/').next().is_some_and(|n| new.contains(n)))
+                        .collect();
+                if devices.is_empty() {
+                    continue;
+                }
+                for dev in devices {
+                    let ok = std::process::Command::new("gio")
+                        .args(["mount", "-d", &dev])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if !ok {
+                        eprintln!("Не удалось подключить {dev}");
+                    }
+                }
+                break;
+            }
+        }
+    });
+}
+
 /// What the sidebar «Devices» depends on, cheap to read: mounted disks, gvfs
 /// mounts (phones) and plugged USB devices (a phone before it is mounted).
 fn devices_state() -> String {

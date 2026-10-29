@@ -271,6 +271,45 @@ pub fn phones() -> Vec<Place> {
     list
 }
 
+/// Removable volumes that want mounting from the `gio mount -li` text:
+/// `can_mount=1` and `should_automount=1` (udisks sets it for USB sticks
+/// and memory cards, not for internal disks). Returns their devices
+/// (`/dev/sda1`).
+pub fn automount_devices(gio: &str) -> Vec<String> {
+    struct Volume {
+        device: Option<String>,
+        can_mount: bool,
+        automount: bool,
+    }
+    let mut volumes: Vec<Volume> = Vec::new();
+    let mut in_volume = false;
+    for line in gio.lines().map(str::trim) {
+        if line.starts_with("Volume(") {
+            volumes.push(Volume {
+                device: None,
+                can_mount: false,
+                automount: false,
+            });
+            in_volume = true;
+        } else if line.starts_with("Drive(") || line.starts_with("Mount(") {
+            in_volume = false;
+        } else if in_volume && let Some(v) = volumes.last_mut() {
+            if let Some(dev) = line.strip_prefix("unix-device: ") {
+                v.device = Some(dev.trim_matches('\'').to_string());
+            } else if line == "can_mount=1" {
+                v.can_mount = true;
+            } else if line == "should_automount=1" {
+                v.automount = true;
+            }
+        }
+    }
+    volumes
+        .into_iter()
+        .filter(|v| v.can_mount && v.automount)
+        .filter_map(|v| v.device)
+        .collect()
+}
+
 fn single_subdir(dir: &Path) -> Option<PathBuf> {
     let mut entries = std::fs::read_dir(dir).ok()?.flatten();
     let first = entries.next()?;
@@ -426,6 +465,22 @@ mod tests {
             list.iter()
                 .all(|p| p.removable && p.section == Section::Devices)
         );
+    }
+
+    #[test]
+    fn automount_only_plugged_sticks() {
+        let gio = "Drive(0): KINGSTON\n  ids:\n   unix-device: '/dev/nvme0n1'\n\
+                   \x20 Volume(0): Том 917 Гб\n    ids:\n     unix-device: '/dev/nvme0n1p3'\n\
+                   \x20   can_mount=1\n    should_automount=0\n\
+                   Drive(1): General UDisk\n  ids:\n   unix-device: '/dev/sda'\n\
+                   \x20 Volume(0): EOS\n    ids:\n     unix-device: '/dev/sda1'\n\
+                   \x20   can_mount=1\n    should_automount=1\n\
+                   \x20 Volume(1): DATA\n    ids:\n     unix-device: '/dev/sda2'\n\
+                   \x20   can_mount=0\n    should_automount=0\n\
+                   \x20   Mount(0): DATA -> file:///run/media/ded/DATA\n\
+                   \x20     can_unmount=1\n";
+        // The internal disk does not ask for it, DATA is mounted already.
+        assert_eq!(automount_devices(gio), ["/dev/sda1"]);
     }
 
     #[test]

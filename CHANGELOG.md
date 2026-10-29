@@ -12,6 +12,8 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   the keyboard layout, sound, battery or the bell) down out of the menu bar and it moves to
   a «Hidden icons» row in the Control Center, where a click works as before; drag it up
   onto the bar to bring it back. Remembered in `[menubar] hidden`.
+- **USB sticks and memory cards mount when plugged in** and show up in the folder windows'
+  sidebar (Thunar's volume manager did this before our file manager replaced it).
 - The lock screen says why PAM refused — an account locked after failed attempts, an expired
   password — instead of «wrong password» every time.
 

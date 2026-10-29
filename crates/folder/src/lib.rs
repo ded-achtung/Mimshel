@@ -6,5 +6,7 @@
 pub mod places;
 pub mod view;
 
-pub use places::{Place, Section, gvfs_dir, phones, places, places_lang, special_folders};
+pub use places::{
+    Place, Section, automount_devices, gvfs_dir, phones, places, places_lang, special_folders,
+};
 pub use view::{Action, FolderView};
