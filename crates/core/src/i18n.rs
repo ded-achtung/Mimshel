@@ -170,10 +170,10 @@ pub fn t(lang: Language, key: &str) -> &str {
         "control.display" => ("Display", "Дисплей", "显示器", "顯示器"),
         "control.sound" => ("Sound", "Звук", "声音", "聲音"),
         "control.hidden_icons" => (
-            "Hidden icons — drag one up to the menu bar to bring it back",
-            "Скрытые значки — перетащите наверх, чтобы вернуть",
-            "隐藏的图标 — 拖回菜单栏即可恢复",
-            "隱藏的圖示 — 拖回選單列即可恢復",
+            "Hidden icons — drag up to restore",
+            "Скрытые значки — тяните наверх",
+            "隐藏的图标 — 拖回菜单栏",
+            "隱藏的圖示 — 拖回選單列",
         ),
         // --- Network panel ---
         "net.network" => ("Network", "Сеть", "网络", "網路"),

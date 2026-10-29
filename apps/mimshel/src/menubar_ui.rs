@@ -938,9 +938,18 @@ impl MenubarUi {
             let (ax, ay, aw, _) = self.area;
             let bar_bottom = ay + self.bar.height as i32;
             let over_bar = at.1 < bar_bottom + 4 && at.0 >= ax && at.0 < ax + aw as i32;
+            // Dropped onto the Control Center icon itself counts too: that is
+            // where people aim first.
+            let on_control = over_bar
+                && matches!(
+                    self.bar.part_at(fonts, (at.0 - ax) as f32),
+                    Some((Part::Control, _))
+                );
             match drag.from {
-                // Pulled clearly below the bar: into the Control Center.
-                DragFrom::Bar { .. } if at.1 > bar_bottom + 12 => {
+                // Anywhere below the bar, or onto the Control Center icon.
+                // Live test: a drop 10 px under the bar was ignored with a
+                // stricter margin, and the user took it for a bug.
+                DragFrom::Bar { .. } if at.1 >= bar_bottom || on_control => {
                     self.move_icon(&drag.id, true);
                 }
                 DragFrom::Control(_) if over_bar => self.move_icon(&drag.id, false),
