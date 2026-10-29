@@ -63,6 +63,12 @@ const CURRENT: [u8; 4] = [0xff, 0xff, 0xff, 0x1c];
 const SELECTED: [u8; 4] = [0x5b, 0x9b, 0xf8, 0xff];
 const TEXT_SELECTION: [u8; 4] = [0x5b, 0x9b, 0xf8, 0x90];
 const SCROLLBAR: [u8; 4] = [0xff, 0xff, 0xff, 0x50];
+const SCROLLBAR_ACTIVE: [u8; 4] = [0xff, 0xff, 0xff, 0x90];
+/// The scrollbar: thin, wide under the pointer or while dragged, and how
+/// far from the right edge it reacts to the pointer.
+const SB_THIN: f32 = 5.0;
+const SB_WIDE: f32 = 9.0;
+const SB_HIT: f32 = 16.0;
 const BAND_FILL: [u8; 4] = [0x5b, 0x9b, 0xf8, 0x40];
 const BAND_EDGE: [u8; 4] = [0x5b, 0x9b, 0xf8, 0xff];
 const ICON_COLOR: [u8; 4] = [0xe8, 0xe8, 0xe8, 0xff];
@@ -236,6 +242,10 @@ pub struct FolderView {
     /// Default is Russian (upstream behaviour); the app layer sets it
     /// from config via `set_language`.
     language: mimshel_core::i18n::Language,
+    /// The scrollbar thumb is being dragged: where in it the pointer took it.
+    sb_drag: Option<f32>,
+    /// The pointer is over the scrollbar (drawn wide).
+    sb_hover: bool,
 }
 
 impl FolderView {
@@ -256,6 +266,8 @@ impl FolderView {
             hover: Hit::Nothing,
             press: None,
             band: None,
+            sb_drag: None,
+            sb_hover: false,
             drop_target: None,
             renaming: None,
             loaded: false,
@@ -757,6 +769,21 @@ impl FolderView {
             1 | 3 => {}
             _ => return Action::Nothing,
         }
+        // The scrollbar: take the thumb and drag it; a press beside the
+        // thumb brings it there first (as in macOS with «jump to here»).
+        if button == 1
+            && self.on_scrollbar(x, y)
+            && let Some((_, top, bar_h)) = self.thumb()
+        {
+            let grab = if y >= top && y < top + bar_h {
+                y - top
+            } else {
+                self.scroll_thumb_to(y - bar_h / 2.0);
+                bar_h / 2.0
+            };
+            self.sb_drag = Some(grab);
+            return Action::Redraw;
+        }
         let hit = self.hit(x, y);
         // Щелчок мимо строки ввода: путь — отменить, поиск — оставить.
         if self.input.is_some() && hit != Hit::PathField {
@@ -879,6 +906,16 @@ impl FolderView {
     }
 
     pub fn motion(&mut self, x: f32, y: f32) -> Action {
+        if let Some(grab) = self.sb_drag {
+            let before = self.scroll;
+            self.scroll_thumb_to(y - grab);
+            return redraw_if(self.scroll != before);
+        }
+        let over = self.on_scrollbar(x, y);
+        if over != self.sb_hover {
+            self.sb_hover = over;
+            return Action::Redraw;
+        }
         if let Some((start, _)) = self.band {
             self.band = Some((start, (x, y)));
             let (bx, by, bw, bh) = band_rect(start, (x, y));
@@ -911,6 +948,9 @@ impl FolderView {
     }
 
     pub fn release(&mut self, x: f32, y: f32) -> Action {
+        if self.sb_drag.take().is_some() {
+            return Action::Redraw;
+        }
         if self.band.take().is_some() {
             return Action::Redraw;
         }
@@ -1270,16 +1310,47 @@ impl FolderView {
         Some(pm)
     }
 
-    fn draw_scrollbar(&self, pm: &mut Canvas) {
+    /// The scrollbar thumb: `(right edge x, top, height)`; `None` when the
+    /// folder fits.
+    fn thumb(&self) -> Option<(f32, f32, f32)> {
         let max = self.max_scroll();
         if max <= 0.0 {
-            return;
+            return None;
         }
         let (cx, cy, cw, ch) = self.content();
-        let total = ch + max;
-        let bar_h = (ch * ch / total).max(24.0);
+        let bar_h = (ch * ch / (ch + max)).max(24.0);
         let y = cy + 2.0 + (ch - 4.0 - bar_h) * (self.scroll / max);
-        fill_rounded(pm, (cx + cw - 8.0, y, 5.0, bar_h), 2.5, SCROLLBAR);
+        Some((cx + cw - 3.0, y, bar_h))
+    }
+
+    /// Over the scrollbar's strip at the right of the files.
+    fn on_scrollbar(&self, x: f32, y: f32) -> bool {
+        let (cx, cy, cw, ch) = self.content();
+        self.thumb().is_some() && x >= cx + cw - SB_HIT && x < cx + cw && y >= cy && y < cy + ch
+    }
+
+    /// Scroll so that the thumb's top is at `top` (dragging it).
+    fn scroll_thumb_to(&mut self, top: f32) {
+        let Some((_, _, bar_h)) = self.thumb() else {
+            return;
+        };
+        let (_, cy, _, ch) = self.content();
+        let track = (ch - 4.0 - bar_h).max(1.0);
+        let k = ((top - cy - 2.0) / track).clamp(0.0, 1.0);
+        self.scroll = k * self.max_scroll();
+    }
+
+    fn draw_scrollbar(&self, pm: &mut Canvas) {
+        let Some((right, y, bar_h)) = self.thumb() else {
+            return;
+        };
+        let active = self.sb_hover || self.sb_drag.is_some();
+        let (w, color) = if active {
+            (SB_WIDE, SCROLLBAR_ACTIVE)
+        } else {
+            (SB_THIN, SCROLLBAR)
+        };
+        fill_rounded(pm, (right - w, y, w, bar_h), w / 2.0, color);
     }
 
     fn draw_sidebar(&self, pm: &mut Canvas, fonts: &mut Fonts, icons: &mut Icons) {
@@ -1693,6 +1764,35 @@ mod tests {
         items.extend((1..n).map(|k| item(&format!("файл{k}.txt"), Kind::File)));
         v.set_items(items);
         v
+    }
+
+    #[test]
+    fn the_scrollbar_can_be_dragged() {
+        let mut v = view(200);
+        let max = v.max_scroll();
+        assert!(max > 0.0, "200 files do not fit");
+        let (right, top, bar_h) = v.thumb().expect("a scrollbar");
+        let x = right - 2.0;
+        // Hovering widens it.
+        assert_eq!(v.motion(x, top + 5.0), Action::Redraw);
+        // Take the thumb and drag it to the bottom.
+        assert_eq!(
+            v.press(x, top + bar_h / 2.0, 1, false, false),
+            Action::Redraw
+        );
+        v.motion(x, 10_000.0);
+        assert_eq!(v.scroll, max);
+        assert_eq!(v.release(x, 10_000.0), Action::Redraw);
+        // A press low on the empty track jumps there; up again at the top.
+        let (_, cy, _, _) = v.content();
+        v.press(x, cy + 1.0, 1, false, false);
+        v.release(x, cy + 1.0);
+        assert_eq!(v.scroll, 0.0);
+        // A folder that fits has no scrollbar to take.
+        let mut small = view(3);
+        assert!(small.thumb().is_none());
+        small.press(x, top + 5.0, 1, false, false);
+        assert!(small.sb_drag.is_none());
     }
 
     /// Середина картинки значка `i`.
