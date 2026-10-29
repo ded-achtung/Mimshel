@@ -2,12 +2,21 @@
 
 Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
-## [Unreleased]
+## [v0.0.4-alpha] — 2026-10-29
+
+Fourth alpha: interface languages from the first outside contribution, menu bar icons that move
+into the Control Center, and a dock that no longer leaves stripes behind. Tested on the same
+laptop (Tanshi X669, EndeavourOS, Xfce 4.20, X11).
+
+Thanks to [ra1nzzz](https://github.com/ra1nzzz) for the translations (PR #4) — the first
+contribution from outside the project.
 
 ### New
 
-- **Interface languages** (PR #4 by ra1nzzz): English (now the default), Russian, Simplified
-  and Traditional Chinese; `mimshel set look.language ru` switches without a restart.
+- **Interface languages** (PR #4 by [ra1nzzz](https://github.com/ra1nzzz)): English (now the
+  default), Russian, Simplified and Traditional Chinese. `mimshel set look.language ru`
+  switches everything on the fly, without a restart: the menu bar with its clock and calendar,
+  the dock, the desktop, folder windows, Search, Apps and the lock screen.
 - **Menu bar icons can move into the Control Center**: drag an icon (an app's tray icon,
   the keyboard layout, sound, battery or the bell) down out of the menu bar and it moves to
   a «Hidden icons» row in the Control Center, where a click works as before; drag it up
@@ -16,6 +25,15 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   sidebar (Thunar's volume manager did this before our file manager replaced it).
 - The lock screen says why PAM refused — an account locked after failed attempts, an expired
   password — instead of «wrong password» every time.
+- **Several monitors:** the menu bar, the dock, notifications and Search live on the primary
+  monitor, and the space they reserve covers only that monitor.
+
+### Changed
+
+- The menu bar is a darker, half-transparent bar (ra1nzzz) instead of a near-transparent white one.
+- **English is now the default language.** A config without `look.language` — every setup
+  made before this version — shows English after the update. `mimshel set look.language ru`
+  brings Russian back (`auto` follows the system language).
 
 ### Security
 
@@ -26,6 +44,8 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   log never runs inside the lock screen.
 - The login-screen setup never replaces a theme in `/usr/local/share` that Mimshel did not install.
 - `doctor --report` also removes the real name and every name the user goes by.
+- A program's global menu can be unregistered only by the program that registered it; the
+  tray list is capped.
 
 ### Fixed
 
@@ -34,9 +54,8 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 - `mimshel set look.wallpaper` sets the Xfce desktop and lock background again.
 - Dock: no more stripes or a ghost of the icon when a program like Chrome opens over it.
   The dock keeps still until the new window has drawn, instead of waiting a fixed time.
-- Switching the language now also switches the clock, the calendar, the lock screen date,
-  the names Mimshel gives programs («Проводник» → File Manager) and the titles of open folder
-  windows.
+- The dock, the menu bar and the desktop no longer redraw when a program only queries the
+  monitors (Chrome at startup).
 - The menu bar clock is right within seconds after waking from sleep.
 - Folder window: dragging onto another disk copies instead of moving.
 - A dead drag source no longer blocks every later drop until a restart.

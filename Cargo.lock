@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "inotify",
  "mimshel-apps",
@@ -859,28 +859,28 @@ dependencies = [
 
 [[package]]
 name = "mimshel-apps"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "inotify",
 ]
 
 [[package]]
 name = "mimshel-core"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "toml_edit",
 ]
 
 [[package]]
 name = "mimshel-dbus"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "zbus",
 ]
 
 [[package]]
 name = "mimshel-desktop"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-apps",
  "mimshel-core",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-dock"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-apps",
  "mimshel-core",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-folder"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-core",
  "mimshel-desktop",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-icons"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-render",
  "resvg",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-launcher"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-apps",
  "mimshel-core",
@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-lock"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-text",
  "mimshel-widgets",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-menubar"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-apps",
  "mimshel-core",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-notify"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-core",
  "mimshel-dbus",
@@ -976,14 +976,14 @@ dependencies = [
 
 [[package]]
 name = "mimshel-render"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "tiny-skia",
 ]
 
 [[package]]
 name = "mimshel-setup"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-apps",
  "mimshel-core",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-terminal"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "alacritty_terminal",
  "mimshel-core",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-text"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "cosmic-text",
  "mimshel-render",
@@ -1016,14 +1016,14 @@ dependencies = [
 
 [[package]]
 name = "mimshel-wallpaper"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "tiny-skia",
 ]
 
 [[package]]
 name = "mimshel-widgets"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-core",
  "mimshel-render",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "mimshel-x11"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 dependencies = [
  "mimshel-core",
  "mimshel-render",
