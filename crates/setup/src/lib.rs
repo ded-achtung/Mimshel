@@ -6,10 +6,12 @@
 pub mod actions;
 pub mod backup;
 pub mod crash;
+pub mod displays;
 pub mod doctor;
 pub mod greeter;
 pub mod gtk_fixes;
 pub mod gtk_links;
+pub mod keyboards;
 pub mod lock;
 pub mod parts;
 pub mod paths;
