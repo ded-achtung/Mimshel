@@ -38,6 +38,23 @@ choice between X11 and Wayland is made at run time, by the session.
 6. The lock screen (`lock_ui.rs`) is part of the lock path: after moving it,
    the crash test of CLAUDE.md lesson 1 (`kill -ABRT` the lock screen, the
    screen must stay locked).
+7. **The door costs nothing** (the user's requirement): no allocations, copies,
+   clones, extra system calls or extra round trips to the server on top of the
+   backend's own; no state kept in the door; nothing cached that can grow. A
+   method that has to compose several backend calls (`raise_app_window`) makes
+   the same calls the part made before. After a part moves, compare idle CPU and
+   memory on the laptop with the build before it (`tools/measure-service.sh`):
+   PSS, threads and open files must stay flat over minutes.
+
+## Cost
+
+`tools/measure-service.sh` on the laptop, service idle, 60 s (2026-10-31):
+
+| Build | Idle CPU | PSS | Threads | Open files |
+|---|---|---|---|---|
+| v0.0.6 (no door) | 0.17 % | 32.8 MB, flat | 34 | 20 |
+| `platform/boundary`, parts 1–7 | 0.17 % | 31.7 MB, flat | 34 | 20 |
+| `platform/boundary`, parts 1–8, 180 s | 0.16 % | 31.8 MB, flat | 34 | 20 |
 
 ## Order
 
