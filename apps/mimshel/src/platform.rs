@@ -280,6 +280,20 @@ impl Display {
         self.x11.ungrab_pointer()
     }
 
+    /// Hear about any window appearing or being restacked, and the screen
+    /// changing size ([`Event::Mapped`], [`Event::Configure`]), so the lock
+    /// screen can stay on top. Wayland: not needed — under
+    /// `ext-session-lock-v1` nothing else is shown while locked.
+    pub fn watch_stacking(&self) -> Result<()> {
+        self.x11.watch_stacking()
+    }
+
+    /// Give the keyboard back to the active window after the lock screen
+    /// had it. Wayland: the compositor restores focus when the lock ends.
+    pub fn restore_focus(&self) -> Result<()> {
+        self.x11.restore_focus()
+    }
+
     /// A picture of a window as it is on screen, for previews and tests.
     /// Wayland: our compositor renders the window (screencopy).
     pub fn capture_window(&self, window: u32) -> Option<tiny_skia::Pixmap> {
@@ -407,6 +421,27 @@ impl Popup {
     /// Wayland: a layer-shell surface without an input grab.
     pub fn show_passive(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
         self.0.show_passive(&d.x11, x, y, w, h)
+    }
+
+    /// Show over the whole screen and take the keyboard and the pointer for
+    /// good: the lock screen. `false` — the keyboard could not be taken; the
+    /// lock screen must then exit so its guard starts it again (CLAUDE.md
+    /// lessons 1, 21). Wayland: an `ext-session-lock-v1` surface.
+    pub fn show_lock(&self, d: &Display, w: u16, h: u16) -> Result<bool> {
+        self.0.show_lock(&d.x11, w, h)
+    }
+
+    /// Raise above every other window. Wayland: not needed under the
+    /// session lock.
+    pub fn raise(&self, d: &Display) -> Result<()> {
+        self.0.raise(&d.x11)
+    }
+
+    /// Check the keyboard grab and take it back if another program took it;
+    /// `true` — it is ours. Wayland: the session lock keeps input; always
+    /// `true` there.
+    pub fn regrab(&self, d: &Display) -> Result<bool> {
+        self.0.regrab(&d.x11)
     }
 
     /// Hide and release keyboard and pointer input. Wayland: dismiss the
