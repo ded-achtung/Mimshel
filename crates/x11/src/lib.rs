@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-pub use mimshel_core::input::{Key, KeyPress};
+pub use mimshel_platform::{Key, KeyPress};
 pub use mimshel_render::Image;
 use tiny_skia::Pixmap;
 use x11rb::connection::{Connection, RequestConnection};
@@ -41,8 +41,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{CURRENT_TIME, NONE};
 use xkeysym::{Keysym, key};
 
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
-pub type Result<T> = std::result::Result<T, Error>;
+pub use mimshel_platform::{Error, Event, Property, Result};
 
 /// Отдельное тихое соединение с X-сервером, чтобы узнать, когда он закроется
 /// (выход из сеанса). Событий не просит — только ждёт обрыва.
@@ -144,105 +143,6 @@ x11rb::atom_manager! {
         _NET_FRAME_EXTENTS,
         _GTK_FRAME_EXTENTS,
     }
-}
-
-/// Какое свойство окна изменилось.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Property {
-    /// Список окон программ (у корневого окна).
-    ClientList,
-    /// Активное окно (у корневого окна).
-    ActiveWindow,
-    WorkArea,
-    /// Свёрнуто/развёрнуто и т. п.
-    State,
-    Title,
-    Icon,
-    Class,
-    Other,
-}
-
-/// События, которые нужны оболочке. Координаты — относительно окна `window`;
-/// при захвате мыши клик мимо окна приходит с координатами за его краями.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Event {
-    /// A new program window drew for the first time
-    /// (`Display::watch_new_windows`).
-    Drawn {
-        window: u32,
-    },
-    Key(KeyPress),
-    Button {
-        window: u32,
-        x: i16,
-        y: i16,
-        button: u8,
-    },
-    /// Кнопку мыши отпустили.
-    Release {
-        window: u32,
-        x: i16,
-        y: i16,
-        button: u8,
-    },
-    Motion {
-        window: u32,
-        x: i16,
-        y: i16,
-    },
-    /// Указатель вошёл в окно (в точку `x`, `y`) / вышел из него.
-    Enter {
-        window: u32,
-        x: i16,
-        y: i16,
-    },
-    Leave {
-        window: u32,
-    },
-    /// Окно нужно перерисовать.
-    Expose {
-        window: u32,
-    },
-    Property {
-        window: u32,
-        what: Property,
-    },
-    /// Окно сдвинулось или поменяло размер (корневое — сменился размер экрана).
-    Configure {
-        window: u32,
-    },
-    /// Окно появилось на экране (приходит после [`Display::watch_stacking`]).
-    Mapped {
-        window: u32,
-    },
-    /// Над окном несут файлы из другой программы (в точке `x`, `y`).
-    DropHover {
-        window: u32,
-        x: i16,
-        y: i16,
-    },
-    DropLeave {
-        window: u32,
-    },
-    /// Файлы бросили на окно; действие определено протоколом XDND.
-    /// Пути читаются через [`Display::take_drop`], затем [`Display::finish_drop`].
-    Dropped {
-        window: u32,
-        x: i16,
-        y: i16,
-        moving: bool,
-        ticket: u64,
-    },
-    /// Нажали «закрыть» в рамке окна программы ([`AppWindow`]) или окно
-    /// уничтожили снаружи.
-    Close {
-        window: u32,
-    },
-    /// Включилась раскладка с этим номером (с 0).
-    KeyboardGroup(u8),
-    /// Поменялся набор раскладок (например, setxkbmap).
-    KeyboardLayouts,
-    Other,
 }
 
 pub struct Display {

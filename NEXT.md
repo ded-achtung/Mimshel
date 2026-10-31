@@ -64,3 +64,5 @@
 **v0.0.5-alpha (2026-10-29):** own System Settings window (with Displays and Keyboard pages), the copy window, the terminal and Dock made lighter, folder windows answering clicks again (a 0.0.4 bug), one lock screen before sleep.
 
 **v0.0.6-alpha (2026-10-31):** unmounted external disks in Devices with a read-only fallback and notifications (an NTFS disk Windows did not close); Alt left to programs (xfwm4 easy_click → Super); Houdini maximizes (borderless_maximize off).
+
+**Wayland phase 1 started (2026-10-31):** the platform boundary — `crates/platform`, the door `apps/mimshel/src/platform.rs`, parts moved one at a time (`docs/platform.md`; the copy window first, the rest by Codex).

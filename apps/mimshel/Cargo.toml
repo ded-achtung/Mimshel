@@ -10,6 +10,7 @@ mimshel-core = { path = "../../crates/core" }
 mimshel-apps = { path = "../../crates/apps" }
 mimshel-text = { path = "../../crates/text" }
 mimshel-icons = { path = "../../crates/icons" }
+mimshel-platform = { path = "../../crates/platform" }
 mimshel-x11 = { path = "../../crates/x11" }
 mimshel-launcher = { path = "../../crates/launcher" }
 mimshel-dbus = { path = "../../crates/dbus" }

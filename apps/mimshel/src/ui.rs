@@ -379,13 +379,15 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             }
         });
     }
-    let display = Arc::new(Display::connect()?);
+    let platform = Arc::new(crate::platform::Display::connect()?);
+    // Parts not moved behind `platform` yet use the X11 display directly.
+    let display = platform.x11();
     step("экран");
     {
-        let display = display.clone();
+        let platform = platform.clone();
         let tx = tx.clone();
         std::thread::spawn(move || {
-            while let Ok(ev) = display.next_event() {
+            while let Ok(ev) = platform.next_event() {
                 if tx.send(Msg::X(ev)).is_err() {
                     break;
                 }
@@ -395,14 +397,14 @@ pub fn run(once: Option<Panel>) -> Result<()> {
 
     // Рабочий стол — первым: обои рисуются в фоне, пока грузится остальное.
     let desktop = if daemon && config.desktop {
-        Some(DesktopUi::new(&display, &config, tx.clone())?)
+        Some(DesktopUi::new(display, &config, tx.clone())?)
     } else {
         None
     };
     step("рабочий стол");
     let folders = if daemon && config.folders {
         crate::folder_ui::automount(tx.clone());
-        Some(FolderUi::new(&display, &config, tx.clone())?)
+        Some(FolderUi::new(display, &config, tx.clone())?)
     } else {
         None
     };
@@ -419,7 +421,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     // Xfce (`MIMSHEL_MENUBAR=1` — включить для проверки, не трогая настройки).
     let menubar = if daemon && (config.menubar || mimshel_core::names::flag("MENUBAR")) {
         Some(MenubarUi::new(
-            &display,
+            display,
             &config,
             all_apps.clone(),
             tx.clone(),
@@ -434,7 +436,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             crate::status::watch_dnd(tx.clone());
         }
         Some(NotifyUi::new(
-            &display,
+            display,
             all_apps.clone(),
             config.menubar_height,
             true,
@@ -455,7 +457,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     }
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {
-        let dock = DockUi::new(&display, &config, all_apps, tx.clone())?;
+        let dock = DockUi::new(display, &config, all_apps, tx.clone())?;
         dock.preload(&mut icons);
         Some(dock)
     } else {
@@ -467,7 +469,8 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     step("шрифты");
     let (sw, sh) = display.screen_size();
     let mut ui = Ui {
-        display: &display,
+        display,
+        platform: &platform,
         fonts,
         icons,
         search_popup: display.create_popup("search")?,
@@ -562,6 +565,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
 
 struct Ui<'a> {
     display: &'a Display,
+    platform: &'a crate::platform::Display,
     fonts: Fonts,
     icons: Icons,
     search_popup: Popup,
@@ -731,7 +735,7 @@ impl Ui<'_> {
         let timing = mimshel_core::names::flag("TIMING");
         let t = Instant::now();
         self.transfers
-            .flush(self.display, &mut self.fonts, &mut self.icons)?;
+            .flush(self.platform, &mut self.fonts, &mut self.icons)?;
         self.about
             .flush(self.display, &mut self.fonts, &mut self.icons)?;
         // Окна папок — первыми: их ждут (только что открыли папку).
@@ -882,9 +886,9 @@ impl Ui<'_> {
             Msg::About(info) => self.about.show(self.display, *info),
             Msg::TransferStarted(handle) => {
                 self.transfers.started(handle);
-                self.transfers.tick(self.display)
+                self.transfers.tick(self.platform)
             }
-            Msg::TransferTick => self.transfers.tick(self.display),
+            Msg::TransferTick => self.transfers.tick(self.platform),
             Msg::OpenFolder(path) => match &mut self.folders {
                 Some(folders) => folders.open(self.display, path),
                 // Свой Проводник выключен — прежний (Thunar).
@@ -1050,8 +1054,8 @@ impl Ui<'_> {
             desktop.event(self.display, &mut self.fonts, ev)?;
             handled = true;
         }
-        if !to_panel && self.transfers.wants(self.display, &ev) {
-            return self.transfers.event(self.display, ev);
+        if !to_panel && self.transfers.wants(self.platform, &ev) {
+            return self.transfers.event(self.platform, ev);
         }
         if !to_panel && self.about.wants(self.display, &ev) {
             return self.about.event(self.display, ev);

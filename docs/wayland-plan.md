@@ -1,8 +1,8 @@
 # Moving Mimshel to Wayland — decision and plan
 
-> **Status: postponed (2026-10-26, the user's decision).** Finish the current
-> X11 project first — other people have started using Mimshel. Phase 0 is
-> done (GO, results below); resume with phase 1 later.
+> **Status: phase 1 under way (2026-10-31, the user's decision)** — see
+> `docs/platform.md`. It was postponed on 2026-10-26 to finish the X11 work
+> first. Phase 0 is done (GO, results below).
 
 **Decided by the user on 2026-10-26.** This replaces two earlier decisions in
 CLAUDE.md: "X11 only, not Wayland" and "windows are drawn by xfwm4, we don't

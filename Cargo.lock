@@ -844,6 +844,7 @@ dependencies = [
  "mimshel-lock",
  "mimshel-menubar",
  "mimshel-notify",
+ "mimshel-platform",
  "mimshel-render",
  "mimshel-settings",
  "mimshel-setup",
@@ -976,6 +977,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimshel-platform"
+version = "0.0.6-alpha"
+dependencies = [
+ "mimshel-core",
+]
+
+[[package]]
 name = "mimshel-render"
 version = "0.0.6-alpha"
 dependencies = [
@@ -1050,6 +1058,7 @@ name = "mimshel-x11"
 version = "0.0.6-alpha"
 dependencies = [
  "mimshel-core",
+ "mimshel-platform",
  "mimshel-render",
  "tiny-skia",
  "x11rb",

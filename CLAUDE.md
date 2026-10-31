@@ -29,9 +29,11 @@ The detailed step-by-step history up to 2026-10-28 (in Russian) is in git:
 
 - **X11 + xfwm4.** We do not write a window manager. Target apps (Houdini and others)
   run on X11.
-- **Wayland is postponed** (user, 2026-10-26). The plan — an own compositor on Smithay,
-  OpenGL ES, a frame budget, XWayland — and the phase 0 result (GO) are in
-  `docs/wayland-plan.md`. Resume with phase 1 only when the user says so.
+- **Wayland: phase 1 under way** (user, 2026-10-31; postponed 2026-10-26 until the X11
+  work was done). The plan — an own compositor on Smithay, OpenGL ES, a frame budget,
+  XWayland — and the phase 0 result (GO) are in `docs/wayland-plan.md`. Phase 1, the
+  platform boundary, is in `docs/platform.md`: parts move one at a time behind
+  `apps/mimshel/src/platform.rs`, with no behaviour change; Codex does most of them.
 - **No GTK** (GTK 5 drops X11). Own widgets (`crates/widgets`).
 - **CPU rendering** with tiny-skia: works without a GPU and is the reference for
   snapshot tests. Everything is computed in **points**; `crates/render::Canvas` draws in
@@ -83,10 +85,10 @@ Layers — dependencies only go downwards:
 | Layer | Crates |
 |---|---|
 | Model and settings | `core` (config, search, i18n, crash report text, names) |
-| Platform | `x11` (x11rb), `render` (tiny-skia), `text` (cosmic-text), `icons` (resvg, PNG/JPEG), `apps` (Desktop Entry), `dbus` (zbus 5, blocking) |
+| Platform | `platform` (events and keys, no protocol), `x11` (x11rb), `render` (tiny-skia), `text` (cosmic-text), `icons` (resvg, PNG/JPEG), `apps` (Desktop Entry), `dbus` (zbus 5, blocking) |
 | Shell parts | `launcher`, `dock`, `menubar`, `notify`, `desktop`, `folder`, `terminal`, `lock`, `wallpaper`, `widgets` |
 | Setup and diagnostics | `setup` (`set`, `apply`, `doctor`, `backup`/`restore`, greeter, lock guard) |
-| The program | `apps/mimshel` (the `*_ui.rs` files glue parts to X windows) |
+| The program | `apps/mimshel` (the `*_ui.rs` files glue parts to windows; `platform.rs` is their door to the screen) |
 
 Known layering debts (fix when touching): `core::names` does file renames and reads
 the environment; the service links the whole `setup` crate.
@@ -353,4 +355,4 @@ The numbers are referenced from code comments; keep them.
 - Nothing is deleted and no machine is rebooted without the user's consent.
 - Plans and status: `NEXT.md` (next steps; scope and non-goals only after three real user
   tests), `CHANGELOG.md` (update before any tag), `docs/roadmap-review.md`,
-  `docs/wayland-plan.md`, `docs/i18n.md`.
+  `docs/wayland-plan.md`, `docs/platform.md`, `docs/i18n.md`.
