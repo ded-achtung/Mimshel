@@ -85,7 +85,7 @@ fn main() {
     crash::install(component(&args));
     match args.first().map(String::as_str) {
         Some("test-apps") => list_apps(),
-        Some("test-clipboard") => match mimshel_x11::clipboard_files() {
+        Some("test-clipboard") => match platform::clipboard_files() {
             Some((cut, files)) => {
                 println!(
                     "{}:",
@@ -249,7 +249,7 @@ fn main() {
     }
 }
 
-fn exit_on_error(result: mimshel_x11::Result<()>) {
+fn exit_on_error(result: platform::Result<()>) {
     if let Err(e) = result {
         eprintln!("Ошибка: {e}");
         std::process::exit(1);

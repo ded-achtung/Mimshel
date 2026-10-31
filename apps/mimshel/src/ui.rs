@@ -21,7 +21,6 @@ use mimshel_icons::Icons;
 use mimshel_launcher::{Action, AppsPanel, Grid, SearchPanel, backdrop};
 use mimshel_render::Canvas;
 use mimshel_text::Fonts;
-use mimshel_x11::{Display, Event, Key, KeyPress, Popup};
 use tiny_skia::Pixmap;
 
 use crate::desktop_ui::DesktopUi;
@@ -29,8 +28,9 @@ use crate::dock_ui::DockUi;
 use crate::folder_ui::FolderUi;
 use crate::menubar_ui::MenubarUi;
 use crate::notify_ui::NotifyUi;
+use crate::platform::{Display, Event, Key, KeyPress, Popup};
 
-pub(crate) type Result<T> = mimshel_x11::Result<T>;
+pub(crate) type Result<T> = crate::platform::Result<T>;
 
 /// Иконки программ в списке «Поиска» — такого размера (см. его оформление).
 const ROW_ICON: u32 = 26;
@@ -302,7 +302,7 @@ pub(crate) fn set_scale(config: &Config) {
         .and_then(|v| v.replace(',', ".").parse::<f32>().ok());
     let k = forced
         .or(config.scale)
-        .unwrap_or_else(|| mimshel_x11::xft_dpi().map_or(1.0, mimshel_x11::scale_for_dpi));
+        .unwrap_or_else(crate::platform::system_scale);
     mimshel_render::set_scale(k);
     if mimshel_render::scale() != 1.0 {
         eprintln!("Масштаб: {}", mimshel_render::scale());
@@ -379,9 +379,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             }
         });
     }
-    let platform = Arc::new(crate::platform::Display::connect()?);
-    // Parts not moved behind `platform` yet use the X11 display directly.
-    let display = platform.x11();
+    let platform = Arc::new(Display::connect()?);
     step("экран");
     {
         let platform = platform.clone();
@@ -467,14 +465,13 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     let preload: Vec<String> = apps.iter().filter_map(|a| a.icon.clone()).collect();
     let fonts = fonts.join().map_err(|_| "сбой при загрузке шрифтов")?;
     step("шрифты");
-    let (sw, sh) = display.screen_size();
+    let (sw, sh) = platform.screen_size();
     let mut ui = Ui {
-        display,
         platform: &platform,
         fonts,
         icons,
-        search_popup: display.create_popup("search")?,
-        apps_popup: display.create_popup("apps")?,
+        search_popup: platform.create_popup("search")?,
+        apps_popup: platform.create_popup("apps")?,
         search: SearchPanel::new(apps.clone()),
         apps_panel: AppsPanel::new(apps, (u32::from(sw), u32::from(sh)), grid(&config)),
         background: None,
@@ -564,8 +561,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
 }
 
 struct Ui<'a> {
-    display: &'a Display,
-    platform: &'a crate::platform::Display,
+    platform: &'a Display,
     fonts: Fonts,
     icons: Icons,
     search_popup: Popup,
@@ -621,7 +617,7 @@ impl Ui<'_> {
         if was.is_some() && panel == Panel::Apps {
             // Переход из «Поиска»: композитор должен успеть убрать его с экрана,
             // иначе он попадёт в снимок под размытый фон.
-            self.display.sync()?;
+            self.platform.sync()?;
             std::thread::sleep(SETTLE);
         }
         match panel {
@@ -635,8 +631,8 @@ impl Ui<'_> {
         let frame = self.search.render(&mut self.fonts, &mut self.icons);
         let (x, y) = self.search_position(frame.width());
         let (w, h) = (frame.width() as u16, frame.height() as u16);
-        self.search_popup.show(self.display, x, y, w, h)?;
-        self.search_popup.present(self.display, &frame)?;
+        self.search_popup.show(self.platform, x, y, w, h)?;
+        self.search_popup.present(self.platform, &frame)?;
         self.frame = Some(frame);
         self.shown = Some(Panel::Search);
         Ok(())
@@ -644,11 +640,11 @@ impl Ui<'_> {
 
     fn show_apps(&mut self) -> Result<()> {
         let start = Instant::now();
-        let (w, h) = self.display.screen_size();
+        let (w, h) = self.platform.screen_size();
         self.apps_panel.set_screen(u32::from(w), u32::from(h));
         self.apps_panel.reset();
         // Снимок — до показа окна, иначе в него попадёт само окно.
-        let shot = match self.display.capture_screen() {
+        let shot = match self.platform.capture_screen() {
             Ok(shot) => Some(shot),
             Err(e) => {
                 eprintln!("Снимок экрана не получился, фон будет ровным: {e}");
@@ -657,16 +653,16 @@ impl Ui<'_> {
         };
         let shot_time = start.elapsed();
         // Фон — в пикселях экрана, всё остальное окно считает в точках.
-        let (pw, ph) = self.display.screen_pixels();
+        let (pw, ph) = self.platform.screen_pixels();
         let background = backdrop(shot.as_ref(), (u32::from(pw), u32::from(ph)));
         let blur_time = start.elapsed();
-        let scale = self.display.scale();
+        let scale = self.platform.scale();
         let frame = self
             .apps_panel
             .render(&background, scale, &mut self.fonts, &mut self.icons);
         let render_time = start.elapsed();
-        self.apps_popup.show(self.display, 0, 0, w, h)?;
-        self.apps_popup.present(self.display, &frame)?;
+        self.apps_popup.show(self.platform, 0, 0, w, h)?;
+        self.apps_popup.present(self.platform, &frame)?;
         eprintln!(
             "Программы: снимок {shot_time:?}, размытие {:?}, рисование {:?}, вывод {:?}",
             blur_time - shot_time,
@@ -681,8 +677,8 @@ impl Ui<'_> {
 
     fn hide(&mut self) -> Result<()> {
         match self.shown {
-            Some(Panel::Search) => self.search_popup.hide(self.display)?,
-            Some(Panel::Apps) => self.apps_popup.hide(self.display)?,
+            Some(Panel::Search) => self.search_popup.hide(self.platform)?,
+            Some(Panel::Apps) => self.apps_popup.hide(self.platform)?,
             None => {}
         }
         self.shown = None;
@@ -695,7 +691,7 @@ impl Ui<'_> {
     /// Левый верхний угол «Поиска»: по центру, на 22 % высоты экрана.
     /// Centred on the primary monitor.
     fn search_position(&self, width: u32) -> (i16, i16) {
-        let (ax, ay, aw, ah) = self.display.primary_area();
+        let (ax, ay, aw, ah) = self.platform.primary_area();
         let x = ax + (aw as i32 - width as i32) / 2;
         let y = ay + (ah as f32 * TOP) as i32;
         (x as i16, y as i16)
@@ -709,20 +705,20 @@ impl Ui<'_> {
                 if old != Some((frame.width(), frame.height())) {
                     let (x, y) = self.search_position(frame.width());
                     let (w, h) = (frame.width() as u16, frame.height() as u16);
-                    self.search_popup.set_geometry(self.display, x, y, w, h)?;
+                    self.search_popup.set_geometry(self.platform, x, y, w, h)?;
                 }
-                self.search_popup.present(self.display, &frame)?;
+                self.search_popup.present(self.platform, &frame)?;
                 self.frame = Some(frame);
             }
             Some(Panel::Apps) => {
                 let Some(background) = &self.background else {
                     return Ok(());
                 };
-                let scale = self.display.scale();
+                let scale = self.platform.scale();
                 let frame =
                     self.apps_panel
                         .render(background, scale, &mut self.fonts, &mut self.icons);
-                self.apps_popup.present(self.display, &frame)?;
+                self.apps_popup.present(self.platform, &frame)?;
                 self.frame = Some(frame);
             }
             None => {}
@@ -1091,7 +1087,7 @@ impl Ui<'_> {
                         Panel::Search => &self.search_popup,
                         Panel::Apps => &self.apps_popup,
                     };
-                    popup.present(self.display, frame)?;
+                    popup.present(self.platform, frame)?;
                 }
                 Action::Nothing
             }

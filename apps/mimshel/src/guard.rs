@@ -76,7 +76,7 @@ pub fn run() -> ! {
         log("служба уже запущена — второй сторож не нужен, выхожу");
         std::process::exit(0);
     }
-    match mimshel_x11::ServerWatch::connect() {
+    match crate::platform::ServerWatch::connect() {
         Ok(watch) => {
             std::thread::spawn(move || {
                 watch.wait_closed();

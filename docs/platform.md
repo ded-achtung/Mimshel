@@ -1,5 +1,9 @@
 # The platform boundary (Wayland plan, phase 1)
 
+> **Status: done (2026-10-31)**, branch `platform/boundary`. Every part goes
+> through `apps/mimshel/src/platform.rs`; `only_the_door_names_the_backend`
+> keeps it so. The lock screen's crash test is in the table below.
+
 Phase 1 of `docs/wayland-plan.md`: the shell's parts stop talking to X11
 directly and go through one door, so a Wayland backend can later stand
 behind the same door. **No behaviour changes** in this phase: every step must
@@ -64,9 +68,9 @@ notification history (50) and the icon caches are full: no leak.
 
 ## Order
 
-| # | Part | Uses today (from `mimshel_x11`) | Who |
+| # | Part | Used from `mimshel_x11` | Done by |
 |---|---|---|---|
-| 1 | `transfer_ui` | `AppWindow`; `create_app_window`, `active_window`, `scale`, `screen_size`, `sync` | done |
+| 1 | `transfer_ui` | `AppWindow`; `create_app_window`, `active_window`, `scale`, `screen_size`, `sync` | Claude |
 | 2 | `about_ui` | `AppWindow`; `activate`, `active_window` | Codex |
 | 3 | `settings_ui` (own process) | `AppWindow`; `activate`, `next_event`, `window_info` | Codex |
 | 4 | `notify_ui` | `Popup`; `create_popup`, `primary_area` | Codex |
@@ -76,8 +80,8 @@ notification history (50) and the icon caches are full: no leak.
 | 8 | `desktop_ui` | `DesktopWindow`, `Popup`, monitors, work area, drag and drop, clipboard files | Codex |
 | 9 | `folder_ui` | `AppWindow`, `Popup`, `DragTarget`, drag and drop, clipboard files | Codex |
 | 10 | `ui.rs` | Search and Apps popups, `capture_screen` (Apps backdrop) | Claude |
-| 11 | `lock_ui` (own process) | `Popup` as a lock surface (`show_lock`, `regrab`), `restore_focus`, `watch_stacking` | Claude + crash test |
-| 12 | finish | remove `Display::x11()`, drop `mimshel-x11` from the parts; a test that only `platform.rs` names `mimshel_x11` | Claude |
+| 11 | `lock_ui` (own process) | `Popup` as a lock surface (`show_lock`, `regrab`), `restore_focus`, `watch_stacking` | Claude |
+| 12 | finish | `Display::x11()` removed; `main.rs` and `guard.rs` (`ServerWatch`, `system_scale`) moved too; the test `only_the_door_names_the_backend` | Claude |
 
 ## What things become on Wayland
 

@@ -29,11 +29,12 @@ The detailed step-by-step history up to 2026-10-28 (in Russian) is in git:
 
 - **X11 + xfwm4.** We do not write a window manager. Target apps (Houdini and others)
   run on X11.
-- **Wayland: phase 1 under way** (user, 2026-10-31; postponed 2026-10-26 until the X11
-  work was done). The plan — an own compositor on Smithay, OpenGL ES, a frame budget,
+- **Wayland: phase 1 done** (user, 2026-10-31; postponed 2026-10-26 until the X11 work
+  was done). The plan — an own compositor on Smithay, OpenGL ES, a frame budget,
   XWayland — and the phase 0 result (GO) are in `docs/wayland-plan.md`. Phase 1, the
-  platform boundary, is in `docs/platform.md`: parts move one at a time behind
-  `apps/mimshel/src/platform.rs`, with no behaviour change; Codex does most of them.
+  platform boundary, is in `docs/platform.md`: the program reaches the screen only
+  through `apps/mimshel/src/platform.rs` (a test keeps it so). The door costs nothing:
+  thin calls, no state, no copies; new needs add a door method with its Wayland meaning.
 - **No GTK** (GTK 5 drops X11). Own widgets (`crates/widgets`).
 - **CPU rendering** with tiny-skia: works without a GPU and is the reference for
   snapshot tests. Everything is computed in **points**; `crates/render::Canvas` draws in

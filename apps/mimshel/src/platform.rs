@@ -6,8 +6,9 @@
 //!
 //! Methods are named for what a part needs, not for how X11 does it, and
 //! each says what it maps to on Wayland when that is not obvious. Only
-//! what a moved part uses is here: a part that moves adds its methods.
-//! Parts move over one at a time; until then they use [`Display::x11`].
+//! what the parts use is here, and nothing else in the program names
+//! `mimshel_x11` (a test below checks it). The door costs nothing: thin
+//! calls, no state, no copies (docs/platform.md, rule 7).
 
 pub use mimshel_core::windows::WindowInfo;
 pub use mimshel_platform::{DragTarget, Event, Key, KeyPress, Property, Result};
@@ -23,11 +24,6 @@ impl Display {
         Ok(Self {
             x11: mimshel_x11::Display::connect()?,
         })
-    }
-
-    /// The X11 display, for parts not moved behind this module yet.
-    pub fn x11(&self) -> &mimshel_x11::Display {
-        &self.x11
     }
 
     /// The wallpaper and icons layer. Wayland: layer-shell background layer.
@@ -294,6 +290,12 @@ impl Display {
         self.x11.restore_focus()
     }
 
+    /// A picture of the whole screen (the Apps window's blurred background).
+    /// Wayland: our compositor renders it (screencopy).
+    pub fn capture_screen(&self) -> Result<tiny_skia::Pixmap> {
+        self.x11.capture_screen()
+    }
+
     /// A picture of a window as it is on screen, for previews and tests.
     /// Wayland: our compositor renders the window (screencopy).
     pub fn capture_window(&self, window: u32) -> Option<tiny_skia::Pixmap> {
@@ -540,5 +542,54 @@ impl SelectionOverlay {
 
     pub fn reset(&mut self, d: &Display) -> Result<()> {
         self.0.reset(&d.x11)
+    }
+}
+
+/// Points to pixels the system asks for, when the config does not say:
+/// from `Xft.dpi` (xfsettingsd sets it from Xfce's settings), else 1.
+/// Wayland: the output's scale from our compositor.
+pub fn system_scale() -> f32 {
+    mimshel_x11::xft_dpi().map_or(1.0, mimshel_x11::scale_for_dpi)
+}
+
+/// A quiet second connection that only waits for the display server to go
+/// away (the session ended); the guard exits then (CLAUDE.md lesson 17).
+/// Wayland: the compositor's socket closing.
+pub struct ServerWatch(mimshel_x11::ServerWatch);
+
+impl ServerWatch {
+    pub fn connect() -> Result<Self> {
+        Ok(Self(mimshel_x11::ServerWatch::connect()?))
+    }
+
+    /// Returns when the connection is gone.
+    pub fn wait_closed(self) {
+        self.0.wait_closed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Only this file reaches the X11 backend; every other file of the
+    /// program goes through the door.
+    #[test]
+    fn only_the_door_names_the_backend() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_some_and(|n| n != "platform.rs")
+                && std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("mimshel_x11")
+            {
+                offenders.push(path);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "X11 used past the door: {offenders:?}"
+        );
     }
 }
