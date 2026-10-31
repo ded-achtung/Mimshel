@@ -345,6 +345,13 @@ The numbers are referenced from code comments; keep them.
     apps…). Deleting Colloid-Light as "unused" broke the dock's Apps icon (2026-10-26).
     Before deleting any theme, check for broken links with `find -L THEMES -type l`. Twelve
     broken `search.svg` links are an upstream Colloid bug.
+29. **`xdotool key --window W` on the focused window goes through XTEST**, not
+    SendEvent. Sending Ctrl+W to a folder window closed it on the press; xdotool then
+    failed (BadWindow) before the release, and Ctrl+W stayed held on the XTEST keyboard:
+    every new focused window got Ctrl+W at once and closed (2026-10-31). Check with
+    `xinput query-state "Virtual core XTEST keyboard"`, release with `xdotool keyup w
+    Control_L`. To close our windows in tests use `xdotool windowquit` (what the frame's
+    close button sends).
 
 ## Rules of work
 

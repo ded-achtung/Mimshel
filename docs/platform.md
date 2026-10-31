@@ -55,6 +55,12 @@ choice between X11 and Wayland is made at run time, by the session.
 | v0.0.6 (no door) | 0.17 % | 32.8 MB, flat | 34 | 20 |
 | `platform/boundary`, parts 1–7 | 0.17 % | 31.7 MB, flat | 34 | 20 |
 | `platform/boundary`, parts 1–8, 180 s | 0.16 % | 31.8 MB, flat | 34 | 20 |
+| `platform/boundary`, parts 1–9 | 0.17 % | 31.9 MB, flat | 34 | 20 |
+
+Under load (parts 1–8, three rounds of 25 × open and close a folder window,
+Search, Apps, one notification): 31.8 → 32.6 → 33.0 → 33.1 MB, threads 34 and
+open files 20 throughout, the same service process. The growth stops once the
+notification history (50) and the icon caches are full: no leak.
 
 ## Order
 
