@@ -6,13 +6,13 @@
 
 use std::sync::mpsc::Sender;
 
-use crate::platform::{AppWindow, Display, Event, Key, Result};
 use mimshel_icons::Icons;
 use mimshel_render::Canvas;
 use mimshel_setup::actions::About;
 use mimshel_text::{Fonts, Style};
 use tiny_skia::{Color, PixmapPaint};
 
+use crate::platform::{AppWindow, Display, Event, Key, Result};
 use crate::ui::Msg;
 
 /// Класс окна — по нему строка меню и док узнают его.

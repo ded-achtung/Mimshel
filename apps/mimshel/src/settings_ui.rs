@@ -11,17 +11,17 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
-use crate::platform::{Display, Event};
 use mimshel_core::i18n::{Language, t};
 use mimshel_icons::Icons;
 use mimshel_settings::{Action, Env, LINKS, SettingsView, view};
+use mimshel_setup::displays::{self, Output};
 use mimshel_setup::themes;
 use mimshel_text::Fonts;
 use tiny_skia::Pixmap;
 
+use crate::platform::{Display, Event};
 use crate::settings_system as system;
 use crate::ui::load_config;
-use mimshel_setup::displays::{self, Output};
 
 /// Class of the window: the dock and the menu bar know it by this.
 pub const WINDOW_CLASS: &str = "mimshel-settings";

@@ -5,7 +5,6 @@
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crate::platform::{Display, Event, Key, Popup, Result};
 use mimshel_apps::App;
 use mimshel_core::config::dock_entry_matches;
 use mimshel_dbus::notify::{self, NotifyEvent, NotifyServer};
@@ -14,6 +13,7 @@ use mimshel_notify::{Banner, Banners, Center, CenterHit, CloseReason, Hit, Notif
 use mimshel_text::Fonts;
 use tiny_skia::{IntSize, Pixmap};
 
+use crate::platform::{Display, Event, Key, Popup, Result};
 use crate::ui::Msg;
 
 /// Сколько уведомлений помнить в истории.

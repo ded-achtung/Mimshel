@@ -101,7 +101,7 @@ impl Display {
     }
 
     /// A popup for transient shell UI. Wayland: an `xdg_popup` or a
-    /// layer-shell overlay for notifications.
+    /// layer-shell surface for panels and full-screen overlays.
     pub fn create_popup(&self, name: &str) -> Result<Popup> {
         Ok(Popup(self.x11.create_popup(name)?))
     }
@@ -161,7 +161,8 @@ impl AppWindow {
 }
 
 /// A transient shell popup ([`Display::create_popup`]). Positions and sizes
-/// are in points; our Wayland compositor places notification overlays.
+/// are in points. Wayland: menus use `xdg_popup` with a grab; panels and
+/// full-screen overlays use layer-shell surfaces.
 pub struct Popup(mimshel_x11::Popup);
 
 impl Popup {
@@ -170,13 +171,13 @@ impl Popup {
     }
 
     /// Show and take keyboard and pointer input. Wayland: a popup grab
-    /// or input focus for the notification-center overlay.
+    /// or input focus for a layer-shell surface.
     pub fn show(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
         self.0.show(&d.x11, x, y, w, h)
     }
 
     /// Show above other windows without taking keyboard or pointer input.
-    /// Wayland: a notification overlay without an input grab.
+    /// Wayland: a layer-shell surface without an input grab.
     pub fn show_passive(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
         self.0.show_passive(&d.x11, x, y, w, h)
     }
@@ -188,12 +189,12 @@ impl Popup {
     }
 
     /// Hide without changing keyboard or pointer input. Wayland: unmap
-    /// the notification overlay without changing another surface's focus.
+    /// the surface without changing another surface's focus.
     pub fn hide_passive(&self, d: &Display) -> Result<()> {
         self.0.hide_passive(&d.x11)
     }
 
-    /// Change the position and size. Wayland: configure the overlay
+    /// Change the position and size. Wayland: configure the popup or layer surface
     /// through our compositor.
     pub fn set_geometry(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
         self.0.set_geometry(&d.x11, x, y, w, h)
