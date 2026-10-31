@@ -75,5 +75,46 @@ later active frames were 3.7–20.6 ms, with a 31.3 ms movement spike. These
 include GPU/software-renderer completion and exclude presentation waiting.
 This is not a measurement of the laptop's 2–3 ms hardware frame budget.
 The Xvfb EGL implementation lacks `EGL_WL_bind_wayland_display`; the server
-continued with shm/dmabuf protocols. Hardware dmabuf import and rendering,
-real Radeon performance, and the laptop session still need a live check.
+continued with shm/dmabuf protocols. Hardware dmabuf import and rendering still need a live check. Subsequent
+Radeon laptop measurements are recorded below.
+
+## Laptop measurements and hybrid GPU setup
+
+On a Radeon 780M, nested in X11 with kitty, render time was 2.3 ms median,
+4.4 ms p95, and 8.7 ms for the first frame; idle CPU was approximately 0.1%.
+
+GLVND loads every EGL vendor: on this laptop NVIDIA libraries accounted for
+96 MB alongside 63 MB of Mesa libraries, with 184 MB total PSS. Restricting
+vendor loading reduced PSS to 85 MB, of which about 16 MB was the compositor
+itself. For nested runs on hybrid laptops, launch with:
+
+```sh
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  target/debug/mimshel-compositor --nested -- kitty
+```
+
+The compositor does not change its process environment. Phase 3 will choose
+the render device explicitly. `MIMSHEL_TIMING=1` is read once at startup;
+only timed runs wait for GPU completion to measure render duration.
+SIGTERM, SIGINT, and SIGHUP use the same orderly shutdown as closing the
+host window, terminating the launched process group and removing the socket
+and lock file.
+
+## Review validation (step 2.1b)
+
+Formatting, workspace Clippy with warnings denied, workspace tests under
+Xvfb, all five ignored X11 window tests, and cargo-deny passed. The sandbox's
+missing X11 keyboard libraries were supplied through `LD_LIBRARY_PATH` from
+`/tmp/compositor-libs/usr/lib/x86_64-linux-gnu`; cargo-deny was run from
+`/tmp/mimshel-tools/bin`.
+
+The new process-level shutdown test verifies SIGTERM, SIGINT, and SIGHUP:
+successful compositor exit, launched client termination, and removal of both
+the socket and lock file. A separate Xvfb smoke run rendered a real shm
+client, sent SIGTERM, and verified exit 0, the client gone, and no
+`wayland-*` files remaining in its private runtime directory.
+
+Monitor refresh is sampled from the host window at startup and after event
+loop wakeups, covering resize and monitor moves without adding an idle timer.
+A physical monitor transition and 165 Hz advertisement still require a live
+host check; Xvfb provides only the fallback/software-rendered environment.
