@@ -737,7 +737,7 @@ impl Ui<'_> {
         self.transfers
             .flush(self.platform, &mut self.fonts, &mut self.icons)?;
         self.about
-            .flush(self.display, &mut self.fonts, &mut self.icons)?;
+            .flush(self.platform, &mut self.fonts, &mut self.icons)?;
         // Окна папок — первыми: их ждут (только что открыли папку).
         if let Some(folders) = &mut self.folders {
             folders.flush(self.display, &mut self.fonts, &mut self.icons)?;
@@ -883,7 +883,7 @@ impl Ui<'_> {
                 crate::about_ui::AboutUi::request(self.tx.clone());
                 Ok(())
             }
-            Msg::About(info) => self.about.show(self.display, *info),
+            Msg::About(info) => self.about.show(self.platform, *info),
             Msg::TransferStarted(handle) => {
                 self.transfers.started(handle);
                 self.transfers.tick(self.platform)
@@ -1057,8 +1057,8 @@ impl Ui<'_> {
         if !to_panel && self.transfers.wants(self.platform, &ev) {
             return self.transfers.event(self.platform, ev);
         }
-        if !to_panel && self.about.wants(self.display, &ev) {
-            return self.about.event(self.display, ev);
+        if !to_panel && self.about.wants(self.platform, &ev) {
+            return self.about.event(self.platform, ev);
         }
         if let Some(folders) = &mut self.folders
             && !to_panel

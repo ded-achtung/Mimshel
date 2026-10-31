@@ -57,6 +57,12 @@ impl Display {
         self.x11.active_window()
     }
 
+    /// Bring a window forward and give it keyboard focus. Wayland: an
+    /// activation request handled by our compositor.
+    pub fn activate(&self, window: u32) -> Result<()> {
+        self.x11.activate(window)
+    }
+
     /// An ordinary titled window with a frame from the window manager
     /// (`class` names it for the window manager, `min` is its smallest
     /// size, both in points). Wayland: an `xdg_toplevel`.
