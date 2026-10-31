@@ -26,8 +26,9 @@ use mimshel_render::Canvas;
 use mimshel_terminal::screen::{PAD, cell_at, grid_size};
 use mimshel_terminal::{Glyphs, Palette, Session, TermEvent, key_bytes};
 use mimshel_text::{Fonts, Style};
-use mimshel_x11::{Display, Event};
 use tiny_skia::{Color, Paint, PathBuilder, PixmapPaint, Rect, Stroke, Transform};
+
+use crate::platform::{AppWindow, Display, Event, Property, Result, clipboard_text, copy_text};
 
 /// Window class — the dock and menu bar recognise the terminal by it.
 const WINDOW_CLASS: &str = "mimshel-terminal";
@@ -202,7 +203,7 @@ struct Tabs {
 
 impl Tabs {
     /// Open a tab in folder `dir` with grid `grid` running the shell.
-    fn open(&mut self, dir: Option<PathBuf>, grid: (usize, usize)) -> mimshel_x11::Result<()> {
+    fn open(&mut self, dir: Option<PathBuf>, grid: (usize, usize)) -> Result<()> {
         self.open_with(dir, grid, None)
     }
 
@@ -212,7 +213,7 @@ impl Tabs {
         dir: Option<PathBuf>,
         grid: (usize, usize),
         command: Option<Vec<String>>,
-    ) -> mimshel_x11::Result<()> {
+    ) -> Result<()> {
         let id = self.next_id;
         self.next_id += 1;
         let wake = self.tx.clone();
@@ -693,7 +694,7 @@ fn shortcut(k: &KeyPress) -> Option<Cmd> {
 /// The whole terminal window: tabs, font, size, mouse.
 struct Window {
     d: Arc<Display>,
-    win: mimshel_x11::AppWindow,
+    win: AppWindow,
     tabs: Tabs,
     glyphs: Glyphs,
     /// Cursor blink: wanted now (the ticker thread reads it) and which half.
@@ -758,7 +759,7 @@ impl Window {
         y >= bar && x >= self.size.0 as f32 - SB_HIT * self.scale && self.scrollbar().is_some()
     }
 
-    fn new_tab(&mut self) -> mimshel_x11::Result<()> {
+    fn new_tab(&mut self) -> Result<()> {
         let cwd = self.tabs.active().session.cwd();
         let grid = self.tabs.active().session.size();
         self.tabs.open(cwd, grid)?;
@@ -796,7 +797,7 @@ impl Window {
     }
 
     /// Run a command. `false` — close the window.
-    fn cmd(&mut self, cmd: Cmd) -> mimshel_x11::Result<bool> {
+    fn cmd(&mut self, cmd: Cmd) -> Result<bool> {
         self.dirty = true;
         let session = &self.tabs.active().session;
         match cmd {
@@ -814,11 +815,11 @@ impl Window {
             Cmd::CloseWindow => return Ok(false),
             Cmd::Copy => {
                 if let Some(text) = session.selection_text() {
-                    mimshel_x11::copy_text(text, false);
+                    copy_text(text, false);
                 }
             }
             Cmd::Paste => {
-                if let Some(text) = mimshel_x11::clipboard_text(false) {
+                if let Some(text) = clipboard_text(false) {
                     session.paste(&text);
                 }
             }
@@ -845,14 +846,14 @@ impl Window {
     }
 
     /// An X event. `false` — close the window.
-    fn event(&mut self, ev: Event) -> mimshel_x11::Result<bool> {
+    fn event(&mut self, ev: Event) -> Result<bool> {
         let me = self.win.id();
         let scale = self.scale;
         let bar = self.tabs.bar_h(scale);
         match ev {
             Event::Close { window } if window == me => return Ok(false),
             Event::Property {
-                what: mimshel_x11::Property::ActiveWindow,
+                what: Property::ActiveWindow,
                 ..
             } => self.dirty = true,
             Event::Expose { window } if window == me => {
@@ -871,7 +872,7 @@ impl Window {
                 }
                 let session = &self.tabs.active().session;
                 if k.shift && k.key == Key::Insert {
-                    if let Some(text) = mimshel_x11::clipboard_text(true) {
+                    if let Some(text) = clipboard_text(true) {
                         session.paste(&text);
                     }
                 } else if k.shift && matches!(k.key, Key::PageUp | Key::PageDown) {
@@ -961,7 +962,7 @@ impl Window {
                         self.press = Press::Selecting;
                     }
                     2 => {
-                        if let Some(text) = mimshel_x11::clipboard_text(true) {
+                        if let Some(text) = clipboard_text(true) {
                             session.paste(&text);
                         }
                     }
@@ -1022,7 +1023,7 @@ impl Window {
                     Press::Selecting if button == 1 => {
                         // The selection goes straight to PRIMARY (middle-click paste).
                         match session.selection_text() {
-                            Some(text) => mimshel_x11::copy_text(text, true),
+                            Some(text) => copy_text(text, true),
                             // Just a click — no selection.
                             None => session.clear_selection(),
                         }
@@ -1055,7 +1056,7 @@ impl Window {
                     self.tabs.list[i].title = TITLE.to_string();
                     self.tabs.title_dirty = true;
                 }
-                TermEvent::Copy(text) => mimshel_x11::copy_text(text, false),
+                TermEvent::Copy(text) => copy_text(text, false),
                 TermEvent::Bell => {}
                 // The tab's shell exited — close the tab.
                 TermEvent::Exit => return self.close_tab(i),
@@ -1064,7 +1065,7 @@ impl Window {
         true
     }
 
-    fn flush(&mut self) -> mimshel_x11::Result<()> {
+    fn flush(&mut self) -> Result<()> {
         let title = self.tabs.active().title.clone();
         if title != self.shown_title {
             self.win.set_title(&self.d, &title)?;
@@ -1115,9 +1116,9 @@ impl Window {
     }
 }
 
-fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> mimshel_x11::Result<()> {
+fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> Result<()> {
     let d = Arc::new(Display::connect()?);
-    d.watch_root()?;
+    d.watch_active_window()?;
     let scale = d.scale();
     let (tx, rx) = mpsc::channel::<Wake>();
     let fonts_tx = tx.clone();

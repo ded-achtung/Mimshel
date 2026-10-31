@@ -9,7 +9,7 @@
 //! what a moved part uses is here: a part that moves adds its methods.
 //! Parts move over one at a time; until then they use [`Display::x11`].
 
-pub use mimshel_platform::{Event, Key, Result};
+pub use mimshel_platform::{Event, Key, Property, Result};
 use mimshel_render::Image;
 
 /// The connection to the screen: one per process.
@@ -55,6 +55,19 @@ impl Display {
     /// with its own windows.
     pub fn active_window(&self) -> Option<u32> {
         self.x11.active_window()
+    }
+
+    /// Subscribe to active-window changes. Wayland: our compositor sends focus
+    /// changes. Also subscribes to window-list and screen/monitor changes on
+    /// X11; callers may ignore those events.
+    pub fn watch_active_window(&self) -> Result<()> {
+        self.x11.watch_root()
+    }
+
+    /// Whether Ctrl and Shift are pressed, in that order; false on query failure.
+    /// Wayland: the compositor knows the modifier state.
+    pub fn modifiers(&self) -> (bool, bool) {
+        self.x11.modifiers()
     }
 
     /// Bring a window forward and give it keyboard focus. Wayland: an
@@ -204,4 +217,16 @@ impl Popup {
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
         self.0.present(&d.x11, image)
     }
+}
+
+/// Copy text to the clipboard, or the X11 PRIMARY selection when `primary`
+/// is true. Wayland: `wl_data_device` or `zwp_primary_selection`, respectively.
+pub fn copy_text(text: String, primary: bool) {
+    mimshel_x11::copy_text(text, primary);
+}
+
+/// Read text from the clipboard, or the X11 PRIMARY selection when `primary`
+/// is true. Wayland: `wl_data_device` or `zwp_primary_selection`, respectively.
+pub fn clipboard_text(primary: bool) -> Option<String> {
+    mimshel_x11::clipboard_text(primary)
 }
