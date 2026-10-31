@@ -2,7 +2,10 @@
 
 > **Status: done (2026-10-31)**, branch `platform/boundary`. Every part goes
 > through `apps/mimshel/src/platform.rs`; `only_the_door_names_the_backend`
-> keeps it so. The lock screen's crash test is in the table below.
+> keeps it so. Lock screen crash test after part 11 (laptop, 2026-10-31):
+> `kill -ABRT` of the lock screen at 18:41:08, the guard showed it again the
+> same second; screenshots 0.4 s and 3 s after the crash show the lock screen,
+> never the desktop.
 
 Phase 1 of `docs/wayland-plan.md`: the shell's parts stop talking to X11
 directly and go through one door, so a Wayland backend can later stand
