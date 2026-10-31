@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 mimshel-core = { path = "../core" }
+xkeysym = "0.2.1"
 
 [lints]
 workspace = true

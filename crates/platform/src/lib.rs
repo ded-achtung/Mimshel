@@ -8,6 +8,7 @@
 //! window ids today; a Wayland backend numbers its surfaces itself.
 
 pub use mimshel_core::input::{Key, KeyPress};
+use xkeysym::key;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -125,4 +126,57 @@ pub enum DragTarget {
     App { accepts: bool },
     /// A surface that does not accept files.
     Nothing,
+}
+
+/// The key for a keysym that is not a character (Return, arrows, F-keys,
+/// volume keys…), the same for every backend; `None` for character keys,
+/// which each backend turns into `Key::Char` with its own layout handling.
+pub fn special_key(sym: u32) -> Option<Key> {
+    Some(match sym {
+        key::Return | key::KP_Enter => Key::Return,
+        key::Escape => Key::Escape,
+        key::BackSpace => Key::BackSpace,
+        key::Delete | key::KP_Delete => Key::Delete,
+        key::Tab | key::ISO_Left_Tab => Key::Tab,
+        key::Up | key::KP_Up => Key::Up,
+        key::Down | key::KP_Down => Key::Down,
+        key::Left | key::KP_Left => Key::Left,
+        key::Right | key::KP_Right => Key::Right,
+        key::Home | key::KP_Home => Key::Home,
+        key::End | key::KP_End => Key::End,
+        key::Page_Up | key::KP_Page_Up => Key::PageUp,
+        key::Page_Down | key::KP_Page_Down => Key::PageDown,
+        key::F2 => Key::F2,
+        key::F1 => Key::F(1),
+        key::F3 => Key::F(3),
+        key::F4 => Key::F(4),
+        key::F5 => Key::F(5),
+        key::F6 => Key::F(6),
+        key::F7 => Key::F(7),
+        key::F8 => Key::F(8),
+        key::F9 => Key::F(9),
+        key::F10 => Key::F(10),
+        key::F11 => Key::F(11),
+        key::F12 => Key::F(12),
+        key::Insert | key::KP_Insert => Key::Insert,
+        key::XF86_AudioRaiseVolume => Key::VolumeUp,
+        key::XF86_AudioLowerVolume => Key::VolumeDown,
+        key::XF86_AudioMute | key::XF86_AudioMicMute => Key::VolumeMute,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_keys_and_characters() {
+        assert_eq!(special_key(key::Return), Some(Key::Return));
+        assert_eq!(special_key(key::KP_Enter), Some(Key::Return));
+        assert_eq!(special_key(key::ISO_Left_Tab), Some(Key::Tab));
+        assert_eq!(special_key(key::F12), Some(Key::F(12)));
+        assert_eq!(special_key(key::a), None);
+        assert_eq!(special_key(key::Cyrillic_ve), None);
+    }
 }

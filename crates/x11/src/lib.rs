@@ -40,7 +40,7 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{CURRENT_TIME, NONE};
-use xkeysym::{Keysym, key};
+use xkeysym::Keysym;
 
 pub use mimshel_platform::{Error, Event, Property, Result};
 
@@ -959,47 +959,19 @@ impl Keymap {
     fn key(&self, code: u8, state: u16) -> Key {
         let (sym, want_upper) = self.keysym(code, state);
         let caps = state & 0x2 != 0;
-        match sym {
-            key::Return | key::KP_Enter => Key::Return,
-            key::Escape => Key::Escape,
-            key::BackSpace => Key::BackSpace,
-            key::Delete | key::KP_Delete => Key::Delete,
-            key::Tab | key::ISO_Left_Tab => Key::Tab,
-            key::Up | key::KP_Up => Key::Up,
-            key::Down | key::KP_Down => Key::Down,
-            key::Left | key::KP_Left => Key::Left,
-            key::Right | key::KP_Right => Key::Right,
-            key::Home | key::KP_Home => Key::Home,
-            key::End | key::KP_End => Key::End,
-            key::Page_Up | key::KP_Page_Up => Key::PageUp,
-            key::Page_Down | key::KP_Page_Down => Key::PageDown,
-            key::F2 => Key::F2,
-            key::F1 => Key::F(1),
-            key::F3 => Key::F(3),
-            key::F4 => Key::F(4),
-            key::F5 => Key::F(5),
-            key::F6 => Key::F(6),
-            key::F7 => Key::F(7),
-            key::F8 => Key::F(8),
-            key::F9 => Key::F(9),
-            key::F10 => Key::F(10),
-            key::F11 => Key::F(11),
-            key::F12 => Key::F(12),
-            key::Insert | key::KP_Insert => Key::Insert,
-            key::XF86_AudioRaiseVolume => Key::VolumeUp,
-            key::XF86_AudioLowerVolume => Key::VolumeDown,
-            key::XF86_AudioMute | key::XF86_AudioMicMute => Key::VolumeMute,
-            _ => match Keysym::new(sym).key_char() {
-                Some(c) if !c.is_control() => {
-                    // Caps Lock меняет регистр букв (и наоборот при зажатом Shift).
-                    if c.is_alphabetic() && (want_upper != caps) {
-                        Key::Char(swap_case(c))
-                    } else {
-                        Key::Char(c)
-                    }
+        if let Some(special) = mimshel_platform::special_key(sym) {
+            return special;
+        }
+        match Keysym::new(sym).key_char() {
+            Some(c) if !c.is_control() => {
+                // Caps Lock меняет регистр букв (и наоборот при зажатом Shift).
+                if c.is_alphabetic() && (want_upper != caps) {
+                    Key::Char(swap_case(c))
+                } else {
+                    Key::Char(c)
                 }
-                _ => Key::Other,
-            },
+            }
+            _ => Key::Other,
         }
     }
 }
@@ -1015,6 +987,7 @@ fn swap_case(c: char) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xkeysym::key;
 
     /// Две клавиши: «q/Q | й/Й» и «1/! | 1/!», плюс Enter.
     fn keymap() -> Keymap {

@@ -1498,6 +1498,7 @@ name = "mimshel-platform"
 version = "0.0.6-alpha"
 dependencies = [
  "mimshel-core",
+ "xkeysym",
 ]
 
 [[package]]
