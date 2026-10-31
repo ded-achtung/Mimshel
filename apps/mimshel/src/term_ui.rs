@@ -1118,7 +1118,7 @@ impl Window {
 
 fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> Result<()> {
     let d = Arc::new(Display::connect()?);
-    d.watch_active_window()?;
+    d.watch_desktop()?;
     let scale = d.scale();
     let (tx, rx) = mpsc::channel::<Wake>();
     let fonts_tx = tx.clone();

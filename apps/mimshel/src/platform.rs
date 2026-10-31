@@ -57,10 +57,9 @@ impl Display {
         self.x11.active_window()
     }
 
-    /// Subscribe to active-window changes. Wayland: our compositor sends focus
-    /// changes. Also subscribes to window-list and screen/monitor changes on
-    /// X11; callers may ignore those events.
-    pub fn watch_active_window(&self) -> Result<()> {
+    /// Subscribe to active-window, window-list, work-area and screen/monitor
+    /// changes. Wayland: our compositor sends desktop state and output changes.
+    pub fn watch_desktop(&self) -> Result<()> {
         self.x11.watch_root()
     }
 

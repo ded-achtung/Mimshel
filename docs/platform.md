@@ -62,12 +62,13 @@ choice between X11 and Wayland is made at run time, by the session.
 |---|---|
 | `AppWindow` | `xdg_toplevel` |
 | `Popup` | `xdg_popup`, or a layer-shell overlay for full-screen ones (Search, Apps) |
-| `DockWindow` as the menu bar or the dock, struts | `wlr-layer-shell` surface, exclusive zone |
+| `Panel` as the menu bar or the dock, reserved space | `wlr-layer-shell` surface, exclusive zone |
 | `DesktopWindow` | layer-shell background layer |
 | lock screen popup (`show_lock`, grabs) | `ext-session-lock-v1` |
 | other programs' windows: list, active, title, icon, activate, minimize, close | `ext-foreign-toplevel-list` + `wlr-foreign-toplevel-management` (our compositor implements them) |
 | new program windows and their first frame (`watch_new_windows`, `undrawn_over`) | our compositor tells the shell directly |
 | monitors, primary area, work area | outputs from the compositor; work area = output minus exclusive zones |
+| `watch_desktop` (active window, window list, work area, screen/monitor changes) | desktop state and output changes from our compositor |
 | keyboard layouts and groups | the compositor's xkb keymap |
 | clipboard, drag and drop | `wl_data_device` |
 | `capture_screen` / `capture_window` | the compositor renders them (screencopy) |
