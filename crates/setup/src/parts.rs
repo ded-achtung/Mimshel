@@ -907,6 +907,14 @@ impl Plan<'_> {
         xset("xfwm4", "/general/button_layout", "string", "CHM|");
         xset("xfwm4", "/general/use_compositing", "bool", "true");
         xset("xfwm4", "/general/show_dock_shadow", "bool", "false");
+        // Alt belongs to programs: Blender and Houdini turn the view with
+        // Alt and the mouse, and xfwm4's default (easy_click = Alt) dragged
+        // the whole window instead. Windows move with Super and the mouse.
+        xset("xfwm4", "/general/easy_click", "string", "Super");
+        // Maximized windows keep their side borders: a program that caps its
+        // size at the screen minus the frame (Houdini) could not be maximized
+        // without them — xfwm4 refuses a size above the program's maximum.
+        xset("xfwm4", "/general/borderless_maximize", "bool", "false");
         // Alt+Tab как в macOS и Windows: выбор виден только в окошке
         // переключения (с миниатюрами), окна по пути не выходят вперёд и не
         // обводятся рамкой-силуэтом; выбранное выходит, когда отпустили Alt.
