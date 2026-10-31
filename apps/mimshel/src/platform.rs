@@ -70,6 +70,12 @@ impl Display {
         self.x11.take_drop(ticket)
     }
 
+    /// Report completion after the file operation. Wayland: finish the
+    /// `wl_data_offer` with the accepted result.
+    pub fn finish_drop(&self, ticket: u64, success: bool) {
+        self.x11.finish_drop(ticket, success);
+    }
+
     /// Wait for the next event (blocks).
     pub fn next_event(&self) -> Result<Event> {
         self.x11.next_event()
@@ -352,6 +358,12 @@ impl AppWindow {
 
     pub fn size(&self, d: &Display) -> Option<(u32, u32)> {
         self.0.size(&d.x11)
+    }
+
+    /// The window's top-left corner on screen, in points. On Wayland a client
+    /// does not know its window's position; it is known only to our own compositor.
+    pub fn origin(&self, d: &Display) -> Option<(i16, i16)> {
+        self.0.origin(&d.x11)
     }
 
     /// Show a picture the size of the window, in pixels.

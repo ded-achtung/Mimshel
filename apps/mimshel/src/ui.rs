@@ -404,7 +404,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     step("рабочий стол");
     let folders = if daemon && config.folders {
         crate::folder_ui::automount(tx.clone());
-        Some(FolderUi::new(display, &config, tx.clone())?)
+        Some(FolderUi::new(&platform, &config, tx.clone())?)
     } else {
         None
     };
@@ -603,7 +603,7 @@ impl Ui<'_> {
             desktop.close_popups(self.platform)?;
         }
         if let Some(folders) = &mut self.folders {
-            folders.close_popups(self.display)?;
+            folders.close_popups(self.platform)?;
         }
         if let Some(menubar) = &mut self.menubar {
             menubar.close_popup(self.platform)?;
@@ -740,7 +740,7 @@ impl Ui<'_> {
             .flush(self.platform, &mut self.fonts, &mut self.icons)?;
         // Окна папок — первыми: их ждут (только что открыли папку).
         if let Some(folders) = &mut self.folders {
-            folders.flush(self.display, &mut self.fonts, &mut self.icons)?;
+            folders.flush(self.platform, &mut self.fonts, &mut self.icons)?;
         }
         let folders_time = t.elapsed();
         if let Some(menubar) = &mut self.menubar {
@@ -801,7 +801,7 @@ impl Ui<'_> {
             desktop.set_language(self.platform, lang, &config.wallpaper);
         }
         if let Some(folders) = &mut self.folders {
-            folders.set_language(self.display, lang)?;
+            folders.set_language(self.platform, lang)?;
         }
         self.about.set_language(lang);
         self.transfers.set_language(lang);
@@ -875,7 +875,7 @@ impl Ui<'_> {
             Msg::Folder(msg) => match &mut self.folders {
                 Some(folders) => {
                     folders.message(*msg);
-                    folders.flush(self.display, &mut self.fonts, &mut self.icons)
+                    folders.flush(self.platform, &mut self.fonts, &mut self.icons)
                 }
                 None => Ok(()),
             },
@@ -890,7 +890,7 @@ impl Ui<'_> {
             }
             Msg::TransferTick => self.transfers.tick(self.platform),
             Msg::OpenFolder(path) => match &mut self.folders {
-                Some(folders) => folders.open(self.display, path),
+                Some(folders) => folders.open(self.platform, path),
                 // Свой Проводник выключен — прежний (Thunar).
                 None => {
                     crate::folder_ui::open_elsewhere(&path);
@@ -898,7 +898,7 @@ impl Ui<'_> {
                 }
             },
             Msg::DropFinished { ticket, success } => {
-                self.display.finish_drop(ticket, success);
+                self.platform.finish_drop(ticket, success);
                 Ok(())
             }
             Msg::X(ev) => {
@@ -1062,9 +1062,9 @@ impl Ui<'_> {
         }
         if let Some(folders) = &mut self.folders
             && !to_panel
-            && folders.wants(self.display, &ev)
+            && folders.wants(self.platform, &ev)
         {
-            folders.event(self.display, &mut self.fonts, ev)?;
+            folders.event(self.platform, &mut self.fonts, ev)?;
             handled = true;
         }
         if handled {

@@ -21,9 +21,9 @@ use mimshel_folder::{Action, FolderView, Place};
 use mimshel_icons::Icons;
 use mimshel_text::Fonts;
 use mimshel_widgets::{Menu, MenuEntry, MenuResult};
-use mimshel_x11::{AppWindow, Display, DragTarget, Event, Popup};
 
 use crate::desktop_files;
+use crate::platform::{self, AppWindow, Display, DragTarget, Event, Key, KeyPress, Popup};
 use crate::ui::{Msg, Result};
 
 /// Класс окна (`WM_CLASS`): по нему док и строка меню узнают Проводник
@@ -469,8 +469,8 @@ impl FolderUi {
             Action::Drop { x, y } => self.drag_drop(d, window, x, y)?,
             Action::Rename(path) => self.rename_start = Some((window, path)),
             Action::Trash(paths) => trash(&paths),
-            Action::Copy(paths) => mimshel_x11::copy_files(paths, false),
-            Action::Cut(paths) => mimshel_x11::copy_files(paths, true),
+            Action::Copy(paths) => platform::copy_files(paths, false),
+            Action::Cut(paths) => platform::copy_files(paths, true),
             Action::Paste => desktop_files::paste(w.view.dir().to_path_buf()),
             Action::NewFolder => {
                 let dir = w.view.dir().to_path_buf();
@@ -740,9 +740,7 @@ impl FolderUi {
         let dir = w.view.dir().to_path_buf();
         match command {
             Command::Open => {
-                let action = w
-                    .view
-                    .key(mimshel_x11::KeyPress::plain(mimshel_x11::Key::Return));
+                let action = w.view.key(KeyPress::plain(Key::Return));
                 self.act(d, fonts, window, action)?;
             }
             Command::OpenWindow => {
@@ -759,8 +757,8 @@ impl FolderUi {
                     self.rename_start = Some((window, path.clone()));
                 }
             }
-            Command::Copy => mimshel_x11::copy_files(paths, false),
-            Command::Cut => mimshel_x11::copy_files(paths, true),
+            Command::Copy => platform::copy_files(paths, false),
+            Command::Cut => platform::copy_files(paths, true),
             Command::Trash => trash(&paths),
             Command::NewFolder => self.created(window, desktop_files::new_folder(&dir)),
             Command::NewTextFile => self.created(window, desktop_files::new_text_file(&dir)),
@@ -971,7 +969,7 @@ pub fn folder_args(args: &[String]) -> Vec<PathBuf> {
         .iter()
         .filter_map(|a| {
             let path = match a.strip_prefix("file://") {
-                Some(rest) => PathBuf::from(mimshel_x11::percent_decode(rest)),
+                Some(rest) => PathBuf::from(mimshel_core::uri::percent_decode(rest)),
                 None if a.contains("://") => return None,
                 None => cwd.join(a),
             };
