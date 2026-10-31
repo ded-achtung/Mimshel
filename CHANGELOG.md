@@ -2,7 +2,14 @@
 
 Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
-## [Unreleased]
+## [v0.0.6-alpha] — 2026-10-31
+
+Sixth alpha, a small one: external disks that did not mount, and two window manager
+settings that got in the way of 3D programs. Tested on the same laptop (Tanshi X669,
+EndeavourOS, Xfce 4.20, X11).
+
+**After updating, run `mimshel apply look` once:** it moves window dragging from Alt to
+Super and keeps side borders on maximized windows (both fixes below).
 
 ### New
 

@@ -1,7 +1,7 @@
 # NEXT — ближайшие шаги
 
 **Обновлено:** 2026-10-25  
-**Текущая точка:** `v0.0.5-alpha` (29.10.2026), рабочая ветка `master`.
+**Текущая точка:** `v0.0.6-alpha` (31.10.2026), рабочая ветка `master`.
 **Название проекта:** Mimshel (Мимшел); команда `mimshel` (прежняя `shell` — ссылка).
 
 Этот файл — живой список следующей работы. Пункты здесь не означают, что они уже реализованы или подтверждены тестированием.
@@ -62,3 +62,5 @@
 **v0.0.4-alpha (2026-10-29):** UI languages from the outside PR #4 by ra1nzzz (en/ru/zh/zh_TW, English default, hot reload of everything incl. the clock); menu bar icons into the Control Center; the dock waits for new windows to draw.
 
 **v0.0.5-alpha (2026-10-29):** own System Settings window (with Displays and Keyboard pages), the copy window, the terminal and Dock made lighter, folder windows answering clicks again (a 0.0.4 bug), one lock screen before sleep.
+
+**v0.0.6-alpha (2026-10-31):** unmounted external disks in Devices with a read-only fallback and notifications (an NTFS disk Windows did not close); Alt left to programs (xfwm4 easy_click → Super); Houdini maximizes (borderless_maximize off).
