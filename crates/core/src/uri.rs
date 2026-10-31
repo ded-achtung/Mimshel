@@ -6,9 +6,12 @@ pub fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        // Two hex digits after `%`, looked at as bytes: slicing the string
+        // there would split a multi-byte letter ("100%ок") and panic.
         if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+            && let Some(hex) = bytes.get(i + 1..i + 3)
+            && let Ok(hex) = std::str::from_utf8(hex)
+            && let Ok(b) = u8::from_str_radix(hex, 16)
         {
             out.push(b);
             i += 3;
@@ -31,5 +34,12 @@ mod tests {
         assert_eq!(percent_decode("a+b%2Fc"), "a+b/c");
         assert_eq!(percent_decode("%ZZ%2%"), "%ZZ%2%");
         assert_eq!(percent_decode("%FF"), "�");
+        // A two-byte letter right after `%` or after its first digit stays
+        // as it is (slicing the string there used to panic).
+        assert_eq!(percent_decode("/tmp/100%ок"), "/tmp/100%ок");
+        assert_eq!(percent_decode("/tmp/50%aй"), "/tmp/50%aй");
+        assert_eq!(percent_decode("%1ё%D0%9F"), "%1ёП");
+        assert_eq!(percent_decode("a%4"), "a%4");
+        assert_eq!(percent_decode("%41"), "A");
     }
 }
