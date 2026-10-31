@@ -1,7 +1,7 @@
 # Moving Mimshel to Wayland — decision and plan
 
-> **Status: phase 1 under way (2026-10-31, the user's decision)** — see
-> `docs/platform.md`. It was postponed on 2026-10-26 to finish the X11 work
+> **Status: phase 1 done, phase 2 under way (2026-10-31, the user's
+> decision)** — see `docs/platform.md` and `docs/compositor.md`. It was postponed on 2026-10-26 to finish the X11 work
 > first. Phase 0 is done (GO, results below).
 
 **Decided by the user on 2026-10-26.** This replaces two earlier decisions in

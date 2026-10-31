@@ -35,6 +35,8 @@ The detailed step-by-step history up to 2026-10-28 (in Russian) is in git:
   platform boundary, is in `docs/platform.md`: the program reaches the screen only
   through `apps/mimshel/src/platform.rs` (a test keeps it so). The door costs nothing:
   thin calls, no state, no copies; new needs add a door method with its Wayland meaning.
+  Phase 2 (2026-10-31): the compositor, a separate program `apps/mimshel-compositor`,
+  first nested in a window — plan and steps in `docs/compositor.md`.
 - **No GTK** (GTK 5 drops X11). Own widgets (`crates/widgets`).
 - **CPU rendering** with tiny-skia: works without a GPU and is the reference for
   snapshot tests. Everything is computed in **points**; `crates/render::Canvas` draws in
