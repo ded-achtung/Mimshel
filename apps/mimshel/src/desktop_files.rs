@@ -406,6 +406,11 @@ fn transfer_tracked(pairs: &[(PathBuf, PathBuf)], moving: bool) -> (Vec<String>,
             job.finished_item(index);
         }
         if !ok || !actually_done {
+            eprintln!(
+                "Не удалось перенести {} → {} (команда: {ok}, на месте: {actually_done})",
+                src.display(),
+                dest.display()
+            );
             let name = src.file_name().unwrap_or_default().to_string_lossy();
             errors.push(
                 mimshel_core::i18n::t(

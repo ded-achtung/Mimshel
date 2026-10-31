@@ -114,7 +114,7 @@ impl TransferUi {
             } => {
                 if let Some(win) = &self.win {
                     let width = win.size(d).map_or(transfer::WIDTH, |s| s.0);
-                    for (i, (job, _)) in self
+                    for (i, (job, row)) in self
                         .rows
                         .iter()
                         .skip(self.offset)
@@ -122,6 +122,10 @@ impl TransferUi {
                         .enumerate()
                     {
                         if transfer::stop_hit(i, width, f32::from(x), f32::from(y)) {
+                            eprintln!(
+                                "Окно копирования: «Остановить» для «{}» ({:?})",
+                                row.name, row.phase
+                            );
                             job.stop();
                         }
                     }
@@ -258,6 +262,83 @@ mod tests {
         drop(second);
         ui.tick(&display)?;
         assert!(ui.win.is_none());
+        Ok(())
+    }
+
+    /// A real click through the X server (xdotool) on the round stop button
+    /// stops the copy. The other test feeds events straight into the window;
+    /// this one checks they arrive. `MIMSHEL_TEST_WM` names a window manager
+    /// to run in the private server (xfwm4 reparents and grabs clicks).
+    #[test]
+    fn isolated_real_click_stops() -> Result<()> {
+        if std::env::var_os("MIMSHEL_TEST_PRIVATE_TRANSFER_CLICK").is_none() {
+            if std::process::Command::new("xdotool")
+                .arg("version")
+                .output()
+                .is_err()
+            {
+                eprintln!("xdotool is not installed: skipped");
+                return Ok(());
+            }
+            let wm = std::env::var("MIMSHEL_TEST_WM").unwrap_or_default();
+            let test = format!(
+                "{wm} & sleep 2; MIMSHEL_TEST_PRIVATE_TRANSFER_CLICK=1 '{}' --exact \
+                 transfer_ui::tests::isolated_real_click_stops --nocapture",
+                std::env::current_exe()?.display()
+            );
+            let status = std::process::Command::new("xvfb-run")
+                .args([
+                    "-a",
+                    "-s",
+                    "-screen 0 1024x768x24",
+                    "dbus-run-session",
+                    "sh",
+                    "-c",
+                ])
+                .arg(if wm.is_empty() {
+                    test.replacen(" & sleep 2;", "", 1)
+                } else {
+                    test
+                })
+                .status()?;
+            assert!(status.success());
+            return Ok(());
+        }
+        let display = Display::connect()?;
+        let mut ui = TransferUi::new(Language::Ru);
+        let job = Job::preview(transfer::example());
+        ui.started(job.handle.clone());
+        ui.tick(&display)?;
+        let window = ui.win.as_ref().unwrap().id();
+        let mut fonts = Fonts::new("DejaVu Sans");
+        let mut icons = mimshel_icons::Icons::new("hicolor");
+        ui.flush(&display, &mut fonts, &mut icons)?;
+        // Wait until the window is on screen and drawn.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while display.capture_window(window).is_none() {
+            assert!(std::time::Instant::now() < deadline, "window never mapped");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let (x, y) = transfer::stop_center(0, transfer::WIDTH);
+        let status = std::process::Command::new("xdotool")
+            .args(["mousemove", "--window", &window.to_string()])
+            .args([(x as i32).to_string(), (y as i32).to_string()])
+            .args(["click", "1"])
+            .status()?;
+        assert!(status.success());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !job.stopped() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the click did not stop the copy"
+            );
+            let ev = display.next_event()?;
+            eprintln!("event: {ev:?}");
+            if ui.wants(&display, &ev) {
+                ui.event(&display, ev)?;
+            }
+        }
         Ok(())
     }
 }

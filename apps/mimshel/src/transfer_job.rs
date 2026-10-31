@@ -336,8 +336,14 @@ fn run_child(cmd: &mut Command, control: &Handle) -> io::Result<bool> {
     loop {
         if control.stopped() {
             // Reap before cleanup: the child must never write into a removed tree.
+            let since = Instant::now();
             let _ = child.kill();
             child.wait()?;
+            eprintln!(
+                "Копирование остановлено: процесс {} завершился за {:?}",
+                child.id(),
+                since.elapsed()
+            );
             return Ok(false);
         }
         match child.try_wait() {
