@@ -49,6 +49,8 @@ pub struct State {
     pending: Vec<Window>,
     /// Whether an event requires a frame.
     pub dirty: bool,
+    /// Physical pixels per logical point on the nested output.
+    pub output_scale: f64,
     /// Wayland display handle.
     pub dh: DisplayHandle,
     /// DMA buffer protocol globals.
@@ -61,6 +63,16 @@ pub struct State {
     compositor: CompositorState,
     shm: ShmState,
     xdg: XdgShellState,
+    _decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
+    requested_modes: Vec<(ToplevelSurface, crate::model::Mode)>,
+    /// Window whose button group is hovered.
+    pub hovered: Option<crate::model::WindowId>,
+    /// Whether the current left-button press belongs to a compositor control.
+    pub decoration_pressed: bool,
+    /// Host cursor selected by frame hit-testing.
+    pub cursor: smithay::reexports::winit::window::CursorIcon,
+    /// Last title click for double-click detection.
+    pub title_click: Option<(crate::model::WindowId, u32)>,
     seats: SeatState<Self>,
     /// Mapped desktop windows and outputs.
     pub space: Space<Window>,
@@ -86,6 +98,8 @@ impl State {
         let compositor = CompositorState::new::<Self>(&dh);
         let shm = ShmState::new::<Self>(&dh, vec![]);
         let xdg = XdgShellState::new::<Self>(&dh);
+        let decoration =
+            smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
         OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(&dh, "mimshel");
@@ -104,12 +118,19 @@ impl State {
             windows: Vec::new(),
             pending: Vec::new(),
             dirty: true,
+            output_scale: 1.0,
             dh,
             dmabuf: smithay::wayland::dmabuf::DmabufState::new(),
             imports: Vec::new(),
             compositor,
             shm,
             xdg,
+            _decoration: decoration,
+            requested_modes: Vec::new(),
+            hovered: None,
+            title_click: None,
+            decoration_pressed: false,
+            cursor: smithay::reexports::winit::window::CursorIcon::Default,
             seats,
             space: Space::default(),
             popups: PopupManager::default(),
@@ -167,11 +188,142 @@ impl State {
         // map_element also raises; replay the model stack, not creation order.
         for record in &self.model.windows {
             if let Some((_, window)) = self.windows.iter().find(|(id, _)| *id == record.id) {
-                self.space
-                    .map_element(window.clone(), (record.rect.x, record.rect.y), false);
+                if record.mode == crate::model::Mode::Minimized {
+                    self.space.unmap_elem(window);
+                } else {
+                    self.space.map_element(
+                        window.clone(),
+                        (
+                            record.rect.x,
+                            record.rect.y + self.model.title_height(record.id),
+                        ),
+                        false,
+                    );
+                }
             }
         }
+        self.update_frame_pointer();
         self.dirty = true;
+    }
+
+    /// Apply a presentation request, including requests made before mapping.
+    pub fn request_mode(&mut self, surface: &ToplevelSurface, mode: crate::model::Mode) {
+        use crate::model::Mode;
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState;
+        let id = self
+            .windows
+            .iter()
+            .find(|(_, w)| w.toplevel() == Some(surface))
+            .map(|(id, _)| *id);
+        let size = if let Some(id) = id {
+            self.model.set_mode(id, mode);
+            self.model.rect(id).map(|r| (r.width, r.height))
+        } else {
+            self.requested_modes.retain(|(t, _)| t != surface);
+            self.requested_modes.push((surface.clone(), mode));
+            let area = self.model.area;
+            match mode {
+                Mode::Maximized => Some((
+                    area.width,
+                    (area.height
+                        - if server_decorated(surface) {
+                            crate::model::TITLE_HEIGHT
+                        } else {
+                            0
+                        })
+                    .max(1),
+                )),
+                Mode::Fullscreen => Some((area.width, area.height)),
+                Mode::Normal => Some((640.min(area.width), 400.min(area.height))),
+                Mode::Minimized => None,
+            }
+        };
+        surface.with_pending_state(|s| {
+            if let Some(size) = size {
+                s.size = Some(size.into());
+            }
+            s.states.unset(XdgState::Maximized);
+            s.states.unset(XdgState::Fullscreen);
+            if mode == Mode::Maximized {
+                s.states.set(XdgState::Maximized);
+            }
+            if mode == Mode::Fullscreen {
+                s.states.set(XdgState::Fullscreen);
+            }
+        });
+        surface.send_pending_configure();
+        self.sync_positions();
+        self.sync_focus();
+    }
+
+    /// Publish geometry and state after output resize or restoring a hidden window.
+    pub fn configure_windows(&mut self) {
+        for (id, window) in &self.windows {
+            let Some(record) = self.model.windows.iter().find(|w| w.id == *id) else {
+                continue;
+            };
+            if let Some(top) = window.toplevel() {
+                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState;
+                top.with_pending_state(|s| {
+                    s.size = Some((record.rect.width, record.rect.height).into());
+                    s.states.unset(XdgState::Maximized);
+                    s.states.unset(XdgState::Fullscreen);
+                    if record.mode == crate::model::Mode::Maximized {
+                        s.states.set(XdgState::Maximized);
+                    }
+                    if record.mode == crate::model::Mode::Fullscreen {
+                        s.states.set(XdgState::Fullscreen);
+                    }
+                });
+                top.send_pending_configure();
+            }
+        }
+        self.sync_positions();
+        self.sync_focus();
+    }
+
+    /// Locate a compositor frame control in front-to-back order.
+    pub fn decoration_under(&self) -> Option<(crate::model::WindowId, crate::decoration::Hit)> {
+        for w in self.model.windows.iter().rev() {
+            if w.mode == crate::model::Mode::Minimized {
+                continue;
+            }
+            // Popups are above both the client's content and our frame.
+            if self
+                .windows
+                .iter()
+                .find(|(id, _)| *id == w.id)
+                .is_some_and(|(_, window)| {
+                    self.space.element_location(window).is_some_and(|origin| {
+                        window
+                            .surface_under(
+                                self.pointer - origin.to_f64(),
+                                WindowSurfaceType::POPUP | WindowSurfaceType::SUBSURFACE,
+                            )
+                            .is_some()
+                    })
+                })
+            {
+                return None;
+            }
+            let x = self.pointer.x - f64::from(w.rect.x);
+            let y = self.pointer.y - f64::from(w.rect.y);
+            if w.decorated
+                && w.mode != crate::model::Mode::Fullscreen
+                && let Some(hit) = crate::decoration::hit_test(x, y, w.rect.width, w.rect.height)
+            {
+                return Some((w.id, hit));
+            }
+            let title = self.model.title_height(w.id);
+            if x >= 0.0
+                && x < f64::from(w.rect.width)
+                && y >= f64::from(title)
+                && y < f64::from(w.rect.height + title)
+            {
+                return None;
+            }
+        }
+        None
     }
 
     /// Constrain a popup to the logical output bounds.
@@ -187,8 +339,11 @@ impl State {
             .windows
             .iter()
             .find(|(_, w)| w.toplevel().map(|top| top.wl_surface()) == root.as_ref())
-            .and_then(|(id, _)| self.model.rect(*id))
-            .map(|r| Point::from((r.x, r.y)))
+            .and_then(|(id, _)| {
+                self.model
+                    .rect(*id)
+                    .map(|r| Point::from((r.x, r.y + self.model.title_height(*id))))
+            })
             .unwrap_or_default();
         let offset = origin + get_popup_toplevel_coords(&kind);
         let area = self.model.area;
@@ -200,6 +355,9 @@ impl State {
 
     /// Find the surface and origin under the pointer.
     pub fn surface_under(&self) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if self.decoration_under().is_some() {
+            return None;
+        }
         self.space
             .element_under(self.pointer)
             .and_then(|(w, origin)| {
@@ -264,12 +422,21 @@ impl CompositorHandler for State {
                     self.pending.remove(index);
                     let size = window.geometry().size;
                     let id = self.model.open(size.w, size.h);
-                    let Some(rect) = self.model.rect(id) else {
-                        return;
-                    };
-                    self.space
-                        .map_element(window.clone(), (rect.x, rect.y), false);
+                    let decorated = server_decorated(top);
+                    if let Some(record) = self.model.windows.iter_mut().find(|w| w.id == id) {
+                        record.decorated = decorated;
+                    }
+                    let requested = self
+                        .requested_modes
+                        .iter()
+                        .find(|(t, _)| t == top)
+                        .map(|(_, m)| *m);
+                    self.requested_modes.retain(|(t, _)| t != top);
                     self.windows.push((id, window));
+                    if let Some(mode) = requested {
+                        self.model.set_mode(id, mode);
+                    }
+                    self.sync_positions();
                     self.sync_focus();
                 }
             } else if let Some(index) = self
@@ -286,7 +453,14 @@ impl CompositorHandler for State {
                     };
                     rect.width = size.w;
                     rect.height = size.h;
-                    self.model.geometry(id, rect);
+                    if self
+                        .model
+                        .windows
+                        .iter()
+                        .any(|w| w.id == id && w.mode == crate::model::Mode::Normal)
+                    {
+                        self.model.geometry(id, rect);
+                    }
                 } else {
                     self.windows.remove(index);
                     self.space.unmap_elem(&window);
@@ -324,13 +498,20 @@ impl XdgShellHandler for State {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let area = self.model.area;
         surface.with_pending_state(|s| {
-            s.size = Some((640.min(area.width), 400.min(area.height)).into())
+            s.size = Some(
+                (
+                    640.min(area.width),
+                    400.min((area.height - crate::model::TITLE_HEIGHT).max(1)),
+                )
+                    .into(),
+            )
         });
         self.pending.push(Window::new_wayland_window(surface));
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         self.pending.retain(|w| w.toplevel() != Some(&surface));
+        self.requested_modes.retain(|(t, _)| t != &surface);
         if let Some(index) = self
             .windows
             .iter()
@@ -360,6 +541,34 @@ impl XdgShellHandler for State {
         edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
     ) {
         self.client_drag(surface, seat, serial, Some(edges));
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        self.request_mode(&surface, crate::model::Mode::Maximized);
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        self.request_mode(&surface, crate::model::Mode::Normal);
+    }
+
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
+    ) {
+        self.request_mode(&surface, crate::model::Mode::Fullscreen);
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.request_mode(&surface, crate::model::Mode::Normal);
+    }
+
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        self.request_mode(&surface, crate::model::Mode::Minimized);
+    }
+
+    fn title_changed(&mut self, _: ToplevelSurface) {
+        self.dirty = true;
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
@@ -452,3 +661,60 @@ impl smithay::wayland::dmabuf::DmabufHandler for State {
     }
 }
 smithay::delegate_dmabuf!(State);
+
+/// Whether the client has accepted compositor decorations (also the default without the protocol).
+pub fn server_decorated(top: &ToplevelSurface) -> bool {
+    use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+    top.with_pending_state(|s| s.decoration_mode != Some(Mode::ClientSide))
+}
+
+impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for State {
+    fn new_decoration(&mut self, top: ToplevelSurface) {
+        self.decoration_mode(top, false);
+    }
+    fn request_mode(
+        &mut self,
+        top: ToplevelSurface,
+        mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+    ) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        self.decoration_mode(top, mode == Mode::ClientSide);
+    }
+    fn unset_mode(&mut self, top: ToplevelSurface) {
+        self.decoration_mode(top, false);
+    }
+}
+
+impl State {
+    fn decoration_mode(&mut self, top: ToplevelSurface, client: bool) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        top.with_pending_state(|s| {
+            s.decoration_mode = Some(if client {
+                Mode::ClientSide
+            } else {
+                Mode::ServerSide
+            })
+        });
+        top.send_pending_configure();
+        if let Some((id, _)) = self
+            .windows
+            .iter()
+            .find(|(_, w)| w.toplevel() == Some(&top))
+        {
+            if let Some(w) = self.model.windows.iter_mut().find(|w| w.id == *id) {
+                w.decorated = !client;
+            }
+            self.model
+                .resize_output(self.model.area.width, self.model.area.height);
+            self.configure_windows();
+        } else if let Some(mode) = self
+            .requested_modes
+            .iter()
+            .find(|(t, _)| t == &top)
+            .map(|(_, m)| *m)
+        {
+            self.request_mode(&top, mode);
+        }
+    }
+}
+smithay::delegate_xdg_decoration!(State);

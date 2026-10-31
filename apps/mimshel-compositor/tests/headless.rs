@@ -9,12 +9,18 @@ use wayland_client::{
     Connection, Dispatch, QueueHandle, delegate_noop,
     protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface},
 };
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 #[derive(Default)]
 struct Client {
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     shell: Option<xdg_wm_base::XdgWmBase>,
+    decoration: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
+    mode: Option<zxdg_toplevel_decoration_v1::Mode>,
+    size: (i32, i32),
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for Client {
     fn event(
@@ -36,6 +42,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Client {
                     state.compositor = Some(registry.bind(name, version.min(4), qh, ()))
                 }
                 "wl_shm" => state.shm = Some(registry.bind(name, 1, qh, ())),
+                "zxdg_decoration_manager_v1" => {
+                    state.decoration = Some(registry.bind(name, 1, qh, ()))
+                }
                 "xdg_wm_base" => state.shell = Some(registry.bind(name, version.min(3), qh, ())),
                 _ => {}
             }
@@ -75,7 +84,136 @@ delegate_noop!(Client: ignore wl_surface::WlSurface);
 delegate_noop!(Client: ignore wl_shm::WlShm);
 delegate_noop!(Client: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(Client: ignore wl_buffer::WlBuffer);
-delegate_noop!(Client: ignore xdg_toplevel::XdgToplevel);
+delegate_noop!(Client: ignore zxdg_decoration_manager_v1::ZxdgDecorationManagerV1);
+impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Client {
+    fn event(
+        state: &mut Self,
+        _: &xdg_toplevel::XdgToplevel,
+        event: xdg_toplevel::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_toplevel::Event::Configure { width, height, .. } = event {
+            state.size = (width, height);
+        }
+    }
+}
+impl Dispatch<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1, ()> for Client {
+    fn event(
+        state: &mut Self,
+        _: &zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
+        event: zxdg_toplevel_decoration_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zxdg_toplevel_decoration_v1::Event::Configure {
+            mode: wayland_client::WEnum::Value(mode),
+        } = event
+        {
+            state.mode = Some(mode);
+        }
+    }
+}
+
+#[test]
+fn decoration_and_premap_maximize() {
+    use zxdg_toplevel_decoration_v1::Mode;
+    let runtime = tempfile::tempdir().unwrap();
+    let path = runtime.path().join("decoration-test");
+    let (stop, requests) = mpsc::channel();
+    let (snapshots, responses) = mpsc::channel();
+    let (ready, started) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let mut server = Server::private(&path).unwrap();
+        ready.send(()).unwrap();
+        loop {
+            server.dispatch(Some(Duration::from_millis(5))).unwrap();
+            match requests.try_recv() {
+                Ok(true) => {
+                    let window = server.state.model.windows.first().unwrap();
+                    snapshots
+                        .send((
+                            window.rect,
+                            window.mode,
+                            server.state.model.focus,
+                            server.state.space.elements().count(),
+                        ))
+                        .unwrap();
+                }
+                Ok(false) => break,
+                Err(_) => {}
+            }
+        }
+    });
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    let connection = Connection::from_socket(
+        UnixStream::connect(runtime.path().join("decoration-test")).unwrap(),
+    )
+    .unwrap();
+    let mut queue = connection.new_event_queue();
+    let qh = queue.handle();
+    connection.display().get_registry(&qh, ());
+    let mut client = Client::default();
+    queue.roundtrip(&mut client).unwrap();
+    let surface = client.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let xdg = client
+        .shell
+        .as_ref()
+        .unwrap()
+        .get_xdg_surface(&surface, &qh, ());
+    let top = xdg.get_toplevel(&qh, ());
+    let decoration = client
+        .decoration
+        .as_ref()
+        .unwrap()
+        .get_toplevel_decoration(&top, &qh, ());
+    top.set_maximized();
+    surface.commit();
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.mode, Some(Mode::ServerSide));
+    assert_eq!(client.size, (1280, 770));
+    top.set_fullscreen(None);
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.size, (1280, 800));
+    top.unset_fullscreen();
+    top.set_maximized();
+    decoration.set_mode(Mode::ClientSide);
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.mode, Some(Mode::ClientSide));
+    assert_eq!(client.size, (1280, 800));
+    decoration.unset_mode();
+    queue.roundtrip(&mut client).unwrap();
+    assert_eq!(client.mode, Some(Mode::ServerSide));
+    assert_eq!(client.size, (1280, 770));
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(&vec![255; 100 * 80 * 4]).unwrap();
+    let pool = client
+        .shm
+        .as_ref()
+        .unwrap()
+        .create_pool(file.as_fd(), 100 * 80 * 4, &qh, ());
+    let buffer = pool.create_buffer(0, 100, 80, 400, wl_shm::Format::Argb8888, &qh, ());
+    surface.attach(Some(&buffer), 0, 0);
+    surface.commit();
+    queue.roundtrip(&mut client).unwrap();
+    stop.send(true).unwrap();
+    let (rect, mode, focus, visible) = responses.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!((rect.width, rect.height), (1280, 770));
+    assert_eq!(mode, mimshel_compositor::model::Mode::Maximized);
+    assert!(focus.is_some());
+    assert_eq!(visible, 1);
+    top.set_minimized();
+    queue.roundtrip(&mut client).unwrap();
+    stop.send(true).unwrap();
+    let (_, mode, focus, visible) = responses.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(mode, mimshel_compositor::model::Mode::Minimized);
+    assert_eq!(focus, None);
+    assert_eq!(visible, 0);
+    stop.send(false).unwrap();
+    thread.join().unwrap();
+}
 
 #[test]
 fn real_clients_stack_and_restore_focus() {

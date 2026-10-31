@@ -115,14 +115,22 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
         size: backend.window_size(),
         refresh: host_refresh(backend.window()),
     };
+    server.state.output_scale = backend.scale_factor();
     output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
-        None,
+        Some(smithay::output::Scale::Fractional(
+            server.state.output_scale,
+        )),
         Some((0, 0).into()),
     );
     output.set_preferred(mode);
-    server.state.model.resize_output(mode.size.w, mode.size.h);
+    let logical = mode
+        .size
+        .to_f64()
+        .to_logical(server.state.output_scale)
+        .to_i32_round();
+    server.state.model.resize_output(logical.w, logical.h);
     server.state.space.map_output(&output, (0, 0));
     let event_running = running.clone();
     let event_output = output.clone();
@@ -133,10 +141,17 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
             WinitEvent::CloseRequested => event_running.set(false),
             WinitEvent::Input(event) => {
                 if let Some(mode) = event_output.current_mode() {
-                    state.input(event, mode.size.to_logical(1));
+                    state.input(
+                        event,
+                        mode.size
+                            .to_f64()
+                            .to_logical(state.output_scale)
+                            .to_i32_round(),
+                    );
                 }
             }
-            WinitEvent::Resized { size, .. } if size.w > 0 && size.h > 0 => {
+            WinitEvent::Resized { size, scale_factor } if size.w > 0 && size.h > 0 => {
+                state.output_scale = scale_factor;
                 event_output.change_current_state(
                     Some(Mode {
                         size,
@@ -145,11 +160,12 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
                             .map_or(60_000, |mode| mode.refresh),
                     }),
                     None,
-                    None,
+                    Some(smithay::output::Scale::Fractional(scale_factor)),
                     None,
                 );
-                state.model.resize_output(size.w, size.h);
-                state.sync_positions();
+                let logical = size.to_f64().to_logical(scale_factor).to_i32_round();
+                state.model.resize_output(logical.w, logical.h);
+                state.configure_windows();
             }
             WinitEvent::Redraw => state.dirty = true,
             WinitEvent::Focus(false) => state.host_focus_lost(),
@@ -175,6 +191,7 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
                     notifier.failed();
                 }
             }
+            backend.window().set_cursor(server.state.cursor);
             let size = backend.window_size();
             if server.state.dirty && size.w > 0 && size.h > 0 {
                 server.state.dirty = false;

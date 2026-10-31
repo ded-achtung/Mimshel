@@ -38,7 +38,7 @@ working one; nothing on it changes in this phase. Branch `platform/boundary`
 | # | Step | Who |
 |---|---|---|
 | 2.1 | Skeleton: winit and headless backends, xdg-shell windows, keyboard and pointer, focus on click, stacking, moving (Super + drag and the client's own move request), resizing (client request), damage-tracked rendering, frame timing. kitty runs inside. | Codex — **done** |
-| 2.2 | Window decorations of our own (server side, `xdg-decoration`): title bar with the three buttons on the left, as on X11 today; maximize and minimize, fullscreen. | — |
+| 2.2 | Window decorations of our own (server side, `xdg-decoration`): title bar with the three buttons on the left, as on X11 today; maximize and minimize, fullscreen. | Codex — **done** |
 | 2.3 | Protocols for the shell: `wlr-layer-shell`, `ext-foreign-toplevel-list` + `wlr-foreign-toplevel-management`, `xdg-activation`, `ext-session-lock-v1`, `ext-idle-notify-v1`. | — |
 | 2.4 | The door's Wayland backend (`platform.rs` gets the second variant): the menu bar, the dock and the desktop run inside the nested compositor. | — |
 | 2.5 | XWayland: Houdini, Blender, Chrome, Telegram, Steam inside (needs `xorg-xwayland` on the laptop). | — |

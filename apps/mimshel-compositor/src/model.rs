@@ -16,13 +16,38 @@ pub struct Rect {
     pub height: i32,
 }
 
+/// Window presentation mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Floating window.
+    #[default]
+    Normal,
+    /// Output-sized window with a title bar.
+    Maximized,
+    /// Output-sized window without decorations.
+    Fullscreen,
+    /// Hidden window.
+    Minimized,
+}
+
+/// Logical title bar height.
+pub const TITLE_HEIGHT: i32 = 30;
+
 /// A window and its policy geometry.
 #[derive(Clone, Debug)]
 pub struct Window {
     /// Stable policy identity.
     pub id: WindowId,
-    /// Current logical geometry.
+    /// Frame origin and client size in logical points.
     pub rect: Rect,
+    /// Presentation mode.
+    pub mode: Mode,
+    /// Floating geometry saved before maximizing or entering fullscreen.
+    pub saved: Option<Rect>,
+    /// Whether this window uses compositor decorations.
+    pub decorated: bool,
+    resume: Mode,
+    minimized_order: u64,
 }
 
 /// Window stack, focus, and output placement policy.
@@ -36,6 +61,7 @@ pub struct Model {
     pub area: Rect,
     next: WindowId,
     cascade: usize,
+    minimize_clock: u64,
 }
 
 impl Model {
@@ -52,6 +78,7 @@ impl Model {
             },
             next: 0,
             cascade: 0,
+            minimize_clock: 0,
         }
     }
 
@@ -59,13 +86,19 @@ impl Model {
     pub fn open(&mut self, width: i32, height: i32) -> WindowId {
         self.next += 1;
         let width = width.max(1).min(self.area.width.max(1));
-        let height = height.max(1).min(self.area.height.max(1));
-        let steps =
-            ((self.area.width - width).min(self.area.height - height) / 32).max(0) as usize + 1;
+        let height = height.max(1).min((self.area.height - TITLE_HEIGHT).max(1));
+        let steps = ((self.area.width - width).min(self.area.height - height - TITLE_HEIGHT) / 32)
+            .max(0) as usize
+            + 1;
         let offset = (self.cascade % steps) as i32 * 32;
         self.cascade += 1;
         self.windows.push(Window {
             id: self.next,
+            mode: Mode::Normal,
+            saved: None,
+            decorated: true,
+            resume: Mode::Normal,
+            minimized_order: 0,
             rect: Rect {
                 x: self.area.x + offset,
                 y: self.area.y + offset,
@@ -81,13 +114,22 @@ impl Model {
     pub fn close(&mut self, id: WindowId) {
         self.windows.retain(|w| w.id != id);
         if self.focus == Some(id) {
-            self.focus = self.windows.last().map(|w| w.id);
+            self.focus = self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.mode != Mode::Minimized)
+                .map(|w| w.id);
         }
     }
 
     /// Raise and focus an existing window.
     pub fn raise(&mut self, id: WindowId) {
-        if let Some(index) = self.windows.iter().position(|w| w.id == id) {
+        if let Some(index) = self
+            .windows
+            .iter()
+            .position(|w| w.id == id && w.mode != Mode::Minimized)
+        {
             let window = self.windows.remove(index);
             self.windows.push(window);
             self.focus = Some(id);
@@ -109,11 +151,83 @@ impl Model {
         }
     }
 
+    /// Title bar height for the current mode.
+    pub fn title_height(&self, id: WindowId) -> i32 {
+        self.windows
+            .iter()
+            .find(|w| w.id == id)
+            .filter(|w| w.decorated && w.mode != Mode::Fullscreen)
+            .map_or(0, |_| TITLE_HEIGHT)
+    }
+
+    /// Change presentation mode, preserving floating geometry and focus.
+    pub fn set_mode(&mut self, id: WindowId, mode: Mode) {
+        let Some(w) = self.windows.iter_mut().find(|w| w.id == id) else {
+            return;
+        };
+        if w.mode == mode {
+            return;
+        }
+        if mode == Mode::Minimized {
+            self.minimize_clock += 1;
+            w.minimized_order = self.minimize_clock;
+            w.resume = w.mode;
+        } else {
+            let previous = if w.mode == Mode::Minimized {
+                w.resume
+            } else {
+                w.mode
+            };
+            if previous == Mode::Normal && mode != Mode::Normal {
+                w.saved = Some(w.rect);
+            }
+            if mode == Mode::Normal {
+                if let Some(saved) = w.saved.take() {
+                    w.rect = saved;
+                }
+            } else {
+                w.rect = self.area;
+                if mode == Mode::Maximized && w.decorated {
+                    w.rect.height = (w.rect.height - TITLE_HEIGHT).max(1);
+                }
+            }
+        }
+        w.mode = mode;
+        if mode == Mode::Minimized && self.focus == Some(id) {
+            self.focus = self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.mode != Mode::Minimized)
+                .map(|w| w.id);
+        }
+    }
+
+    /// Restore and focus the most recently minimized window.
+    pub fn restore_recent(&mut self) -> Option<WindowId> {
+        let (id, mode) = self
+            .windows
+            .iter()
+            .filter(|w| w.mode == Mode::Minimized)
+            .max_by_key(|w| w.minimized_order)
+            .map(|w| (w.id, w.resume))?;
+        self.set_mode(id, mode);
+        self.raise(id);
+        Some(id)
+    }
+
     /// Update output bounds and keep window origins visible.
     pub fn resize_output(&mut self, width: i32, height: i32) {
         self.area.width = width.max(1);
         self.area.height = height.max(1);
         for w in &mut self.windows {
+            if matches!(w.mode, Mode::Maximized | Mode::Fullscreen) {
+                w.rect = self.area;
+                if w.mode == Mode::Maximized && w.decorated {
+                    w.rect.height = (w.rect.height - TITLE_HEIGHT).max(1);
+                }
+                continue;
+            }
             w.rect.x = w
                 .rect
                 .x
@@ -157,7 +271,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 width: 800,
-                height: 600
+                height: 570
             })
         );
     }
@@ -178,5 +292,71 @@ mod tests {
             },
         );
         assert_eq!(m.rect(b).unwrap().y, 0);
+    }
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+
+    #[test]
+    fn modes_restore_floating_geometry() {
+        for first in [Mode::Maximized, Mode::Fullscreen] {
+            let mut m = Model::new(800, 600);
+            let id = m.open(320, 200);
+            let normal = m.rect(id);
+            m.set_mode(id, first);
+            assert_eq!(
+                m.rect(id).unwrap().height,
+                if first == Mode::Maximized { 570 } else { 600 }
+            );
+            m.set_mode(id, first);
+            m.set_mode(id, Mode::Minimized);
+            assert_eq!(m.focus, None);
+            assert_eq!(m.restore_recent(), Some(id));
+            assert_eq!(m.windows[0].mode, first);
+            m.set_mode(id, Mode::Normal);
+            assert_eq!(m.rect(id), normal);
+            assert_eq!(m.windows[0].saved, None);
+        }
+    }
+
+    #[test]
+    fn switching_modes_and_output_resize() {
+        let mut m = Model::new(800, 600);
+        let id = m.open(320, 200);
+        let normal = m.rect(id);
+        m.set_mode(id, Mode::Maximized);
+        m.set_mode(id, Mode::Fullscreen);
+        assert_eq!(m.title_height(id), 0);
+        m.resize_output(1000, 700);
+        assert_eq!(m.rect(id), Some(m.area));
+        m.set_mode(id, Mode::Maximized);
+        assert_eq!(m.rect(id).unwrap().height, 670);
+        m.set_mode(id, Mode::Normal);
+        assert_eq!(m.rect(id), normal);
+        m.windows[0].decorated = false;
+        m.set_mode(id, Mode::Maximized);
+        assert_eq!(m.rect(id), Some(m.area));
+    }
+
+    #[test]
+    fn close_focus_skips_hidden_and_restore_is_recent() {
+        let mut m = Model::new(800, 600);
+        let a = m.open(100, 100);
+        let b = m.open(100, 100);
+        let c = m.open(100, 100);
+        m.set_mode(b, Mode::Minimized);
+        m.close(c);
+        assert_eq!(m.focus, Some(a));
+        m.raise(b);
+        assert_eq!(m.focus, Some(a));
+        m.set_mode(a, Mode::Minimized);
+        assert_eq!(m.focus, None);
+        assert_eq!(m.restore_recent(), Some(a));
+        assert_eq!(m.restore_recent(), Some(b));
+        assert_eq!(m.restore_recent(), None);
+        m.close(b);
+        assert_eq!(m.focus, Some(a));
     }
 }

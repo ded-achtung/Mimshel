@@ -7,6 +7,9 @@
 /// Backend implementations.
 pub mod backend;
 
+/// Title bar drawing and hit-testing.
+pub mod decoration;
+
 /// Forward host input and update focus and interactive drags.
 pub mod input;
 

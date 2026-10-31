@@ -9,6 +9,10 @@ publish = false
 workspace = true
 
 [dependencies]
+mimshel-core = { path = "../../crates/core" }
+mimshel-text = { path = "../../crates/text" }
+tiny-skia = "0.12"
+
 smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend", "desktop", "renderer_gl", "use_system_lib"] }
 
 # Enable signals on the same calloop instance re-exported by Smithay.

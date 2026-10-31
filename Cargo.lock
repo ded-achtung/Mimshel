@@ -1387,8 +1387,11 @@ name = "mimshel-compositor"
 version = "0.0.6-alpha"
 dependencies = [
  "calloop 0.14.5",
+ "mimshel-core",
+ "mimshel-text",
  "smithay",
  "tempfile",
+ "tiny-skia",
  "wayland-client",
  "wayland-protocols",
 ]

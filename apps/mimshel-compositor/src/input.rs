@@ -27,7 +27,20 @@ impl State {
                     event.state(),
                     SERIAL_COUNTER.next_serial(),
                     event.time_msec(),
-                    |_, _, _| FilterResult::Forward,
+                    |state, modifiers, keys| {
+                        if modifiers.logo
+                            && keys.raw_latin_sym_or_raw_current_sym()
+                                == Some(smithay::input::keyboard::Keysym::u)
+                        {
+                            if event.state() == smithay::backend::input::KeyState::Pressed {
+                                state.model.restore_recent();
+                                state.configure_windows();
+                            }
+                            FilterResult::Intercept(())
+                        } else {
+                            FilterResult::Forward
+                        }
+                    },
                 );
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
@@ -36,6 +49,7 @@ impl State {
                 if let Some(drag) = self.drag.clone() {
                     self.update_drag(drag);
                 }
+                self.update_frame_pointer();
                 let under = if self.drag.is_some() {
                     None
                 } else {
@@ -65,9 +79,75 @@ impl State {
                         top.with_pending_state(|s| { s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing); });
                         top.send_pending_configure();
                     }
+                    if self.decoration_pressed {
+                        self.decoration_pressed = false;
+                    }
                     if !pointer.is_grabbed() {
                         return;
                     }
+                }
+                if event.button_code() == 0x110
+                    && event.state() == ButtonState::Released
+                    && self.decoration_pressed
+                {
+                    self.decoration_pressed = false;
+                    return;
+                }
+                if event.button_code() == 0x110
+                    && event.state() == ButtonState::Pressed
+                    && !pointer.is_grabbed()
+                    && let Some((id, hit)) = self.decoration_under()
+                {
+                    self.decoration_pressed = true;
+                    self.model.raise(id);
+                    self.sync_positions();
+                    self.sync_focus();
+                    let Some((_, window)) = self.windows.iter().find(|(i, _)| *i == id) else {
+                        return;
+                    };
+                    let window = window.clone();
+                    let Some(top) = window.toplevel() else {
+                        return;
+                    };
+                    use crate::decoration::Hit;
+                    match hit {
+                        Hit::Close => {
+                            top.send_close();
+                        }
+                        Hit::Minimize => {
+                            self.request_mode(top, crate::model::Mode::Minimized);
+                        }
+                        Hit::Maximize => {
+                            self.toggle_maximize(id);
+                        }
+                        Hit::Title => {
+                            let now = event.time_msec();
+                            if self.title_click.is_some_and(|(last, time)| {
+                                last == id && now.wrapping_sub(time) < 400
+                            }) {
+                                self.title_click = None;
+                                self.toggle_maximize(id);
+                            } else {
+                                self.title_click = Some((id, now));
+                                self.frame_drag(id, window, None);
+                            }
+                        }
+                        Hit::Edge(x, y) => {
+                            use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as E;
+                            let edge = match (x, y) {
+                                (-1, -1) => E::TopLeft,
+                                (0, -1) => E::Top,
+                                (1, -1) => E::TopRight,
+                                (-1, 0) => E::Left,
+                                (1, 0) => E::Right,
+                                (-1, 1) => E::BottomLeft,
+                                (0, 1) => E::Bottom,
+                                _ => E::BottomRight,
+                            };
+                            self.frame_drag(id, window, Some(edge));
+                        }
+                    }
+                    return;
                 }
                 if event.state() == ButtonState::Pressed && !pointer.is_grabbed() {
                     let hit = self
@@ -80,7 +160,13 @@ impl State {
                         }
                         self.space.raise_element(&window, true);
                         if event.button_code() == 0x110 && keyboard.modifier_state().logo {
-                            let Some(origin) = self.space.element_location(&window) else {
+                            let Some(origin) = self
+                                .windows
+                                .iter()
+                                .find(|(_, w)| w == &window)
+                                .and_then(|(id, _)| self.model.rect(*id))
+                                .map(|r| (r.x, r.y).into())
+                            else {
                                 return;
                             };
                             self.drag = Some(Drag {
@@ -132,6 +218,78 @@ impl State {
         }
     }
 
+    /// Toggle output-sized presentation for a frame control.
+    fn toggle_maximize(&mut self, id: crate::model::WindowId) {
+        let Some(w) = self.model.windows.iter().find(|w| w.id == id) else {
+            return;
+        };
+        let mode = if w.mode == crate::model::Mode::Maximized {
+            crate::model::Mode::Normal
+        } else {
+            crate::model::Mode::Maximized
+        };
+        if let Some(top) = self
+            .windows
+            .iter()
+            .find(|(i, _)| *i == id)
+            .and_then(|(_, w)| w.toplevel())
+            .cloned()
+        {
+            self.request_mode(&top, mode);
+        }
+    }
+
+    fn frame_drag(
+        &mut self,
+        id: crate::model::WindowId,
+        window: smithay::desktop::Window,
+        edges: Option<
+            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+        >,
+    ) {
+        let Some(record) = self.model.windows.iter().find(|w| w.id == id) else {
+            return;
+        };
+        if record.mode != crate::model::Mode::Normal {
+            return;
+        }
+        self.drag = Some(Drag {
+            size: (record.rect.width, record.rect.height),
+            origin: (record.rect.x, record.rect.y).into(),
+            start: self.pointer,
+            window,
+            edges,
+        });
+    }
+
+    /// Update hover only when the pointer enters or leaves a button group.
+    pub fn update_frame_pointer(&mut self) {
+        let hit = self.decoration_under();
+        let hover = hit.and_then(|(id, _)| {
+            self.model.rect(id).and_then(|r| {
+                let (x, y) = (
+                    self.pointer.x - f64::from(r.x),
+                    self.pointer.y - f64::from(r.y),
+                );
+                ((12.0..=64.0).contains(&x) && (9.0..=21.0).contains(&y)).then_some(id)
+            })
+        });
+        if hover != self.hovered {
+            self.hovered = hover;
+            self.dirty = true;
+        }
+        use smithay::reexports::winit::window::CursorIcon as C;
+        self.cursor = match hit {
+            Some((_, crate::decoration::Hit::Edge(x, y))) => match (x, y) {
+                (-1, -1) | (1, 1) => C::NwseResize,
+                (1, -1) | (-1, 1) => C::NeswResize,
+                (0, _) => C::NsResize,
+                _ => C::EwResize,
+            },
+            _ => C::Default,
+        };
+    }
+
     /// Release held keys and cancel interactive operations.
     pub fn host_focus_lost(&mut self) {
         // Smithay's winit adapter discards synthetic key releases on focus loss.
@@ -148,6 +306,10 @@ impl State {
         }
         self.drag = None;
         self.pointer_inside = false;
+        self.decoration_pressed = false;
+        if self.hovered.take().is_some() {
+            self.dirty = true;
+        }
     }
 
     /// Validate a client grab before beginning a move or resize.
@@ -182,7 +344,13 @@ impl State {
             .iter()
             .find(|(_, w)| w.toplevel() == Some(&surface))
         {
-            let Some(origin) = self.space.element_location(window) else {
+            let Some(origin) = self
+                .windows
+                .iter()
+                .find(|(_, w)| w == window)
+                .and_then(|(id, _)| self.model.rect(*id))
+                .map(|r| (r.x, r.y).into())
+            else {
                 return;
             };
             self.drag = Some(Drag {
@@ -209,6 +377,15 @@ impl State {
             self.drag = None;
             return;
         };
+        if !self
+            .model
+            .windows
+            .iter()
+            .any(|w| w.id == id && w.mode == crate::model::Mode::Normal)
+        {
+            self.drag = None;
+            return;
+        }
         let delta: smithay::utils::Point<i32, Logical> = (self.pointer - drag.start).to_i32_round();
         let mut r = crate::model::Rect {
             x: drag.origin.x,
@@ -258,6 +435,9 @@ impl State {
             });
             top.send_pending_configure();
         } else {
+            if delta.x.abs() > 3 || delta.y.abs() > 3 {
+                self.title_click = None;
+            }
             r.x += delta.x;
             r.y += delta.y;
         }
