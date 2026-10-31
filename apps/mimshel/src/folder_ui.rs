@@ -318,7 +318,10 @@ impl FolderUi {
                     w.dirty = true;
                 }
             }
-            Event::Close { window } => self.close(d, window)?,
+            Event::Close { window } => {
+                eprintln!("Окно папки {window:#x}: закрыто снаружи (рамка или X-сервер)");
+                self.close(d, window)?;
+            }
             Event::Leave { window } => {
                 if let Some(w) = self.find(window) {
                     let action = w.view.leave();
@@ -477,7 +480,10 @@ impl FolderUi {
                 let dir = w.view.dir().to_path_buf();
                 self.open(d, dir)?;
             }
-            Action::Close => self.close(d, window)?,
+            Action::Close => {
+                eprintln!("Окно папки {window:#x}: закрыто самим окном (Ctrl+W, Esc)");
+                self.close(d, window)?;
+            }
         }
         Ok(())
     }
