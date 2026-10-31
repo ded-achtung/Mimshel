@@ -29,13 +29,13 @@ use mimshel_render::Canvas;
 use mimshel_text::Fonts;
 use mimshel_widgets::shape::paint;
 use mimshel_widgets::{Menu, MenuEntry, MenuResult};
-use mimshel_x11::{
-    DesktopWindow, Display, DragTarget, Event, Key, KeyPress, Popup, SelectionRenderer,
-};
 use tiny_skia::{IntRect, Pixmap};
 
 use crate::desktop_files;
 use crate::desktop_wallpaper::{WALLPAPERS, painter, pick_file, save_wallpaper, thumb};
+use crate::platform::{
+    self, Background, Display, DragTarget, Event, Key, KeyPress, Popup, Property, SelectionOverlay,
+};
 use crate::ui::{Msg, Result};
 
 /// Пункты меню стола и значков.
@@ -92,7 +92,7 @@ const MARGIN: f32 = 12.0;
 const DOCK_ROOM: f32 = 96.0;
 
 pub struct DesktopUi {
-    window: DesktopWindow,
+    window: Background,
     menu_popup: Popup,
     menu: Option<Menu<DesktopCommand>>,
     menu_dirty: bool,
@@ -126,7 +126,7 @@ pub struct DesktopUi {
     /// Рамка выделения: где начали и где указатель; окно рамки.
     band: Option<((f32, f32), (f32, f32))>,
     band_popup: Popup,
-    selection_renderer: Option<SelectionRenderer>,
+    selection_renderer: Option<SelectionOverlay>,
     band_dirty: bool,
     /// Окно рамки (во весь экран, прозрачное) показано; где рамка нарисована
     /// в нём сейчас — этот участок и стираем при следующем движении.
@@ -175,13 +175,13 @@ impl DesktopUi {
     }
 
     pub fn new(d: &Display, config: &Config, tx: Sender<Msg>) -> Result<DesktopUi> {
-        let window = d.create_desktop()?;
+        let window = d.create_background()?;
         // Xfwm4 обновляет _NET_WORKAREA при изменении резервов Dock/панелей.
-        d.watch_root()?;
+        d.watch_desktop()?;
         window.show(d)?;
         let dir = desktop_files::desktop_dir();
         let band_popup = d.create_popup("desktop-band")?;
-        let selection_renderer = SelectionRenderer::new(d, band_popup.id());
+        let selection_renderer = SelectionOverlay::new(d, band_popup.id());
         let mut ui = DesktopUi {
             window,
             menu_popup: d.create_popup("desktop-menu")?,
@@ -348,18 +348,18 @@ impl DesktopUi {
             | Event::DropLeave { window }
             | Event::Dropped { window, .. } => window == self.window.id(),
             // Сменился размер экрана (корневое окно) — стол во весь экран заново.
-            Event::Configure { window } => window == d.root(),
+            Event::Configure { window } => d.is_screen(window),
             Event::Property {
                 window,
-                what: mimshel_x11::Property::WorkArea,
-            } => window == d.root(),
+                what: Property::WorkArea,
+            } => d.is_screen(window),
             _ => false,
         }
     }
 
     pub fn event(&mut self, d: &Display, fonts: &mut Fonts, ev: Event) -> Result<()> {
         if let Event::Configure { window } = ev
-            && window == d.root()
+            && d.is_screen(window)
         {
             self.window.show(d)?;
             self.place_icons(d);
@@ -368,9 +368,9 @@ impl DesktopUi {
         }
         if let Event::Property {
             window,
-            what: mimshel_x11::Property::WorkArea,
+            what: Property::WorkArea,
         } = ev
-            && window == d.root()
+            && d.is_screen(window)
         {
             self.place_icons(d);
             return Ok(());
@@ -715,8 +715,8 @@ impl DesktopUi {
                         let changed = self.grid.select_all();
                         self.cells_dirty.extend(changed);
                     }
-                    'c' if !selected.is_empty() => mimshel_x11::copy_files(selected, false),
-                    'x' if !selected.is_empty() => mimshel_x11::copy_files(selected, true),
+                    'c' if !selected.is_empty() => platform::copy_files(selected, false),
+                    'x' if !selected.is_empty() => platform::copy_files(selected, true),
                     'v' => desktop_files::paste(self.dir.clone()),
                     _ => {}
                 }
@@ -1003,7 +1003,7 @@ impl DesktopUi {
                     .iter()
                     .map(|i| i.path.clone())
                     .collect();
-                mimshel_x11::copy_files(paths, command == DesktopCommand::Cut);
+                platform::copy_files(paths, command == DesktopCommand::Cut);
             }
             DesktopCommand::Trash => {
                 self.grid.freeze();

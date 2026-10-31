@@ -397,7 +397,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
 
     // Рабочий стол — первым: обои рисуются в фоне, пока грузится остальное.
     let desktop = if daemon && config.desktop {
-        Some(DesktopUi::new(display, &config, tx.clone())?)
+        Some(DesktopUi::new(&platform, &config, tx.clone())?)
     } else {
         None
     };
@@ -600,7 +600,7 @@ impl Ui<'_> {
             dock.close_popups(self.platform)?;
         }
         if let Some(desktop) = &mut self.desktop {
-            desktop.close_popups(self.display)?;
+            desktop.close_popups(self.platform)?;
         }
         if let Some(folders) = &mut self.folders {
             folders.close_popups(self.display)?;
@@ -759,7 +759,7 @@ impl Ui<'_> {
         }
         let dock_time = t.elapsed();
         if let Some(desktop) = &mut self.desktop {
-            desktop.flush(self.display, &mut self.fonts, &mut self.icons)?;
+            desktop.flush(self.platform, &mut self.fonts, &mut self.icons)?;
         }
         if timing && t.elapsed() > std::time::Duration::from_millis(30) {
             eprintln!(
@@ -798,7 +798,7 @@ impl Ui<'_> {
             notify.set_language(lang);
         }
         if let Some(desktop) = &mut self.desktop {
-            desktop.set_language(self.display, lang, &config.wallpaper);
+            desktop.set_language(self.platform, lang, &config.wallpaper);
         }
         if let Some(folders) = &mut self.folders {
             folders.set_language(self.display, lang)?;
@@ -867,7 +867,7 @@ impl Ui<'_> {
                 Ok(())
             }
             Msg::Desktop(msg) => match &mut self.desktop {
-                Some(desktop) => desktop.message(self.display, *msg),
+                Some(desktop) => desktop.message(self.platform, *msg),
                 None => Ok(()),
             },
             // Список файлов пришёл — нарисовать окно сразу, не дожидаясь,
@@ -1049,9 +1049,9 @@ impl Ui<'_> {
         }
         if let Some(desktop) = &mut self.desktop
             && !to_panel
-            && desktop.wants(self.display, &ev)
+            && desktop.wants(self.platform, &ev)
         {
-            desktop.event(self.display, &mut self.fonts, ev)?;
+            desktop.event(self.platform, &mut self.fonts, ev)?;
             handled = true;
         }
         if !to_panel && self.transfers.wants(self.platform, &ev) {

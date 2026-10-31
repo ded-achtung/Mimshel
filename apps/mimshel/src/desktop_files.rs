@@ -13,6 +13,7 @@ use mimshel_desktop::files::{Item, Kind, MimeDb, free_name, scan, trusted_launch
 use mimshel_desktop::icon_grid::Slot;
 
 use crate::desktop_ui::DesktopMsg;
+use crate::platform;
 use crate::ui::Msg;
 
 /// После события в папке — подождать, пока перемены затихнут (копирование
@@ -491,7 +492,7 @@ pub fn save_places(places: &HashMap<String, Slot>) {
 /// Paste copied or cut files as one transfer, reserving distinct free names.
 pub fn paste(dir: PathBuf) {
     std::thread::spawn(move || {
-        let Some((cut, files)) = mimshel_x11::clipboard_files() else {
+        let Some((cut, files)) = platform::clipboard_files() else {
             return;
         };
         let mut pairs = Vec::new();

@@ -10,7 +10,7 @@
 //! Parts move over one at a time; until then they use [`Display::x11`].
 
 pub use mimshel_core::windows::WindowInfo;
-pub use mimshel_platform::{Event, Key, Property, Result};
+pub use mimshel_platform::{DragTarget, Event, Key, KeyPress, Property, Result};
 use mimshel_render::Image;
 
 /// The connection to the screen: one per process.
@@ -28,6 +28,46 @@ impl Display {
     /// The X11 display, for parts not moved behind this module yet.
     pub fn x11(&self) -> &mimshel_x11::Display {
         &self.x11
+    }
+
+    /// The wallpaper and icons layer. Wayland: layer-shell background layer.
+    pub fn create_background(&self) -> Result<Background> {
+        Ok(Background(self.x11.create_desktop()?))
+    }
+
+    /// Output rectangles in points. Wayland: outputs from our compositor.
+    pub fn monitors(&self) -> Vec<(i32, i32, u32, u32)> {
+        self.x11.monitors()
+    }
+
+    /// Usable output area in points. Wayland: output minus exclusive zones.
+    pub fn workarea(&self) -> Option<(i32, i32, u32, u32)> {
+        self.x11.workarea()
+    }
+
+    /// Screen size in physical pixels. Wayland: compositor output bounds.
+    pub fn screen_pixels(&self) -> (u16, u16) {
+        self.x11.screen_pixels()
+    }
+
+    /// Begin offering files. Wayland: `wl_data_device` / `wl_data_source`.
+    pub fn drag_begin(&self, source: u32, paths: &[std::path::PathBuf]) {
+        self.x11.drag_begin(source, paths);
+    }
+
+    /// Update a file drag. Wayland: `wl_data_device` / `wl_data_source`.
+    pub fn drag_motion(&self, x: i16, y: i16, copy: bool) -> DragTarget {
+        self.x11.drag_motion(x, y, copy)
+    }
+
+    /// End a file drag. Wayland: `wl_data_device` / `wl_data_source`.
+    pub fn drag_end(&self) -> DragTarget {
+        self.x11.drag_end()
+    }
+
+    /// Take received file paths. Wayland: read the `wl_data_device` offer.
+    pub fn take_drop(&self, ticket: u64) -> Vec<std::path::PathBuf> {
+        self.x11.take_drop(ticket)
     }
 
     /// Wait for the next event (blocks).
@@ -375,6 +415,16 @@ impl Popup {
         self.0.set_geometry(&d.x11, x, y, w, h)
     }
 
+    /// Let pointer input reach the surface below. Wayland: an empty input region.
+    pub fn pass_through(&self, d: &Display) -> Result<()> {
+        self.0.pass_through(&d.x11)
+    }
+
+    /// Update a picture at an offset in pixels. Wayland: surface buffer damage.
+    pub fn present_at(&self, d: &Display, image: &impl Image, x: i32, y: i32) -> Result<()> {
+        self.0.present_at(&d.x11, image, x, y)
+    }
+
     /// Show a picture the size of the popup, in pixels.
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
         self.0.present(&d.x11, image)
@@ -391,4 +441,57 @@ pub fn copy_text(text: String, primary: bool) {
 /// is true. Wayland: `wl_data_device` or `zwp_primary_selection`, respectively.
 pub fn clipboard_text(primary: bool) -> Option<String> {
     mimshel_x11::clipboard_text(primary)
+}
+
+/// Copy files. Wayland: `wl_data_device` with `text/uri-list` and
+/// `x-special/gnome-copied-files` (including the cut flag).
+pub fn copy_files(paths: Vec<std::path::PathBuf>, cut: bool) {
+    mimshel_x11::copy_files(paths, cut);
+}
+
+/// Read files and the cut flag. Wayland: `wl_data_device` with `text/uri-list`
+/// and `x-special/gnome-copied-files`.
+pub fn clipboard_files() -> Option<(bool, Vec<std::path::PathBuf>)> {
+    mimshel_x11::clipboard_files()
+}
+
+/// The wallpaper and icons layer. Wayland: layer-shell background layer.
+pub struct Background(mimshel_x11::DesktopWindow);
+
+impl Background {
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    pub fn show(&self, d: &Display) -> Result<()> {
+        self.0.show(&d.x11)
+    }
+
+    pub fn set_wallpaper(&self, d: &Display, image: &tiny_skia::Pixmap) -> Result<()> {
+        self.0.set_wallpaper(&d.x11, image)
+    }
+
+    /// Update an area at an offset in pixels. Wayland: surface buffer damage.
+    pub fn update(&self, d: &Display, image: &tiny_skia::Pixmap, x: i32, y: i32) -> Result<()> {
+        self.0.update(&d.x11, image, x, y)
+    }
+}
+
+/// Rubber-band selection drawing over the desktop. X11: an XRender picture
+/// with XFixes shaping; Wayland: a small overlay surface or compositor drawing.
+pub struct SelectionOverlay(mimshel_x11::SelectionRenderer);
+
+impl SelectionOverlay {
+    /// Optional acceleration; the desktop retains its picture-based fallback.
+    pub fn new(d: &Display, window: u32) -> Option<Self> {
+        mimshel_x11::SelectionRenderer::new(&d.x11, window).map(Self)
+    }
+
+    pub fn paint(&mut self, d: &Display, rect: (f32, f32, f32, f32)) -> Result<()> {
+        self.0.paint(&d.x11, rect)
+    }
+
+    pub fn reset(&mut self, d: &Display) -> Result<()> {
+        self.0.reset(&d.x11)
+    }
 }
