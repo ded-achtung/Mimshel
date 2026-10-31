@@ -1,4 +1,5 @@
 //! Protocol server shared by the nested backend and GPU-free tests.
+
 use crate::{
     Error,
     state::{ClientState, State},
@@ -9,13 +10,20 @@ use smithay::reexports::{
 };
 use std::{os::fd::AsFd, path::Path, sync::Arc, time::Duration};
 
+/// Wayland listener and event loop with a virtual output.
 pub struct Server {
+    /// Virtual nested output.
     pub output: smithay::output::Output,
+    /// Shared compositor state.
     pub state: State,
+    /// Blocking protocol event loop.
     pub events: EventLoop<'static, State>,
+    /// Published Wayland socket basename.
     pub socket_name: std::ffi::OsString,
 }
+
 impl Server {
+    /// Create initialized state.
     pub fn new() -> Result<Self, Error> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR is not set")?;
         let runtime = std::path::PathBuf::from(runtime);
@@ -37,9 +45,13 @@ impl Server {
         }
         Err("no free Wayland socket name".into())
     }
+
+    /// Create a server on a caller-selected private socket.
     pub fn private(path: &Path) -> Result<Self, Error> {
         Self::with_socket(Socket::bind_absolute(path.to_owned())?)
     }
+
+    /// Register the listener and Wayland display with calloop.
     fn with_socket(socket: Socket) -> Result<Self, Error> {
         let mut display = Display::<State>::new()?;
         let display_fd = display.as_fd().try_clone_to_owned()?;
@@ -96,6 +108,8 @@ impl Server {
             socket_name: name,
         })
     }
+
+    /// Dispatch protocol events and flush replies.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.events.dispatch(timeout, &mut self.state)?;
         self.state.refresh();
@@ -111,7 +125,9 @@ struct Socket {
     lock_path: std::path::PathBuf,
     _lock: std::fs::File,
 }
+
 impl Socket {
+    /// Reserve a socket name without replacing existing files.
     fn bind_absolute(path: std::path::PathBuf) -> std::io::Result<Self> {
         use std::os::unix::fs::OpenOptionsExt;
         if std::fs::symlink_metadata(&path).is_ok() {
@@ -143,6 +159,8 @@ impl Socket {
         socket.listener.set_nonblocking(true)?;
         Ok(socket)
     }
+
+    /// Accept one client without blocking.
     fn accept(&self) -> std::io::Result<Option<std::os::unix::net::UnixStream>> {
         match self.listener.accept() {
             Ok((stream, _)) => Ok(Some(stream)),
@@ -151,11 +169,13 @@ impl Socket {
         }
     }
 }
+
 impl AsFd for Socket {
     fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.listener.as_fd()
     }
 }
+
 impl Drop for Socket {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);

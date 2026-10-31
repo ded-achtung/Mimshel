@@ -1,3 +1,5 @@
+//! Wayland protocol state, window mapping, and seat focus.
+
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     desktop::{PopupKind, PopupManager, Space, Window, WindowSurfaceType},
@@ -22,23 +24,36 @@ use smithay::{
     },
 };
 
+/// Active pointer move or resize operation.
 #[derive(Clone)]
 pub struct Drag {
+    /// Requested resize edges, or a move.
     pub edges:
         Option<smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge>,
+    /// Window size when the drag began.
     pub size: (i32, i32),
+    /// Window being dragged.
     pub window: Window,
+    /// Pointer position when the drag began.
     pub start: Point<f64, Logical>,
+    /// Window origin when the drag began.
     pub origin: Point<i32, Logical>,
 }
 
+/// Shared protocol, input, and window policy state.
 pub struct State {
+    /// Protocol-independent placement and focus policy.
     pub model: crate::model::Model,
+    /// Mapped windows in stack or creation order.
     pub windows: Vec<(crate::model::WindowId, Window)>,
     pending: Vec<Window>,
+    /// Whether an event requires a frame.
     pub dirty: bool,
+    /// Wayland display handle.
     pub dh: DisplayHandle,
+    /// DMA buffer protocol globals.
     pub dmabuf: smithay::wayland::dmabuf::DmabufState,
+    /// Pending DMA buffer import requests.
     pub imports: Vec<(
         smithay::backend::allocator::dmabuf::Dmabuf,
         smithay::wayland::dmabuf::ImportNotifier,
@@ -47,14 +62,26 @@ pub struct State {
     shm: ShmState,
     xdg: XdgShellState,
     seats: SeatState<Self>,
+    /// Mapped desktop windows and outputs.
     pub space: Space<Window>,
+    /// Tracked popup surfaces and grabs.
     pub popups: PopupManager,
+    /// Client-visible input seat.
     pub seat: Seat<Self>,
+    /// Persistent keyboard handle.
+    pub keyboard: smithay::input::keyboard::KeyboardHandle<Self>,
+    /// Persistent pointer handle.
+    pub pointer_handle: smithay::input::pointer::PointerHandle<Self>,
+    /// Current logical pointer position.
     pub pointer: Point<f64, Logical>,
+    /// Whether the pointer is inside the host window.
     pub pointer_inside: bool,
+    /// Current interactive operation.
     pub drag: Option<Drag>,
 }
+
 impl State {
+    /// Create initialized state.
     pub fn new(dh: DisplayHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let compositor = CompositorState::new::<Self>(&dh);
         let shm = ShmState::new::<Self>(&dh, vec![]);
@@ -62,7 +89,7 @@ impl State {
         OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(&dh, "mimshel");
-        seat.add_keyboard(
+        let keyboard = seat.add_keyboard(
             smithay::input::keyboard::XkbConfig {
                 layout: "us,ru",
                 options: Some("grp:alt_shift_toggle".into()),
@@ -71,7 +98,7 @@ impl State {
             600,
             25,
         )?;
-        seat.add_pointer();
+        let pointer_handle = seat.add_pointer();
         Ok(Self {
             model: crate::model::Model::new(1280, 800),
             windows: Vec::new(),
@@ -87,28 +114,34 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             seat,
+            keyboard,
+            pointer_handle,
             pointer: (0.0, 0.0).into(),
             pointer_inside: false,
             drag: None,
         })
     }
+
+    /// Publish policy activation and keyboard focus to clients.
     pub fn sync_focus(&mut self) {
         for (id, window) in &self.windows {
             window.set_activated(self.model.focus == Some(*id));
-            window.toplevel().unwrap().send_pending_configure();
+            if let Some(top) = window.toplevel() {
+                top.send_pending_configure();
+            }
         }
         let focus = self
             .windows
             .iter()
             .find(|(id, _)| Some(*id) == self.model.focus)
-            .map(|(_, w)| w.toplevel().unwrap().wl_surface().clone());
-        self.seat.get_keyboard().unwrap().set_focus(
-            self,
-            focus,
-            smithay::utils::SERIAL_COUNTER.next_serial(),
-        );
+            .and_then(|(_, w)| w.toplevel().map(|top| top.wl_surface().clone()));
+        self.keyboard
+            .clone()
+            .set_focus(self, focus, smithay::utils::SERIAL_COUNTER.next_serial());
         self.dirty = true;
     }
+
+    /// Remove dead windows and clean protocol resources.
     pub fn refresh(&mut self) {
         use smithay::utils::IsAlive;
         let dead: Vec<_> = self
@@ -128,6 +161,8 @@ impl State {
             self.sync_focus();
         }
     }
+
+    /// Apply the policy stack and positions to the desktop space.
     pub fn sync_positions(&mut self) {
         // map_element also raises; replay the model stack, not creation order.
         for record in &self.model.windows {
@@ -138,6 +173,8 @@ impl State {
         }
         self.dirty = true;
     }
+
+    /// Constrain a popup to the logical output bounds.
     fn popup_geometry(
         &self,
         surface: &PopupSurface,
@@ -149,7 +186,7 @@ impl State {
         let origin = self
             .windows
             .iter()
-            .find(|(_, w)| Some(w.toplevel().unwrap().wl_surface()) == root.as_ref())
+            .find(|(_, w)| w.toplevel().map(|top| top.wl_surface()) == root.as_ref())
             .and_then(|(id, _)| self.model.rect(*id))
             .map(|r| Point::from((r.x, r.y)))
             .unwrap_or_default();
@@ -160,6 +197,8 @@ impl State {
             (area.width, area.height).into(),
         ))
     }
+
+    /// Find the surface and origin under the pointer.
     pub fn surface_under(&self) -> Option<(WlSurface, Point<f64, Logical>)> {
         self.space
             .element_under(self.pointer)
@@ -170,24 +209,31 @@ impl State {
     }
 }
 
+/// Per-client Wayland compositor protocol data.
 #[derive(Default)]
 pub struct ClientState {
     compositor: CompositorClientState,
 }
+
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
     fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
 }
+
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor
     }
+
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client
+        // Foreign client data still needs a valid compositor state reference.
+        static FALLBACK: std::sync::OnceLock<CompositorClientState> = std::sync::OnceLock::new();
+        client
             .get_data::<ClientState>()
-            .expect("compositor client data")
-            .compositor
+            .map(|data| &data.compositor)
+            .unwrap_or_else(|| FALLBACK.get_or_init(CompositorClientState::default))
     }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         self.dirty = true;
@@ -204,11 +250,13 @@ impl CompositorHandler for State {
             if let Some(index) = self
                 .pending
                 .iter()
-                .position(|w| w.toplevel().unwrap().wl_surface() == &root)
+                .position(|w| w.toplevel().is_some_and(|top| top.wl_surface() == &root))
             {
                 let window = self.pending[index].clone();
                 window.on_commit();
-                let top = window.toplevel().unwrap();
+                let Some(top) = window.toplevel() else {
+                    return;
+                };
                 if !top.is_initial_configure_sent() {
                     top.send_configure();
                 }
@@ -216,7 +264,9 @@ impl CompositorHandler for State {
                     self.pending.remove(index);
                     let size = window.geometry().size;
                     let id = self.model.open(size.w, size.h);
-                    let rect = self.model.rect(id).unwrap();
+                    let Some(rect) = self.model.rect(id) else {
+                        return;
+                    };
                     self.space
                         .map_element(window.clone(), (rect.x, rect.y), false);
                     self.windows.push((id, window));
@@ -225,13 +275,15 @@ impl CompositorHandler for State {
             } else if let Some(index) = self
                 .windows
                 .iter()
-                .position(|(_, w)| w.toplevel().unwrap().wl_surface() == &root)
+                .position(|(_, w)| w.toplevel().is_some_and(|top| top.wl_surface() == &root))
             {
                 let (id, window) = self.windows[index].clone();
                 window.on_commit();
                 if buffered {
                     let size = window.geometry().size;
-                    let mut rect = self.model.rect(id).unwrap();
+                    let Some(mut rect) = self.model.rect(id) else {
+                        return;
+                    };
                     rect.width = size.w;
                     rect.height = size.h;
                     self.model.geometry(id, rect);
@@ -253,18 +305,22 @@ impl CompositorHandler for State {
         }
     }
 }
+
 impl BufferHandler for State {
     fn buffer_destroyed(&mut self, _: &WlBuffer) {}
 }
+
 impl ShmHandler for State {
     fn shm_state(&self) -> &ShmState {
         &self.shm
     }
 }
+
 impl XdgShellHandler for State {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg
     }
+
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let area = self.model.area;
         surface.with_pending_state(|s| {
@@ -286,6 +342,7 @@ impl XdgShellHandler for State {
             self.sync_focus();
         }
     }
+
     fn move_request(
         &mut self,
         surface: ToplevelSurface,
@@ -294,6 +351,7 @@ impl XdgShellHandler for State {
     ) {
         self.client_drag(surface, seat, serial, None);
     }
+
     fn resize_request(
         &mut self,
         surface: ToplevelSurface,
@@ -314,6 +372,7 @@ impl XdgShellHandler for State {
             eprintln!("popup: {error}");
         }
     }
+
     fn reposition_request(
         &mut self,
         surface: PopupSurface,
@@ -327,6 +386,7 @@ impl XdgShellHandler for State {
         });
         surface.send_repositioned(token);
     }
+
     fn grab(
         &mut self,
         surface: PopupSurface,
@@ -341,8 +401,8 @@ impl XdgShellHandler for State {
         let Ok(root) = find_popup_root_surface(&kind) else {
             return;
         };
-        let pointer = self.seat.get_pointer().unwrap();
-        let keyboard = self.seat.get_keyboard().unwrap();
+        let pointer = self.pointer_handle.clone();
+        let keyboard = self.keyboard.clone();
         if !pointer.has_grab(serial) && !keyboard.has_grab(serial) {
             return;
         }
@@ -358,6 +418,7 @@ impl XdgShellHandler for State {
         }
     }
 }
+
 impl SeatHandler for State {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
@@ -365,8 +426,10 @@ impl SeatHandler for State {
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seats
     }
+
     fn cursor_image(&mut self, _: &Seat<Self>, _: smithay::input::pointer::CursorImageStatus) {}
 }
+
 impl OutputHandler for State {}
 smithay::delegate_compositor!(State);
 smithay::delegate_shm!(State);
@@ -378,6 +441,7 @@ impl smithay::wayland::dmabuf::DmabufHandler for State {
     fn dmabuf_state(&mut self) -> &mut smithay::wayland::dmabuf::DmabufState {
         &mut self.dmabuf
     }
+
     fn dmabuf_imported(
         &mut self,
         _: &smithay::wayland::dmabuf::DmabufGlobal,

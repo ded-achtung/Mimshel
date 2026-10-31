@@ -1,26 +1,45 @@
 //! Window policy, independent of the display protocol. Stack order is bottom to top.
+
+/// Stable identity of a mapped policy window.
 pub type WindowId = u64;
+
+/// Logical window or output geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
+    /// Horizontal origin.
     pub x: i32,
+    /// Vertical origin.
     pub y: i32,
+    /// Logical width.
     pub width: i32,
+    /// Logical height.
     pub height: i32,
 }
+
+/// A window and its policy geometry.
 #[derive(Clone, Debug)]
 pub struct Window {
+    /// Stable policy identity.
     pub id: WindowId,
+    /// Current logical geometry.
     pub rect: Rect,
 }
+
+/// Window stack, focus, and output placement policy.
 #[derive(Debug)]
 pub struct Model {
+    /// Mapped windows in stack or creation order.
     pub windows: Vec<Window>,
+    /// Focused policy window.
     pub focus: Option<WindowId>,
+    /// Available logical output bounds.
     pub area: Rect,
     next: WindowId,
     cascade: usize,
 }
+
 impl Model {
+    /// Create initialized state.
     pub fn new(width: i32, height: i32) -> Self {
         Self {
             windows: Vec::new(),
@@ -35,6 +54,8 @@ impl Model {
             cascade: 0,
         }
     }
+
+    /// Place and focus a new window.
     pub fn open(&mut self, width: i32, height: i32) -> WindowId {
         self.next += 1;
         let width = width.max(1).min(self.area.width.max(1));
@@ -55,12 +76,16 @@ impl Model {
         self.focus = Some(self.next);
         self.next
     }
+
+    /// Remove a window and restore focus.
     pub fn close(&mut self, id: WindowId) {
         self.windows.retain(|w| w.id != id);
         if self.focus == Some(id) {
             self.focus = self.windows.last().map(|w| w.id);
         }
     }
+
+    /// Raise and focus an existing window.
     pub fn raise(&mut self, id: WindowId) {
         if let Some(index) = self.windows.iter().position(|w| w.id == id) {
             let window = self.windows.remove(index);
@@ -68,9 +93,13 @@ impl Model {
             self.focus = Some(id);
         }
     }
+
+    /// Find the current geometry of a window.
     pub fn rect(&self, id: WindowId) -> Option<Rect> {
         self.windows.iter().find(|w| w.id == id).map(|w| w.rect)
     }
+
+    /// Apply window geometry with minimum size and top bounds.
     pub fn geometry(&mut self, id: WindowId, mut rect: Rect) {
         rect.y = rect.y.max(self.area.y);
         rect.width = rect.width.max(1);
@@ -79,6 +108,8 @@ impl Model {
             w.rect = rect;
         }
     }
+
+    /// Update output bounds and keep window origins visible.
     pub fn resize_output(&mut self, width: i32, height: i32) {
         self.area.width = width.max(1);
         self.area.height = height.max(1);
@@ -94,6 +125,7 @@ impl Model {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

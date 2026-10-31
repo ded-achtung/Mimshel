@@ -11,6 +11,9 @@ workspace = true
 [dependencies]
 smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend", "desktop", "renderer_gl", "use_system_lib"] }
 
+# Enable signals on the same calloop instance re-exported by Smithay.
+calloop = { version = "0.14", features = ["signals"] }
+
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }

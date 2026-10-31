@@ -1,10 +1,14 @@
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 fn main() -> Result<(), mimshel_compositor::Error> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new("--nested")) {
         return Err("usage: mimshel-compositor --nested [-- COMMAND…]".into());
     }
     let remaining: Vec<_> = args.collect();
-    if !remaining.is_empty() && remaining[0] != "--" {
+    if remaining.first().is_some_and(|arg| arg != "--") {
         return Err("expected -- before command".into());
     }
     if std::env::var_os("DISPLAY").is_none() {

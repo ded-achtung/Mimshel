@@ -1,3 +1,5 @@
+//! Host input forwarding and validated client move and resize requests.
+
 use crate::state::{Drag, State};
 use smithay::reexports::wayland_server::Resource;
 use smithay::{
@@ -13,9 +15,10 @@ use smithay::{
 };
 
 impl State {
+    /// Forward host input and update focus and interactive drags.
     pub fn input<I: InputBackend>(&mut self, event: InputEvent<I>, size: Size<i32, Logical>) {
-        let pointer = self.seat.get_pointer().unwrap();
-        let keyboard = self.seat.get_keyboard().unwrap();
+        let pointer = self.pointer_handle.clone();
+        let keyboard = self.keyboard.clone();
         match event {
             InputEvent::Keyboard { event, .. } => {
                 keyboard.input::<(), _>(
@@ -56,7 +59,9 @@ impl State {
                     && let Some(drag) = self.drag.take()
                 {
                     if drag.edges.is_some() {
-                        let top = drag.window.toplevel().unwrap();
+                        let Some(top) = drag.window.toplevel() else {
+                            return;
+                        };
                         top.with_pending_state(|s| { s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing); });
                         top.send_pending_configure();
                     }
@@ -75,7 +80,9 @@ impl State {
                         }
                         self.space.raise_element(&window, true);
                         if event.button_code() == 0x110 && keyboard.modifier_state().logo {
-                            let origin = self.space.element_location(&window).unwrap();
+                            let Some(origin) = self.space.element_location(&window) else {
+                                return;
+                            };
                             self.drag = Some(Drag {
                                 size: (window.geometry().size.w, window.geometry().size.h),
                                 edges: None,
@@ -124,9 +131,11 @@ impl State {
             _ => {}
         }
     }
+
+    /// Release held keys and cancel interactive operations.
     pub fn host_focus_lost(&mut self) {
         // Smithay's winit adapter discards synthetic key releases on focus loss.
-        let keyboard = self.seat.get_keyboard().unwrap();
+        let keyboard = self.keyboard.clone();
         for key in keyboard.pressed_keys() {
             keyboard.input::<(), _>(
                 self,
@@ -140,6 +149,8 @@ impl State {
         self.drag = None;
         self.pointer_inside = false;
     }
+
+    /// Validate a client grab before beginning a move or resize.
     pub fn client_drag(
         &mut self,
         surface: smithay::wayland::shell::xdg::ToplevelSurface,
@@ -152,7 +163,7 @@ impl State {
         if smithay::input::Seat::from_resource(&seat).as_ref() != Some(&self.seat) {
             return;
         }
-        let pointer = self.seat.get_pointer().unwrap();
+        let pointer = self.pointer_handle.clone();
         if !pointer.has_grab(serial) {
             return;
         }
@@ -171,15 +182,20 @@ impl State {
             .iter()
             .find(|(_, w)| w.toplevel() == Some(&surface))
         {
+            let Some(origin) = self.space.element_location(window) else {
+                return;
+            };
             self.drag = Some(Drag {
                 window: window.clone(),
-                origin: self.space.element_location(window).unwrap(),
+                origin,
                 start: start.location,
                 size: (window.geometry().size.w, window.geometry().size.h),
                 edges,
             });
         }
     }
+
+    /// Apply pointer movement to the active window operation.
     fn update_drag(&mut self, drag: Drag) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{
             ResizeEdge, State as XdgState,
@@ -232,11 +248,15 @@ impl State {
             if bottom {
                 r.height = (r.height + delta.y).max(1);
             }
-            drag.window.toplevel().unwrap().with_pending_state(|s| {
+            let Some(top) = drag.window.toplevel() else {
+                self.drag = None;
+                return;
+            };
+            top.with_pending_state(|s| {
                 s.size = Some((r.width, r.height).into());
                 s.states.set(XdgState::Resizing);
             });
-            drag.window.toplevel().unwrap().send_pending_configure();
+            top.send_pending_configure();
         } else {
             r.x += delta.x;
             r.y += delta.y;
