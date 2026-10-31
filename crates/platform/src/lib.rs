@@ -113,3 +113,16 @@ pub enum Event {
     KeyboardLayouts,
     Other,
 }
+
+/// What is under the pointer during a file drag.
+/// Wayland: target state from `wl_data_device` / `wl_data_source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DragTarget {
+    /// The source surface itself, where icons can be rearranged.
+    #[default]
+    Own,
+    /// A program window that may accept files.
+    App { accepts: bool },
+    /// A surface that does not accept files.
+    Nothing,
+}

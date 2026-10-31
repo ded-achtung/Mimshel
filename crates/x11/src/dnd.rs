@@ -24,7 +24,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use crate::{Display, Event, Result};
+use crate::{Display, DragTarget, Event, Result};
 
 /// Версия протокола, которую понимаем.
 const VERSION: u32 = 5;
@@ -67,18 +67,6 @@ pub(crate) struct DropState {
     can_move: bool,
     /// Тащим мы сами — со стола.
     out: DragOut,
-}
-
-/// Что под указателем, пока тащим значки со стола.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DragTarget {
-    /// Сам стол — значки переставляются по нему.
-    #[default]
-    Own,
-    /// Окно программы, принимающей файлы; `accepts` — согласна ли взять.
-    App { accepts: bool },
-    /// Окно, которое файлы не принимает (док, строка меню…).
-    Nothing,
 }
 
 /// Перетаскивание со стола в другую программу.
