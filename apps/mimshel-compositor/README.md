@@ -39,3 +39,41 @@ cargo test -p mimshel-compositor --test headless --no-run --locked
 xvfb-run -a target/debug/mimshel-compositor --nested -- \
   target/debug/deps/headless-HASH --exact nested_client --ignored --nocapture
 ```
+
+## Validation (2026-10-31, sandbox)
+
+All requested checks passed with Rust 1.99.1:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `xvfb-run -a cargo test --workspace --locked`
+- `xvfb-run -a cargo test -p mimshel-x11 --test windows --locked -- --ignored`
+- `cargo deny --locked check` (cargo-deny 0.20.2)
+
+The license allow list is unchanged. Smithay 0.7.0 requires the unmaintained
+`cgmath` crate; `deny.toml` documents a narrow exception for RUSTSEC-2026-0196,
+which reports no vulnerability and has no safe upgrade for this dependency.
+No existing dependency version was removed or upgraded.
+
+Nested smoke runs used Xvfb, Mesa llvmpipe, the debug binary, and first a pair
+of real shm clients, then kitty 0.32.2. Missing host libraries and kitty were
+extracted from Ubuntu packages into `/tmp`, without changing the system.
+A private D-Bus session and writable temporary shader cache were provided.
+Verified the two-window image, Super + drag, kitty's own title-bar move
+request and bottom-right resize request (640x400 -> 730x450), and normal
+host-window shutdown (exit 0). A terminal command received `hello` and then
+`ф` after Alt + Shift and the physical A key. The existing `wayland-1` file
+was preserved; the compositor selected `wayland-2`.
+
+With kitty's cursor blink disabled, a 60-second idle interval added **zero
+frames** (6 -> 6) and zero process CPU ticks. PSS stayed at 83,534–83,535 KiB,
+with 11 threads and 27 open file descriptors throughout. No periodic timer
+is registered by the compositor.
+
+In that software-rendered run, initial frame times were 73.7 and 53.1 ms;
+later active frames were 3.7–20.6 ms, with a 31.3 ms movement spike. These
+include GPU/software-renderer completion and exclude presentation waiting.
+This is not a measurement of the laptop's 2–3 ms hardware frame budget.
+The Xvfb EGL implementation lacks `EGL_WL_bind_wayland_display`; the server
+continued with shm/dmabuf protocols. Hardware dmabuf import and rendering,
+real Radeon performance, and the laptop session still need a live check.
