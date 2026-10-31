@@ -28,9 +28,8 @@ use mimshel_menubar::{
 };
 use mimshel_text::Fonts;
 use mimshel_widgets::{Menu, MenuEntry, MenuResult};
-use mimshel_x11::Key;
-use mimshel_x11::{Display, DockWindow, Event, Popup, Property};
 
+use crate::platform::{Display, Event, Key, Panel, Popup, Property};
 use crate::status::{self, Audio, ControlRequest, NetCmd};
 use crate::ui::{Msg, Result};
 
@@ -92,7 +91,7 @@ enum DragFrom {
 const DRAG_START: i32 = 6;
 
 pub struct MenubarUi {
-    window: DockWindow,
+    window: Panel,
     bar: Bar,
     /// Все ярлыки — узнавать программу по окну.
     apps: Vec<App>,
@@ -203,7 +202,7 @@ impl MenubarUi {
     pub fn new(d: &Display, config: &Config, apps: Vec<App>, tx: Sender<Msg>) -> Result<MenubarUi> {
         let (_, _, area_w, _) = d.primary_area();
         let mut ui = MenubarUi {
-            window: d.create_dock("menubar")?,
+            window: d.create_panel("menubar")?,
             bar: Bar::new(area_w, config.menubar_height, &config.menu_icon),
             apps,
             layouts: Vec::new(),
@@ -260,7 +259,7 @@ impl MenubarUi {
             tx: tx.clone(),
             language: config.language,
         };
-        d.watch_root()?;
+        d.watch_desktop()?;
         d.watch_keyboard()?;
         ui.read_layouts(d);
         ui.bar.app_name = ui.app_name(d);
@@ -497,9 +496,9 @@ impl MenubarUi {
             | Event::Expose { window } => window == self.window.id() || window == self.popup.id(),
             Event::Key(_) => self.popup_open(),
             Event::Property { window, what } => {
-                window == d.root() && what == Property::ActiveWindow
+                d.is_screen(window) && what == Property::ActiveWindow
             }
-            Event::Configure { window } => window == d.root(),
+            Event::Configure { window } => d.is_screen(window),
             Event::KeyboardGroup(_) | Event::KeyboardLayouts => true,
             _ => false,
         }
@@ -1457,7 +1456,7 @@ impl MenubarUi {
         if d.window_info(w).is_some_and(|i| is_desktop(&i)) {
             return;
         }
-        let text = |name: &str| d.window_text(w, name);
+        let text = |name: &str| d.window_menu_property(w, name);
         let source = match (
             text("_GTK_UNIQUE_BUS_NAME"),
             text("_GTK_MENUBAR_OBJECT_PATH"),
@@ -1683,7 +1682,7 @@ impl MenubarUi {
         // only this monitor's columns.
         let (x0, top) = (ax.max(0) as u32, ay.max(0) as u32 + h);
         self.window
-            .set_strut_top(d, top, x0, x0 + self.bar.width.saturating_sub(1))?;
+            .reserve_top(d, top, x0, x0 + self.bar.width.saturating_sub(1))?;
         self.dirty = true;
         Ok(())
     }

@@ -421,7 +421,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     // Xfce (`MIMSHEL_MENUBAR=1` — включить для проверки, не трогая настройки).
     let menubar = if daemon && (config.menubar || mimshel_core::names::flag("MENUBAR")) {
         Some(MenubarUi::new(
-            display,
+            &platform,
             &config,
             all_apps.clone(),
             tx.clone(),
@@ -606,7 +606,7 @@ impl Ui<'_> {
             folders.close_popups(self.display)?;
         }
         if let Some(menubar) = &mut self.menubar {
-            menubar.close_popup(self.display)?;
+            menubar.close_popup(self.platform)?;
         }
         if let Some(notify) = &mut self.notify {
             notify.close_center(self.platform)?;
@@ -744,7 +744,7 @@ impl Ui<'_> {
         }
         let folders_time = t.elapsed();
         if let Some(menubar) = &mut self.menubar {
-            menubar.flush(self.display, &mut self.fonts, &mut self.icons)?;
+            menubar.flush(self.platform, &mut self.fonts, &mut self.icons)?;
         }
         if let Some(notify) = &mut self.notify {
             notify.flush(self.platform, &mut self.fonts)?;
@@ -837,7 +837,7 @@ impl Ui<'_> {
         self.search.set_apps(apps.clone());
         self.apps_panel.set_apps(apps);
         if let Some(menubar) = &mut self.menubar {
-            menubar.set_apps(self.display, all.clone());
+            menubar.set_apps(self.platform, all.clone());
         }
         if let Some(notify) = &mut self.notify {
             notify.set_apps(all.clone());
@@ -966,12 +966,12 @@ impl Ui<'_> {
                 Ok(())
             }
             Msg::AppMenu(update) => match &mut self.menubar {
-                Some(menubar) => menubar.app_menu_update(self.display, &mut self.fonts, update),
+                Some(menubar) => menubar.app_menu_update(self.platform, &mut self.fonts, update),
                 None => Ok(()),
             },
             Msg::Tray(update) => match &mut self.menubar {
                 Some(menubar) => {
-                    menubar.tray_update(self.display, &mut self.fonts, &mut self.icons, update)
+                    menubar.tray_update(self.platform, &mut self.fonts, &mut self.icons, update)
                 }
                 None => Ok(()),
             },
@@ -1012,7 +1012,7 @@ impl Ui<'_> {
                 && menubar.popup_open()
                 && !on_menubar
             {
-                menubar.close_popup(self.display)?;
+                menubar.close_popup(self.platform)?;
             }
             // Щелчок по строке меню центр не закрывает: колокольчик сам его
             // открывает и закрывает.
@@ -1035,9 +1035,9 @@ impl Ui<'_> {
         }
         if let Some(menubar) = &mut self.menubar
             && !to_panel
-            && menubar.wants(self.display, &ev)
+            && menubar.wants(self.platform, &ev)
         {
-            menubar.event(self.display, &mut self.fonts, ev)?;
+            menubar.event(self.platform, &mut self.fonts, ev)?;
             handled = true;
         }
         if let Some(dock) = &mut self.dock

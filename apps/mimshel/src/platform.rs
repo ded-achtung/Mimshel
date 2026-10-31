@@ -9,6 +9,7 @@
 //! what a moved part uses is here: a part that moves adds its methods.
 //! Parts move over one at a time; until then they use [`Display::x11`].
 
+pub use mimshel_core::windows::WindowInfo;
 pub use mimshel_platform::{Event, Key, Property, Result};
 use mimshel_render::Image;
 
@@ -51,8 +52,8 @@ impl Display {
     }
 
     /// The window that has keyboard focus, if it is one of ours or a
-    /// program's. Wayland: our compositor knows; a part only compares it
-    /// with its own windows.
+    /// program's. Wayland: foreign-toplevel state from our compositor;
+    /// a part only compares it with its own windows.
     pub fn active_window(&self) -> Option<u32> {
         self.x11.active_window()
     }
@@ -70,7 +71,7 @@ impl Display {
     }
 
     /// Bring a window forward and give it keyboard focus. Wayland: an
-    /// activation request handled by our compositor.
+    /// activation request through foreign-toplevel management in our compositor.
     pub fn activate(&self, window: u32) -> Result<()> {
         self.x11.activate(window)
     }
@@ -118,10 +119,108 @@ impl Display {
         Ok(Popup(self.x11.create_popup(name)?))
     }
 
+    /// A strip at a screen edge. Wayland: a layer-shell surface.
+    pub fn create_panel(&self, name: &str) -> Result<Panel> {
+        Ok(Panel(self.x11.create_dock(name)?))
+    }
+
+    /// Whether an event concerns the whole screen / desktop state rather
+    /// than one window. Wayland: desktop/output state identified by our compositor.
+    pub fn is_screen(&self, window: u32) -> bool {
+        window == self.x11.root()
+    }
+
+    /// A program window's metadata. Wayland: ext-foreign-toplevel-list /
+    /// wlr-foreign-toplevel-management, implemented by our compositor.
+    pub fn window_info(&self, window: u32) -> Option<WindowInfo> {
+        self.x11.window_info(window)
+    }
+
+    /// Close a program window. Wayland: foreign-toplevel management.
+    pub fn close(&self, window: u32) -> Result<()> {
+        self.x11.close(window)
+    }
+
+    /// Minimize a program window. Wayland: foreign-toplevel management.
+    pub fn minimize(&self, window: u32) -> Result<()> {
+        self.x11.minimize(window)
+    }
+
+    /// Read an app-menu address property by name. X11 only; None on Wayland,
+    /// where GTK has no standard global menu (docs/wayland-plan.md).
+    pub fn window_menu_property(&self, window: u32, name: &str) -> Option<String> {
+        self.x11.window_text(window, name)
+    }
+
+    /// Watch layout/group changes. Wayland: the compositor's xkb keymap.
+    pub fn watch_keyboard(&self) -> Result<()> {
+        self.x11.watch_keyboard()
+    }
+
+    /// Layout names. Wayland: the compositor's xkb keymap.
+    pub fn keyboard_layouts(&self) -> Vec<String> {
+        self.x11.keyboard_layouts()
+    }
+
+    /// Current layout group. Wayland: the compositor's xkb keymap.
+    pub fn keyboard_group(&self) -> u8 {
+        self.x11.keyboard_group()
+    }
+
+    /// Select a layout group. Wayland: the compositor's xkb keymap.
+    pub fn set_keyboard_group(&self, group: u8) -> Result<()> {
+        self.x11.set_keyboard_group(group)
+    }
+
+    /// Keep pointer events during an icon drag. Wayland: an implicit grab
+    /// during the press or an xdg_popup grab.
+    pub fn grab_pointer_for_drag(&self, window: u32) -> Result<bool> {
+        self.x11.grab_pointer_for_drag(window)
+    }
+
+    /// Release the drag's pointer grab. Wayland: finish the implicit or popup grab.
+    pub fn ungrab_pointer(&self) -> Result<()> {
+        self.x11.ungrab_pointer()
+    }
+
     /// A picture of one of our windows as it is on screen, for tests.
     #[cfg(test)]
     pub fn capture_window(&self, window: u32) -> Option<tiny_skia::Pixmap> {
         self.x11.capture_window(window)
+    }
+}
+
+/// A strip at a screen edge that reserves space. Positions and sizes are
+/// in points. Wayland: a layer-shell surface with an exclusive zone.
+pub struct Panel(mimshel_x11::DockWindow);
+
+impl Panel {
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    pub fn show(&self, d: &Display) -> Result<()> {
+        self.0.show(&d.x11)
+    }
+
+    pub fn set_geometry(&self, d: &Display, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        self.0.set_geometry(&d.x11, x, y, w, h)
+    }
+
+    /// Set the input region in panel-local points. Wayland: a surface input region.
+    pub fn set_input(&self, d: &Display, rects: &[(i32, i32, u32, u32)]) -> Result<()> {
+        self.0.set_input(&d.x11, rects)
+    }
+
+    /// Reserve space from the screen's top over x_from..x_to, in points.
+    /// Wayland: a layer-shell surface with an exclusive zone.
+    pub fn reserve_top(&self, d: &Display, height: u32, x_from: u32, x_to: u32) -> Result<()> {
+        self.0.set_strut_top(&d.x11, height, x_from, x_to)
+    }
+
+    /// Show a picture the size of the panel, in pixels.
+    pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
+        self.0.present(&d.x11, image)
     }
 }
 
