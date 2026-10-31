@@ -40,6 +40,11 @@ impl Display {
         self.x11.scale()
     }
 
+    /// Convert points to pixels at the display's scale.
+    pub fn px(&self, points: u32) -> u32 {
+        self.x11.px(points)
+    }
+
     /// The whole screen in pixels. Wayland: the bounding box of the outputs.
     pub fn screen_size(&self) -> (u16, u16) {
         self.x11.screen_size()
@@ -136,6 +141,46 @@ impl Display {
         self.x11.window_info(window)
     }
 
+    /// List program windows. Wayland: ext-foreign-toplevel-list.
+    pub fn program_windows(&self) -> Vec<u32> {
+        self.x11.client_list()
+    }
+
+    /// A program window's title. Wayland: foreign-toplevel metadata.
+    pub fn window_title(&self, window: u32) -> String {
+        self.x11.window_title(window)
+    }
+
+    /// A program window's icon at the requested size in points.
+    /// Wayland: foreign-toplevel icon data from our compositor.
+    pub fn window_icon(&self, window: u32, size: u32) -> Option<tiny_skia::Pixmap> {
+        self.x11.window_icon(window, size)
+    }
+
+    /// A program window's rectangle on screen, including its frame, in points.
+    /// Wayland: our compositor knows the foreign toplevel's frame rectangle.
+    pub fn window_frame(&self, window: u32) -> Option<(i32, i32, u32, u32)> {
+        self.x11.frame_geometry(window)
+    }
+
+    /// Follow one program window's title, icon and state changes.
+    /// Wayland: foreign-toplevel updates from our compositor.
+    pub fn watch_window(&self, window: u32) -> Result<()> {
+        self.x11.watch_window(window)
+    }
+
+    /// Watch new program windows and their first frame.
+    /// Wayland: our compositor tells the shell directly.
+    pub fn watch_new_windows(&self) -> Result<()> {
+        self.x11.watch_new_windows()
+    }
+
+    /// How much longer to wait for a new window's first frame over a screen
+    /// rectangle in pixels. Wayland: our compositor tells the shell directly.
+    pub fn undrawn_over(&self, rect: (i32, i32, u32, u32)) -> Option<std::time::Duration> {
+        self.x11.undrawn_over(rect)
+    }
+
     /// Close a program window. Wayland: foreign-toplevel management.
     pub fn close(&self, window: u32) -> Result<()> {
         self.x11.close(window)
@@ -172,6 +217,12 @@ impl Display {
         self.x11.set_keyboard_group(group)
     }
 
+    /// Pointer position on screen, in points.
+    /// Wayland: our compositor tells the shell the pointer's position.
+    pub fn pointer_position(&self) -> Option<(i16, i16)> {
+        self.x11.pointer_position()
+    }
+
     /// Keep pointer events during an icon drag. Wayland: an implicit grab
     /// during the press or an xdg_popup grab.
     pub fn grab_pointer_for_drag(&self, window: u32) -> Result<bool> {
@@ -183,8 +234,8 @@ impl Display {
         self.x11.ungrab_pointer()
     }
 
-    /// A picture of one of our windows as it is on screen, for tests.
-    #[cfg(test)]
+    /// A picture of a window as it is on screen, for previews and tests.
+    /// Wayland: our compositor renders the window (screencopy).
     pub fn capture_window(&self, window: u32) -> Option<tiny_skia::Pixmap> {
         self.x11.capture_window(window)
     }
@@ -216,6 +267,19 @@ impl Panel {
     /// Wayland: a layer-shell surface with an exclusive zone.
     pub fn reserve_top(&self, d: &Display, height: u32, x_from: u32, x_to: u32) -> Result<()> {
         self.0.set_strut_top(&d.x11, height, x_from, x_to)
+    }
+
+    /// Reserve space from the screen's bottom over x_from..x_to, in points.
+    /// A height of 0 clears the reservation.
+    /// Wayland: a layer-shell surface with an exclusive zone.
+    pub fn reserve_bottom(&self, d: &Display, height: u32, x_from: u32, x_to: u32) -> Result<()> {
+        self.0.set_strut(&d.x11, height, x_from, x_to)
+    }
+
+    /// Show only columns `x0..x1` of a whole-panel picture, in pixels.
+    /// Wayland: update the surface buffer with damage for these columns.
+    pub fn present_columns(&self, d: &Display, image: &impl Image, x0: u32, x1: u32) -> Result<()> {
+        self.0.present_columns(&d.x11, image, x0, x1)
     }
 
     /// Show a picture the size of the panel, in pixels.

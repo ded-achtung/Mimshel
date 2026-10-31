@@ -19,8 +19,8 @@ use mimshel_dock::{
 };
 use mimshel_icons::Icons;
 use mimshel_text::Fonts;
-use mimshel_x11::{Display, DockWindow, Event, Popup, Property};
 
+use crate::platform::{Display, Event, Panel, Popup, Property};
 use crate::ui::{Msg, Result};
 
 /// Шаг анимации (~60 кадров в секунду).
@@ -34,7 +34,7 @@ const PREVIEW_DELAY: Duration = Duration::from_millis(500);
 const PREVIEW_CLOSE: Duration = Duration::from_millis(300);
 
 pub struct DockUi {
-    window: DockWindow,
+    window: Panel,
     dock: Dock,
     hide: DockHide,
     /// Окна программ, за которыми уже следим (свёрнуто, перемещение…).
@@ -95,7 +95,7 @@ impl DockUi {
             hide: config.dock_hide,
         };
         let mut ui = DockUi {
-            window: d.create_dock("dock")?,
+            window: d.create_panel("dock")?,
             dock: Dock::new(look, apps, config.dock_apps.clone(), area.2),
             hide: config.dock_hide,
             watched: HashSet::new(),
@@ -132,7 +132,7 @@ impl DockUi {
         ui.dock.set_language(config.language);
         ui.dock.set_trash(trash_full());
         watch_trash(ui.tx.clone());
-        d.watch_root()?;
+        d.watch_desktop()?;
         d.watch_new_windows()?;
         ui.place(d)?;
         ui.window.show(d)?;
@@ -192,7 +192,7 @@ impl DockUi {
             // Клавиатура у дока, только пока открыто меню.
             Event::Key(_) => self.menu.is_some(),
             Event::Property { window, .. } | Event::Configure { window } => {
-                window == d.root() || self.watched.contains(&window)
+                d.is_screen(window) || self.watched.contains(&window)
             }
             _ => false,
         }
@@ -290,7 +290,7 @@ impl DockUi {
             Event::Expose { .. } => {}
             // A new window drew for the first time: it may slide the dock away now.
             Event::Drawn { .. } => self.update_hide(d),
-            Event::Configure { window } if window == d.root() => {
+            Event::Configure { window } if d.is_screen(window) => {
                 self.area = d.primary_area();
                 self.dock.set_screen_width(self.area.2);
                 self.place(d)?;
@@ -808,11 +808,14 @@ impl DockUi {
     /// Re-read the window list; `changed` — a window whose title, state or
     /// class changed and must be read again (new windows always are).
     fn refresh_windows(&mut self, d: &Display, changed: Option<u32>) {
-        // Своё окно дока тоже в списке (оно управляемое) — пропускаем: подписка
-        // на изменения заменила бы его собственный набор событий, и док
-        // перестал бы получать движение указателя.
+        // Our managed dock window is also in the list: skip it so watching
+        // program windows does not disturb its own pointer events.
         let own = self.window.id();
-        let list: Vec<u32> = d.client_list().into_iter().filter(|&w| w != own).collect();
+        let list: Vec<u32> = d
+            .program_windows()
+            .into_iter()
+            .filter(|&w| w != own)
+            .collect();
         self.watched.retain(|w| list.contains(w));
         self.known.retain(|w, _| list.contains(w));
         let mut infos = Vec::new();
@@ -859,7 +862,7 @@ impl DockUi {
             if info.minimized {
                 return None;
             }
-            let (x, y, ww, hh) = d.frame_geometry(w)?;
+            let (x, y, ww, hh) = d.window_frame(w)?;
             Some((Rect { x, y, w: ww, h: hh }, info.maximized))
         });
         // Пока тащат значок или открыто меню или миниатюры, док не прячется.
@@ -927,7 +930,7 @@ impl DockUi {
         let h = self.dock.window_height();
         self.window
             .set_geometry(d, ax, ay + ah as i32 - h as i32, aw, h)?;
-        self.window.set_strut(d, 0, 0, 0)?;
+        self.window.reserve_bottom(d, 0, 0, 0)?;
         Ok(())
     }
 

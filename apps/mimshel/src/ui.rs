@@ -22,13 +22,13 @@ use mimshel_launcher::{Action, AppsPanel, Grid, SearchPanel, backdrop};
 use mimshel_render::Canvas;
 use mimshel_text::Fonts;
 use mimshel_x11::{Display, Event, Key, KeyPress, Popup};
+use tiny_skia::Pixmap;
 
 use crate::desktop_ui::DesktopUi;
 use crate::dock_ui::DockUi;
 use crate::folder_ui::FolderUi;
 use crate::menubar_ui::MenubarUi;
 use crate::notify_ui::NotifyUi;
-use tiny_skia::Pixmap;
 
 pub(crate) type Result<T> = mimshel_x11::Result<T>;
 
@@ -457,7 +457,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     }
     // Свой док — только у службы и только если он выбран вместо Plank.
     let dock = if daemon && config.dock {
-        let dock = DockUi::new(display, &config, all_apps, tx.clone())?;
+        let dock = DockUi::new(&platform, &config, all_apps, tx.clone())?;
         dock.preload(&mut icons);
         Some(dock)
     } else {
@@ -597,7 +597,7 @@ struct Ui<'a> {
 impl Ui<'_> {
     fn toggle(&mut self, panel: Panel) -> Result<()> {
         if let Some(dock) = &mut self.dock {
-            dock.close_popups(self.display)?;
+            dock.close_popups(self.platform)?;
         }
         if let Some(desktop) = &mut self.desktop {
             desktop.close_popups(self.display)?;
@@ -755,7 +755,7 @@ impl Ui<'_> {
         }
         let bar_time = t.elapsed();
         if let Some(dock) = &mut self.dock {
-            dock.flush(self.display, &mut self.fonts, &mut self.icons)?;
+            dock.flush(self.platform, &mut self.fonts, &mut self.icons)?;
         }
         let dock_time = t.elapsed();
         if let Some(desktop) = &mut self.desktop {
@@ -843,7 +843,7 @@ impl Ui<'_> {
             notify.set_apps(all.clone());
         }
         if let Some(dock) = &mut self.dock {
-            dock.set_apps(self.display, all);
+            dock.set_apps(self.platform, all);
         }
         if self.shown.is_some() {
             self.redraw()?;
@@ -928,7 +928,7 @@ impl Ui<'_> {
             },
             Msg::Trash(full) => {
                 if let Some(dock) = &mut self.dock {
-                    dock.set_trash(self.display, full)?;
+                    dock.set_trash(self.platform, full)?;
                 }
                 Ok(())
             }
@@ -1042,9 +1042,9 @@ impl Ui<'_> {
         }
         if let Some(dock) = &mut self.dock
             && !to_panel
-            && dock.wants(self.display, &ev)
+            && dock.wants(self.platform, &ev)
         {
-            dock.event(self.display, &mut self.fonts, ev)?;
+            dock.event(self.platform, &mut self.fonts, ev)?;
             handled = true;
         }
         if let Some(desktop) = &mut self.desktop

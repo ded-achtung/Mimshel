@@ -1,10 +1,10 @@
 //! Service-owned transfer window; progress and drawing live outside X11.
 
-use crate::platform::{AppWindow, Display, Event, Key, Result};
 use mimshel_core::i18n::{Language, t};
 use mimshel_folder::transfer::{self, Phase, Row};
 use mimshel_text::Fonts;
 
+use crate::platform::{AppWindow, Display, Event, Key, Result};
 use crate::transfer_job::Handle;
 
 pub struct TransferUi {
