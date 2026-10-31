@@ -63,6 +63,22 @@ impl Display {
         self.x11.activate(window)
     }
 
+    /// Find an already running app window by its class and try to raise it.
+    /// Return whether it was found, even if activation failed. Wayland: find
+    /// the single instance through our socket and ask it to activate its window.
+    pub fn raise_app_window(&self, class: &str) -> bool {
+        let open = self
+            .x11
+            .client_list()
+            .into_iter()
+            .find(|&w| self.x11.window_info(w).is_some_and(|i| i.instance == class));
+        if let Some(w) = open {
+            let _ = self.x11.activate(w);
+            return true;
+        }
+        false
+    }
+
     /// An ordinary titled window with a frame from the window manager
     /// (`class` names it for the window manager, `min` is its smallest
     /// size, both in points). Wayland: an `xdg_toplevel`.
@@ -114,6 +130,17 @@ impl AppWindow {
     /// Show a picture the size of the window, in pixels.
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
         self.0.present(&d.x11, image)
+    }
+
+    /// Update only `(x0, y0, x1, y1)` pixels of a whole-window picture.
+    /// Wayland: update the surface buffer with damage for this rectangle.
+    pub fn present_rect(
+        &self,
+        d: &Display,
+        image: &impl Image,
+        rect: (u32, u32, u32, u32),
+    ) -> Result<()> {
+        self.0.present_rect(&d.x11, image, rect)
     }
 
     pub fn destroy(&self, d: &Display) -> Result<()> {

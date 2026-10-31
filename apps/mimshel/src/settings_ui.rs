@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
+use crate::platform::{Display, Event};
 use mimshel_core::i18n::{Language, t};
 use mimshel_icons::Icons;
 use mimshel_settings::{Action, Env, LINKS, SettingsView, view};
 use mimshel_setup::themes;
 use mimshel_text::Fonts;
-use mimshel_x11::{Display, Event};
 use tiny_skia::Pixmap;
 
 use crate::settings_system as system;
@@ -72,12 +72,7 @@ pub fn run(page: Option<&str>) -> i32 {
         }
     };
     // Already open: bring that window forward instead of a second one.
-    let open = d
-        .client_list()
-        .into_iter()
-        .find(|&w| d.window_info(w).is_some_and(|i| i.instance == WINDOW_CLASS));
-    if let Some(w) = open {
-        let _ = d.activate(w);
+    if d.raise_app_window(WINDOW_CLASS) {
         return 0;
     }
     match window(&d, config, page) {
@@ -93,7 +88,7 @@ fn window(
     d: &Arc<Display>,
     config: mimshel_core::config::Config,
     page: Option<&str>,
-) -> mimshel_x11::Result<()> {
+) -> crate::platform::Result<()> {
     let lang = config.language;
     let outputs = displays::outputs();
     let mut view = SettingsView::new(lang, all_values(&config), env(&config, &outputs));
@@ -506,7 +501,7 @@ fn clock_samples(formats: &[String], lang: Language) -> Vec<String> {
 }
 
 /// `mimshel snapshot settings PAGE FILE.png`: the window as a picture.
-pub fn snapshot(page: &str, file: &str) -> mimshel_x11::Result<()> {
+pub fn snapshot(page: &str, file: &str) -> crate::platform::Result<()> {
     let config = load_config();
     let mut view = SettingsView::new(
         config.language,
