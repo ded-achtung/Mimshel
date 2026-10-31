@@ -14,9 +14,10 @@ mod shm;
 mod windows;
 
 pub use app_window::AppWindow;
-pub use clipboard::{clipboard_files, clipboard_text, copy_files, copy_text, percent_decode};
+pub use clipboard::{clipboard_files, clipboard_text, copy_files, copy_text};
 pub use desktop::DesktopWindow;
 pub use dock::DockWindow;
+pub use mimshel_core::uri::percent_decode;
 pub use mimshel_platform::DragTarget;
 pub use selection::SelectionRenderer;
 

@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use mimshel_core::uri::percent_decode;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
@@ -365,26 +366,6 @@ pub(crate) fn percent_encode(path: &str) -> String {
         }
     }
     out
-}
-
-/// `%D0%9F` → байты UTF-8.
-pub fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
-        {
-            out.push(b);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
