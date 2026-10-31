@@ -436,7 +436,7 @@ pub fn run(once: Option<Panel>) -> Result<()> {
             crate::status::watch_dnd(tx.clone());
         }
         Some(NotifyUi::new(
-            display,
+            &platform,
             all_apps.clone(),
             config.menubar_height,
             true,
@@ -609,7 +609,7 @@ impl Ui<'_> {
             menubar.close_popup(self.display)?;
         }
         if let Some(notify) = &mut self.notify {
-            notify.close_center(self.display)?;
+            notify.close_center(self.platform)?;
         }
         let was = self.shown;
         if was.is_some() {
@@ -747,7 +747,7 @@ impl Ui<'_> {
             menubar.flush(self.display, &mut self.fonts, &mut self.icons)?;
         }
         if let Some(notify) = &mut self.notify {
-            notify.flush(self.display, &mut self.fonts)?;
+            notify.flush(self.platform, &mut self.fonts)?;
             // Колокольчик в строке меню подсвечен, пока открыт центр уведомлений.
             if let Some(menubar) = &mut self.menubar {
                 menubar.set_center_open(notify.center_open());
@@ -923,7 +923,7 @@ impl Ui<'_> {
                 Ok(())
             }
             Msg::ToggleCenter => match &mut self.notify {
-                Some(notify) => notify.toggle_center(self.display, &mut self.fonts),
+                Some(notify) => notify.toggle_center(self.platform, &mut self.fonts),
                 None => Ok(()),
             },
             Msg::Trash(full) => {
@@ -1021,7 +1021,7 @@ impl Ui<'_> {
                 && !on_notify
                 && !on_menubar
             {
-                notify.close_center(self.display)?;
+                notify.close_center(self.platform)?;
             }
         }
         // Одно событие может быть нужно и строке меню, и доку (например,
@@ -1031,7 +1031,7 @@ impl Ui<'_> {
             && !to_panel
             && notify.wants(&ev)
         {
-            return notify.event(self.display, &mut self.fonts, ev);
+            return notify.event(self.platform, &mut self.fonts, ev);
         }
         if let Some(menubar) = &mut self.menubar
             && !to_panel

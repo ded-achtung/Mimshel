@@ -94,6 +94,18 @@ impl Display {
         ))
     }
 
+    /// The primary output's area in points. Wayland: the primary output
+    /// chosen by our compositor.
+    pub fn primary_area(&self) -> (i32, i32, u32, u32) {
+        self.x11.primary_area()
+    }
+
+    /// A popup for transient shell UI. Wayland: an `xdg_popup` or a
+    /// layer-shell overlay for notifications.
+    pub fn create_popup(&self, name: &str) -> Result<Popup> {
+        Ok(Popup(self.x11.create_popup(name)?))
+    }
+
     /// A picture of one of our windows as it is on screen, for tests.
     #[cfg(test)]
     pub fn capture_window(&self, window: u32) -> Option<tiny_skia::Pixmap> {
@@ -145,5 +157,50 @@ impl AppWindow {
 
     pub fn destroy(&self, d: &Display) -> Result<()> {
         self.0.destroy(&d.x11)
+    }
+}
+
+/// A transient shell popup ([`Display::create_popup`]). Positions and sizes
+/// are in points; our Wayland compositor places notification overlays.
+pub struct Popup(mimshel_x11::Popup);
+
+impl Popup {
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Show and take keyboard and pointer input. Wayland: a popup grab
+    /// or input focus for the notification-center overlay.
+    pub fn show(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        self.0.show(&d.x11, x, y, w, h)
+    }
+
+    /// Show above other windows without taking keyboard or pointer input.
+    /// Wayland: a notification overlay without an input grab.
+    pub fn show_passive(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        self.0.show_passive(&d.x11, x, y, w, h)
+    }
+
+    /// Hide and release keyboard and pointer input. Wayland: dismiss the
+    /// popup or overlay and release its input focus.
+    pub fn hide(&self, d: &Display) -> Result<()> {
+        self.0.hide(&d.x11)
+    }
+
+    /// Hide without changing keyboard or pointer input. Wayland: unmap
+    /// the notification overlay without changing another surface's focus.
+    pub fn hide_passive(&self, d: &Display) -> Result<()> {
+        self.0.hide_passive(&d.x11)
+    }
+
+    /// Change the position and size. Wayland: configure the overlay
+    /// through our compositor.
+    pub fn set_geometry(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        self.0.set_geometry(&d.x11, x, y, w, h)
+    }
+
+    /// Show a picture the size of the popup, in pixels.
+    pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
+        self.0.present(&d.x11, image)
     }
 }
