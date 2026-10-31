@@ -867,6 +867,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimshel-compositor"
+version = "0.0.6-alpha"
+
+[[package]]
 name = "mimshel-core"
 version = "0.0.6-alpha"
 dependencies = [
