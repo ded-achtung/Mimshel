@@ -37,9 +37,23 @@ working one; nothing on it changes in this phase. Branch `platform/boundary`
 
 | # | Step | Who |
 |---|---|---|
-| 2.1 | Skeleton: winit and headless backends, xdg-shell windows, keyboard and pointer, focus on click, stacking, moving (Super + drag and the client's own move request), resizing (client request), damage-tracked rendering, frame timing. kitty runs inside. | Codex |
+| 2.1 | Skeleton: winit and headless backends, xdg-shell windows, keyboard and pointer, focus on click, stacking, moving (Super + drag and the client's own move request), resizing (client request), damage-tracked rendering, frame timing. kitty runs inside. | Codex — **done** |
 | 2.2 | Window decorations of our own (server side, `xdg-decoration`): title bar with the three buttons on the left, as on X11 today; maximize and minimize, fullscreen. | — |
 | 2.3 | Protocols for the shell: `wlr-layer-shell`, `ext-foreign-toplevel-list` + `wlr-foreign-toplevel-management`, `xdg-activation`, `ext-session-lock-v1`, `ext-idle-notify-v1`. | — |
 | 2.4 | The door's Wayland backend (`platform.rs` gets the second variant): the menu bar, the dock and the desktop run inside the nested compositor. | — |
 | 2.5 | XWayland: Houdini, Blender, Chrome, Telegram, Steam inside (needs `xorg-xwayland` on the laptop). | — |
 | 2.6 | Clipboard and drag and drop between programs and our windows; keyboard layout switching. | — |
+
+## Measurements
+
+Laptop (Radeon 780M, nested in X11, kitty inside, Mesa EGL only —
+`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`),
+2026-10-31, after step 2.1:
+
+| | |
+|---|---|
+| Frame render | median 1.35 ms, p95 2.6 ms, max 4.4 ms |
+| Idle | CPU ~0.1 %; frames only for kitty's blinking cursor |
+| Memory (PSS) | 69 MB, flat; ~16 MB of it is the compositor, the rest Mesa (LLVM, gallium) |
+| Without the EGL vendor choice | 184 MB: GLVND also loads NVIDIA's EGL (96 MB) |
+| `kill -TERM` | the client is stopped, no `wayland-*` left behind |
