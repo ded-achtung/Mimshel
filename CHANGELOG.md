@@ -13,6 +13,14 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   Windows). A disk that cannot be mounted at all ends in a notification with the reason,
   instead of a silent line in the log.
 
+### Fixed
+
+- Alt with the mouse goes to programs again: in Blender and Houdini it turns the view instead
+  of dragging the whole window (xfwm4's «easy click» moved to Super). `mimshel apply look`
+  sets it.
+- Houdini can be maximized from windowed mode: maximized windows keep their thin side
+  borders, since xfwm4 refused to grow a window past the size the program allows.
+
 ## [v0.0.5-alpha] — 2026-10-29
 
 Fifth alpha: Mimshel's own System Settings window, a copy window with progress, and a
