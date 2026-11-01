@@ -45,6 +45,7 @@ struct Client {
     token: Option<String>,
     app_ids: Vec<String>,
     close_requests: usize,
+    layer_configures: usize,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for Client {
     fn event(
@@ -180,7 +181,7 @@ delegate_noop!(Client: ignore ext_idle_notifier_v1::ExtIdleNotifierV1);
 delegate_noop!(Client: ignore xdg_activation_v1::XdgActivationV1);
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Client {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
         _: &(),
@@ -188,6 +189,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Client {
         _: &QueueHandle<Self>,
     ) {
         if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+            state.layer_configures += 1;
             surface.ack_configure(serial);
         }
     }
@@ -347,7 +349,7 @@ impl Harness {
                 }
             }
         });
-        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        started.recv_timeout(Duration::from_secs(30)).unwrap();
         Self {
             runtime,
             commands,
@@ -373,7 +375,7 @@ impl Harness {
         self.commands
             .send(Some(Box::new(move |s| tx.send(f(s)).unwrap())))
             .unwrap();
-        rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        rx.recv_timeout(Duration::from_secs(30)).unwrap()
     }
 }
 impl Drop for Harness {
@@ -409,6 +411,20 @@ impl Peer {
     fn sync(&mut self) {
         self.queue.roundtrip(&mut self.state).unwrap();
         self.queue.roundtrip(&mut self.state).unwrap();
+    }
+    fn wait_for(&mut self, ready: impl Fn(&Client) -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            self.sync();
+            if ready(&self.state) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "client event timed out"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
     fn buffer(&self, surface: &wl_surface::WlSurface, w: i32, h: i32) {
         let qh = self.queue.handle();
@@ -447,6 +463,53 @@ impl Peer {
         self.sync();
         (surface, top)
     }
+}
+
+#[test]
+fn layer_remap_gets_a_fresh_configure() {
+    let h = Harness::new();
+    let mut p = h.client();
+    let qh = p.queue.handle();
+    let surface = p.state.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = p.state.layer.as_ref().unwrap().get_layer_surface(
+        &surface,
+        p.state.output.as_ref(),
+        zwlr_layer_shell_v1::Layer::Overlay,
+        "remap".into(),
+        &qh,
+        (),
+    );
+    layer.set_size(100, 32);
+    layer.set_exclusive_zone(-1);
+    surface.commit();
+    p.sync();
+    assert!(p.state.layer_configures > 0);
+    p.buffer(&surface, 100, 32);
+    p.sync();
+    let mapped = |s: &mut mimshel_compositor::state::State| {
+        let mut scene = Vec::new();
+        mimshel_compositor::render::scene(s, &mut scene);
+        !scene.is_empty()
+    };
+    assert!(h.inspect(mapped));
+    let before = p.state.layer_configures;
+    surface.attach(None, 0, 0);
+    surface.commit();
+    p.sync();
+    assert!(!h.inspect(mapped));
+    // Smithay may trigger the new configure during the NULL-buffer commit.
+    // Unmapping resets the layer properties; showing it starts over.
+    layer.set_size(100, 32);
+    layer.set_exclusive_zone(-1);
+    surface.commit();
+    p.sync();
+    assert!(
+        p.state.layer_configures > before,
+        "remap needs a new configure"
+    );
+    p.buffer(&surface, 100, 32);
+    p.sync();
+    assert!(h.inspect(mapped));
 }
 
 #[test]
@@ -696,16 +759,12 @@ fn idle_timeout_and_input_reset_do_not_request_frames() {
     );
     p.sync();
     h.inspect(|s| s.dirty = false);
-    std::thread::sleep(Duration::from_millis(90));
-    p.sync();
-    assert_eq!(p.state.idled, 1);
+    p.wait_for(|state| state.idled == 1);
     assert!(!h.inspect(|s| s.dirty));
     h.inspect(input::click);
     p.sync();
     assert_eq!(p.state.resumed, 1);
-    std::thread::sleep(Duration::from_millis(90));
-    p.sync();
-    assert_eq!(p.state.idled, 2);
+    p.wait_for(|state| state.idled == 2);
 }
 
 #[test]

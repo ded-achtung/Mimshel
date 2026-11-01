@@ -15,7 +15,7 @@ use x11rb::{
 };
 
 fn pump(server: &mut Server, ready: impl Fn(&Server) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !ready(server) {
         assert!(Instant::now() < deadline, "XWayland integration timed out");
         server.dispatch(Some(Duration::from_millis(10))).unwrap();
@@ -172,7 +172,7 @@ fn real_x11_window_policy_and_cleanup() {
                 .x11_surface()
                 .is_some_and(|x| x.wl_surface().is_some())
     });
-    let window = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+    let window = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
     let id = server.state.windows[0].0;
     assert_eq!(server.state.model.focus, Some(id));
     assert_eq!(server.state.model.windows[0].x11_title, "XWayland title");

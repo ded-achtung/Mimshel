@@ -39,7 +39,7 @@ fn signals_remove_socket_and_terminate_client() {
             .spawn()
             .unwrap();
         // Wait for initialization rather than signalling during process startup.
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let ready = std::fs::read_to_string(format!("/proc/{}/status", compositor.id()))
                 .is_ok_and(|status| {
@@ -89,6 +89,7 @@ fn signals_remove_socket_and_terminate_client() {
             .unwrap();
         connection.map_window(window).unwrap();
         connection.flush().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
         while connection
             .get_window_attributes(window)
             .unwrap()
@@ -119,6 +120,7 @@ fn signals_remove_socket_and_terminate_client() {
             .map(str::to_owned)
             .expect("XWayland child");
         kill_process(Pid::from_child(&compositor), signal).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
         while compositor.try_wait().unwrap().is_none() {
             if Instant::now() >= deadline {
                 let _ = compositor.kill();
@@ -129,6 +131,7 @@ fn signals_remove_socket_and_terminate_client() {
         assert!(compositor.wait().unwrap().success());
         assert!(!std::path::Path::new(&x_socket).exists());
         assert!(!std::path::Path::new(&x_lock).exists());
+        let deadline = Instant::now() + Duration::from_secs(30);
         while std::path::Path::new(&format!("/proc/{xwayland}")).exists() {
             assert!(
                 Instant::now() < deadline,

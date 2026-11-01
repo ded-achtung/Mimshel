@@ -158,9 +158,11 @@ Clippy with `-D warnings`, the locked workspace tests under Xvfb, the ignored
 The audit used a temporary cargo-deny 0.20.2 installation (removed afterward).
 All builds used `CARGO_INCREMENTAL=0`; the existing target directory was reused.
 
-## XWayland startup (Smithay 0.7.0)
+## XWayland startup (pinned Smithay f581531)
 
-Eager startup is retained. In the pinned Smithay 0.7.0,
+Rechecked at f581531: eager startup is retained. The new `extra_args` and
+`spawn_with_inherited_env` APIs do not expose listening socket ownership.
+In this revision,
 `XWayland::spawn` calls private `prepare_x11_sockets` and immediately calls
 `Command::spawn`. It accepts neither existing listeners nor a lazy option;
 `XWaylandEvent` only has `Ready` and `Error`. Reserving our own listener and
@@ -225,3 +227,17 @@ Validation: `cargo fmt --all -- --check`, workspace/all-targets Clippy with
 `mimshel-x11` windows suite under Xvfb, and `cargo deny --locked check` pass.
 All builds/checks used `CARGO_INCREMENTAL=0`. The existing temporary cargo-deny
 installation was reused. No new dependency or shell code changes are included.
+
+## Output timing and headless waits
+
+`MIMSHEL_TIMING=1` logs the physical output size and refresh at nested backend
+startup and whenever the mode changes, for example `output 1280x800 @ 165.000 Hz`.
+The cached mode avoids repeated messages while idle. Headless readiness, IPC and
+transfer waits allow 30 seconds under load; idle notification tests poll the actual
+event instead of assuming delivery after a fixed sleep. Layer remap coverage maps,
+NULL-buffer unmaps, requests a fresh configure and maps the same surface again.
+
+The pinned Smithay also resets layer role and cached state in its pre-commit hook
+when a mapped layer loses its buffer. The remap test permits the fresh configure
+to arrive on that NULL-buffer commit or on the following bufferless commit, and
+re-sends size and exclusive zone after the protocol reset before remapping.

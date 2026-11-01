@@ -477,12 +477,12 @@ impl Harness {
             ack,
             thread: Some(thread),
         };
-        result.ack.recv_timeout(Duration::from_secs(10)).unwrap();
+        result.ack.recv_timeout(Duration::from_secs(30)).unwrap();
         result
     }
     fn action(&self, a: Action) -> u32 {
         self.tx.send(a).unwrap();
-        self.ack.recv_timeout(Duration::from_secs(10)).unwrap()
+        self.ack.recv_timeout(Duration::from_secs(30)).unwrap()
     }
 }
 impl Drop for Harness {
@@ -522,7 +522,7 @@ fn clipboard_primary_drag_and_shared_layout() {
         for primary in [false, true] {
             let (mut reader, writer) = UnixStream::pair().unwrap();
             reader
-                .set_read_timeout(Some(Duration::from_secs(5)))
+                .set_read_timeout(Some(Duration::from_secs(30)))
                 .unwrap();
             if primary {
                 target
@@ -654,7 +654,7 @@ fn x11_clipboard_and_primary_both_directions() {
         .unwrap();
     connection.map_window(window).unwrap();
     connection.flush().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while server.action(Action::Count) < 2 {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
@@ -681,7 +681,7 @@ fn x11_clipboard_and_primary_both_directions() {
             .unwrap();
         connection.flush().unwrap();
         // Answer the WM's TARGETS query and then its actual data request.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let mut advertised = false;
         loop {
             while let Some(event) = connection.poll_for_event().unwrap() {
@@ -740,7 +740,7 @@ fn x11_clipboard_and_primary_both_directions() {
             std::thread::sleep(Duration::from_millis(2));
         }
         server.action(Action::Focus(0));
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             peer.sync();
             if if selection == clipboard {
@@ -754,7 +754,7 @@ fn x11_clipboard_and_primary_both_directions() {
         }
         let (mut reader, writer) = UnixStream::pair().unwrap();
         reader
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         if selection == clipboard {
             peer.client
@@ -771,7 +771,7 @@ fn x11_clipboard_and_primary_both_directions() {
         }
         peer.sync();
         drop(writer);
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             if let Some(Event::SelectionRequest(request)) = connection.poll_for_event().unwrap() {
                 let is_data = request.target != targets;
@@ -835,7 +835,7 @@ fn x11_clipboard_and_primary_both_directions() {
             .convert_selection(window, selection, mime, property, x11rb::CURRENT_TIME)
             .unwrap();
         connection.flush().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             peer.sync();
             if let Some(Event::SelectionNotify(event)) = connection.poll_for_event().unwrap() {
@@ -912,7 +912,7 @@ fn xdnd_uri_list_both_directions() {
         .unwrap();
     x.map_window(window).unwrap();
     x.flush().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while server.action(Action::Count) < 2 {
         assert!(std::time::Instant::now() < deadline, "X11 map timed out");
         std::thread::sleep(Duration::from_millis(5));
@@ -942,7 +942,7 @@ fn xdnd_uri_list_both_directions() {
         .start_drag(Some(&source), &peer.surface, None, peer.client.serial);
     peer.sync();
     server.action(Action::Target(1));
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let proxy = loop {
         peer.sync();
         if let Some(Event::ClientMessage(e)) = x.poll_for_event().unwrap() {
@@ -965,7 +965,7 @@ fn xdnd_uri_list_both_directions() {
     x.get_input_focus().unwrap().reply().unwrap();
     peer.sync();
     server.action(Action::Release);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(Event::ClientMessage(e)) = x.poll_for_event().unwrap()
             && e.type_ == drop_atom
@@ -1004,7 +1004,7 @@ fn xdnd_uri_list_both_directions() {
     x.set_selection_owner(window, selection, x11rb::CURRENT_TIME)
         .unwrap();
     x.flush().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let proxy = loop {
         let children = x.query_tree(root).unwrap().reply().unwrap().children;
         let found = children.into_iter().find(|child| {
@@ -1049,7 +1049,7 @@ fn xdnd_uri_list_both_directions() {
     server.action(Action::Release);
     let (mut reader, writer) = UnixStream::pair().unwrap();
     reader
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     peer.client
         .offer

@@ -155,6 +155,7 @@ pub fn run(shell: Vec<OsString>, command: Vec<OsString>) -> Result<(), Error> {
         .state
         .dmabuf
         .create_global::<crate::state::State>(&dh, backend.renderer().dmabuf_formats());
+    let timing = std::env::var_os("MIMSHEL_TIMING").as_deref() == Some(std::ffi::OsStr::new("1"));
     let output = server.output.clone();
     let mode = Mode {
         size: backend.window_size(),
@@ -218,6 +219,7 @@ pub fn run(shell: Vec<OsString>, command: Vec<OsString>) -> Result<(), Error> {
         })?;
     let mut tracker = OutputDamageTracker::from_output(&output);
     let start = Instant::now();
+    let mut reported_mode = None;
     let result = (|| -> Result<(), Error> {
         while running.get() {
             let refresh = host_refresh(backend.window());
@@ -228,6 +230,17 @@ pub fn run(shell: Vec<OsString>, command: Vec<OsString>) -> Result<(), Error> {
                 output.change_current_state(Some(mode), None, None, None);
                 output.set_preferred(mode);
                 server.state.dirty = true;
+            }
+            if timing && output.current_mode() != reported_mode {
+                reported_mode = output.current_mode();
+                if let Some(mode) = reported_mode {
+                    eprintln!(
+                        "output {}x{} @ {:.3} Hz",
+                        mode.size.w,
+                        mode.size.h,
+                        f64::from(mode.refresh) / 1000.0
+                    );
+                }
             }
             for (buffer, notifier) in server.state.imports.drain(..) {
                 if backend.renderer().import_dmabuf(&buffer, None).is_ok() {

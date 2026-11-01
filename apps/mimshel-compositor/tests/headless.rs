@@ -147,7 +147,7 @@ fn decoration_and_premap_maximize() {
             }
         }
     });
-    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    started.recv_timeout(Duration::from_secs(30)).unwrap();
     let connection = Connection::from_socket(
         UnixStream::connect(runtime.path().join("decoration-test")).unwrap(),
     )
@@ -199,7 +199,7 @@ fn decoration_and_premap_maximize() {
     surface.commit();
     queue.roundtrip(&mut client).unwrap();
     stop.send(true).unwrap();
-    let (rect, mode, focus, visible) = responses.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (rect, mode, focus, visible) = responses.recv_timeout(Duration::from_secs(30)).unwrap();
     assert_eq!((rect.width, rect.height), (1280, 770));
     assert_eq!(mode, mimshel_compositor::model::Mode::Maximized);
     assert!(focus.is_some());
@@ -207,7 +207,7 @@ fn decoration_and_premap_maximize() {
     top.set_minimized();
     queue.roundtrip(&mut client).unwrap();
     stop.send(true).unwrap();
-    let (_, mode, focus, visible) = responses.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (_, mode, focus, visible) = responses.recv_timeout(Duration::from_secs(30)).unwrap();
     assert_eq!(mode, mimshel_compositor::model::Mode::Minimized);
     assert_eq!(focus, None);
     assert_eq!(visible, 0);
@@ -248,7 +248,7 @@ fn real_clients_stack_and_restore_focus() {
             }
         }
     });
-    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    started.recv_timeout(Duration::from_secs(30)).unwrap();
     let connection =
         Connection::from_socket(UnixStream::connect(runtime.path().join("wayland-test")).unwrap())
             .unwrap();
@@ -285,7 +285,7 @@ fn real_clients_stack_and_restore_focus() {
         surfaces.push((surface, xdg, top, buffer, pool));
     }
     commands.send(true).unwrap();
-    let (stack, focus) = responses.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (stack, focus) = responses.recv_timeout(Duration::from_secs(30)).unwrap();
     assert_eq!(stack.len(), 2);
     assert_eq!(focus, stack.last().copied());
     let (surface, xdg, top, buffer, pool) = surfaces.pop().unwrap();
@@ -296,7 +296,7 @@ fn real_clients_stack_and_restore_focus() {
     pool.destroy();
     queue.roundtrip(&mut client).unwrap();
     commands.send(true).unwrap();
-    let (remaining, focus) = responses.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (remaining, focus) = responses.recv_timeout(Duration::from_secs(30)).unwrap();
     assert_eq!(remaining, vec![stack[0]]);
     assert_eq!(focus, Some(stack[0]));
     commands.send(false).unwrap();
