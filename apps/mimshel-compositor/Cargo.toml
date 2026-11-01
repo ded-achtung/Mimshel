@@ -13,7 +13,7 @@ mimshel-core = { path = "../../crates/core" }
 mimshel-text = { path = "../../crates/text" }
 tiny-skia = "0.12"
 
-smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend", "desktop", "renderer_gl", "use_system_lib", "xwayland"] }
+smithay = { git = "https://github.com/Smithay/smithay", rev = "2b285e2d2d5ecbabea249906c36ef20fe4c6808d", default-features = false, features = ["backend_winit", "wayland_frontend", "desktop", "renderer_gl", "use_system_lib", "xwayland"] }
 
 # Enable signals on the same calloop instance re-exported by Smithay.
 calloop = { version = "0.14", features = ["signals"] }

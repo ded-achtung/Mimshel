@@ -7,10 +7,7 @@ use smithay::{
         seat::WaylandFocus,
         selection::{
             SelectionHandler, SelectionSource, SelectionTarget,
-            data_device::{
-                self, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
-                ServerDndGrabHandler,
-            },
+            data_device::{self, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler},
             primary_selection::{self, PrimarySelectionHandler, PrimarySelectionState},
         },
     },
@@ -19,17 +16,54 @@ use smithay::{
 use std::os::fd::OwnedFd;
 
 impl DataDeviceHandler for State {
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device
     }
 }
 impl PrimarySelectionHandler for State {
-    fn primary_selection_state(&self) -> &PrimarySelectionState {
-        &self.primary_selection
+    fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
+        &mut self.primary_selection
     }
 }
-impl ClientDndGrabHandler for State {}
-impl ServerDndGrabHandler for State {}
+impl WaylandDndGrabHandler for State {
+    fn dnd_requested<S: smithay::input::dnd::Source>(
+        &mut self,
+        source: S,
+        icon: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+        seat: Seat<Self>,
+        serial: smithay::utils::Serial,
+        kind: smithay::input::dnd::GrabType,
+    ) {
+        if self.protocols.locked {
+            return;
+        }
+        if matches!(kind, smithay::input::dnd::GrabType::Pointer) {
+            let pointer = self.pointer_handle.clone();
+            if let Some(start) = pointer.grab_start_data() {
+                self.dnd_icon = icon.map(|s| (s, (0, 0).into()));
+                let grab = smithay::input::dnd::DnDGrab::new_pointer(&self.dh, start, source, seat);
+                pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Keep);
+                self.dirty = true;
+            }
+        }
+    }
+}
+impl smithay::input::dnd::DndGrabHandler for State {
+    fn cancelled(&mut self, _: Seat<Self>, _: smithay::utils::Point<f64, smithay::utils::Logical>) {
+        self.dnd_icon = None;
+        self.dirty = true;
+    }
+    fn dropped(
+        &mut self,
+        _: Option<smithay::input::dnd::DndTarget<'_, Self>>,
+        _: bool,
+        _: Seat<Self>,
+        _: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        self.dnd_icon = None;
+        self.dirty = true;
+    }
+}
 impl SelectionHandler for State {
     type SelectionUserData = XwmId;
     fn new_selection(
@@ -61,7 +95,7 @@ impl SelectionHandler for State {
             return;
         }
         if let Some(wm) = self.xwms.iter_mut().find(|wm| wm.id() == *id)
-            && let Err(error) = wm.send_selection(target, mime, fd, self.selection_loop.clone())
+            && let Err(error) = wm.send_selection(target, mime, fd)
         {
             eprintln!("X11 selection transfer: {error}");
         }

@@ -72,6 +72,7 @@ impl Server {
                 subpixel: Subpixel::Unknown,
                 make: "Mimshel".into(),
                 model: "Virtual output".into(),
+                serial_number: String::new(),
             },
         );
         output.create_global::<State>(&dh);

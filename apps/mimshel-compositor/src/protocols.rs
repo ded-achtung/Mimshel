@@ -51,15 +51,18 @@ pub struct Protocols {
 impl Protocols {
     pub(crate) fn new(dh: &DisplayHandle, handle: LoopHandle<'static, State>) -> Self {
         Self {
-            layer: WlrLayerShellState::new::<State>(dh),
+            layer: WlrLayerShellState::new_with_filter::<State, _>(dh, crate::state::privileged),
             layers: Vec::new(),
-            foreign: ForeignToplevelListState::new::<State>(dh),
+            foreign: ForeignToplevelListState::new_with_filter::<State>(
+                dh,
+                crate::state::privileged,
+            ),
             toplevels: Vec::new(),
             management: foreign::Management::new(dh),
             toplevels_dirty: true,
             activation: XdgActivationState::new::<State>(dh),
             idle: IdleNotifierState::new(dh, handle),
-            lock: SessionLockManagerState::new::<State, _>(dh, |_| true),
+            lock: SessionLockManagerState::new::<State, _>(dh, crate::state::privileged),
             locked: false,
             locker: None,
             owner: None,
@@ -343,6 +346,37 @@ impl XdgActivationHandler for State {
     fn activation_state(&mut self) -> &mut XdgActivationState {
         &mut self.protocols.activation
     }
+    fn token_created(&mut self, _: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        let Some(id) = data.client_id else {
+            return false;
+        };
+        if self
+            .dh
+            .backend_handle()
+            .get_client_data(id.clone())
+            .is_ok_and(|data| {
+                data.downcast_ref::<crate::state::ClientState>()
+                    .is_some_and(|data| data.privileged)
+            })
+        {
+            return true;
+        }
+        let Some((serial, seat)) = data.serial else {
+            return false;
+        };
+        if smithay::input::Seat::<Self>::from_resource(&seat).as_ref() != Some(&self.seat)
+            || seat.client().is_none_or(|client| client.id() != id)
+        {
+            return false;
+        }
+        self.last_input
+            .as_ref()
+            .is_some_and(|(owner, recent, when)| {
+                *owner == id
+                    && *recent == serial
+                    && when.elapsed() < std::time::Duration::from_secs(10)
+            })
+    }
     fn request_activation(
         &mut self,
         token: XdgActivationToken,
@@ -364,5 +398,27 @@ impl XdgActivationHandler for State {
 }
 smithay::delegate_layer_shell!(State);
 smithay::delegate_foreign_toplevel_list!(State);
-smithay::delegate_idle_notify!(State);
+type IdleNotifier = smithay::reexports::wayland_protocols::ext::idle_notify::v1::server::ext_idle_notifier_v1::ExtIdleNotifierV1;
+type IdleNotification = smithay::reexports::wayland_protocols::ext::idle_notify::v1::server::ext_idle_notification_v1::ExtIdleNotificationV1;
+impl smithay::reexports::wayland_server::GlobalDispatch<IdleNotifier, ()> for State {
+    fn can_view(client: smithay::reexports::wayland_server::Client, _: &()) -> bool {
+        crate::state::privileged(&client)
+    }
+    fn bind(
+        state: &mut Self,
+        dh: &DisplayHandle,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: smithay::reexports::wayland_server::New<IdleNotifier>,
+        data: &(),
+        init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        <IdleNotifierState<Self> as smithay::reexports::wayland_server::GlobalDispatch<
+            IdleNotifier,
+            (),
+            Self,
+        >>::bind(state, dh, client, resource, data, init);
+    }
+}
+smithay::reexports::wayland_server::delegate_dispatch!(State: [IdleNotifier: ()] => IdleNotifierState<State>);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [IdleNotification: smithay::wayland::idle_notify::IdleNotificationUserData] => IdleNotifierState<State>);
 smithay::delegate_xdg_activation!(State);

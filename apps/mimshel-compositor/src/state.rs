@@ -72,7 +72,6 @@ pub struct State {
     pub(crate) data_device: smithay::wayland::selection::data_device::DataDeviceState,
     pub(crate) primary_selection:
         smithay::wayland::selection::primary_selection::PrimarySelectionState,
-    pub(crate) selection_loop: smithay::reexports::calloop::LoopHandle<'static, Self>,
     compositor: CompositorState,
     shm: ShmState,
     xdg: XdgShellState,
@@ -103,6 +102,14 @@ pub struct State {
     pub pointer_inside: bool,
     /// Current interactive operation.
     pub drag: Option<Drag>,
+    /// Client drag icon and accumulated surface attachment offset.
+    pub dnd_icon: Option<(WlSurface, Point<i32, Logical>)>,
+    /// Last genuine input delivered to a client.
+    pub last_input: Option<(
+        smithay::reexports::wayland_server::backend::ClientId,
+        smithay::utils::Serial,
+        std::time::Instant,
+    )>,
 }
 
 impl State {
@@ -144,7 +151,6 @@ impl State {
                 smithay::wayland::selection::primary_selection::PrimarySelectionState::new::<Self>(
                     &dh,
                 ),
-            selection_loop: handle,
             compositor,
             shm,
             xdg,
@@ -163,6 +169,8 @@ impl State {
             pointer: (0.0, 0.0).into(),
             pointer_inside: false,
             drag: None,
+            dnd_icon: None,
+            last_input: None,
         })
     }
 
@@ -198,6 +206,14 @@ impl State {
     /// Remove dead windows and clean protocol resources.
     pub fn refresh(&mut self) {
         use smithay::utils::IsAlive;
+        if self
+            .dnd_icon
+            .as_ref()
+            .is_some_and(|(surface, _)| !surface.alive())
+        {
+            self.dnd_icon = None;
+            self.dirty = true;
+        }
         let dead: Vec<_> = self
             .windows
             .iter()
@@ -432,6 +448,8 @@ impl State {
 #[derive(Default)]
 pub struct ClientState {
     compositor: CompositorClientState,
+    /// Only the compositor-launched shell receives this capability.
+    pub privileged: bool,
 }
 
 impl ClientData for ClientState {
@@ -458,6 +476,20 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        if let Some((icon, offset)) = &mut self.dnd_icon
+            && icon == surface
+        {
+            smithay::wayland::compositor::with_states(surface, |states| {
+                let delta = states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>()
+                    .current()
+                    .buffer_delta
+                    .take()
+                    .unwrap_or_default();
+                *offset += delta;
+            });
+        }
         self.dirty = true;
         for (_, window) in &self.windows {
             if window.is_x11() && crate::xwayland::surface(window).as_ref() == Some(surface) {
@@ -721,7 +753,7 @@ impl XdgShellHandler for State {
 
 impl SeatHandler for State {
     type KeyboardFocus = crate::xwayland::Focus;
-    type PointerFocus = WlSurface;
+    type PointerFocus = crate::xwayland::Focus;
     type TouchFocus = WlSurface;
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seats
@@ -812,3 +844,22 @@ impl State {
     }
 }
 smithay::delegate_xdg_decoration!(State);
+
+/// Gate shell globals using server-owned client data, never client credentials.
+pub fn privileged(client: &Client) -> bool {
+    std::env::var_os("MIMSHEL_COMPOSITOR_OPEN_PROTOCOLS").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+        || client
+            .get_data::<ClientState>()
+            .is_some_and(|data| data.privileged)
+}
+
+impl ClientState {
+    /// Client data for the pre-connected shell only.
+    pub fn privileged() -> Self {
+        Self {
+            privileged: true,
+            ..Self::default()
+        }
+    }
+}

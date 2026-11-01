@@ -60,6 +60,13 @@ pub fn scene(state: &State, elements: &mut Vec<SceneElement>) {
         }
         return;
     }
+    if let Some((surface, offset)) = &state.dnd_icon {
+        elements.push(SceneElement::Surface {
+            surface: surface.clone(),
+            location: state.pointer.to_i32_round() + *offset,
+            lock: false,
+        });
+    }
     use smithay::wayland::shell::wlr_layer::Layer;
     let layers = |above: bool, elements: &mut Vec<SceneElement>| {
         if let Some(output) = state.space.outputs().next() {
@@ -363,6 +370,15 @@ pub fn callbacks(state: &State, output: &Output, elapsed: std::time::Duration) {
         }
         return;
     }
+    if let Some((surface, _)) = &state.dnd_icon {
+        smithay::desktop::utils::send_frames_surface_tree(
+            surface,
+            output,
+            elapsed,
+            Some(std::time::Duration::ZERO),
+            |_, _| Some(output.clone()),
+        );
+    }
     let map = smithay::desktop::layer_map_for_output(output);
     for layer in map.layers() {
         layer.send_frame(output, elapsed, Some(std::time::Duration::ZERO), |_, _| {
@@ -496,9 +512,10 @@ impl<R: smithay::backend::renderer::Renderer> RenderElement<R> for Border {
         dst: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
         damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
         opaque: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        cache: Option<&smithay::utils::user_data::UserDataMap>,
     ) -> Result<(), R::Error> {
         <SolidColorRenderElement as RenderElement<R>>::draw(
-            &self.0, frame, src, dst, damage, opaque,
+            &self.0, frame, src, dst, damage, opaque, cache,
         )
     }
     fn underlying_storage(

@@ -5,9 +5,23 @@
 fn main() -> Result<(), mimshel_compositor::Error> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new("--nested")) {
-        return Err("usage: mimshel-compositor --nested [-- COMMAND…]".into());
+        return Err("usage: mimshel-compositor --nested [--shell COMMAND…] [-- COMMAND…]".into());
     }
-    let remaining: Vec<_> = args.collect();
+    let mut remaining: Vec<_> = args.collect();
+    let shell = if remaining.first().is_some_and(|arg| arg == "--shell") {
+        remaining.remove(0);
+        let end = remaining
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(remaining.len());
+        let shell: Vec<_> = remaining.drain(..end).collect();
+        if shell.is_empty() {
+            return Err("--shell requires a command".into());
+        }
+        shell
+    } else {
+        Vec::new()
+    };
     if remaining.first().is_some_and(|arg| arg != "--") {
         return Err("expected -- before command".into());
     }
@@ -26,5 +40,5 @@ fn main() -> Result<(), mimshel_compositor::Error> {
             .exec()
             .into());
     }
-    mimshel_compositor::backend::winit::run(remaining.into_iter().skip(1).collect())
+    mimshel_compositor::backend::winit::run(shell, remaining.into_iter().skip(1).collect())
 }

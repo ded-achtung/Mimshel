@@ -114,6 +114,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
     }
 }
 delegate_noop!(Client: ignore wl_compositor::WlCompositor);
+delegate_noop!(Client: ignore wayland_client::protocol::wl_pointer::WlPointer);
 delegate_noop!(Client: ignore wl_surface::WlSurface);
 delegate_noop!(Client: ignore wl_shm::WlShm);
 delegate_noop!(Client: ignore wl_shm_pool::WlShmPool);
@@ -354,7 +355,15 @@ impl Harness {
         }
     }
     fn client(&self) -> Peer {
-        Peer::new(&self.runtime.path().join("shell"))
+        let (server_socket, client_socket) = UnixStream::pair().unwrap();
+        self.inspect(move |s| {
+            s.dh.insert_client(
+                server_socket,
+                std::sync::Arc::new(mimshel_compositor::state::ClientState::privileged()),
+            )
+            .unwrap();
+        });
+        Peer::from_socket(client_socket)
     }
     fn inspect<T: Send + 'static>(
         &self,
@@ -371,7 +380,7 @@ impl Drop for Harness {
     fn drop(&mut self) {
         let _ = self.commands.send(None);
         if let Some(t) = self.thread.take() {
-            t.join().unwrap();
+            let _ = t.join();
         }
     }
 }
@@ -382,7 +391,10 @@ struct Peer {
 }
 impl Peer {
     fn new(path: &std::path::Path) -> Self {
-        let connection = Connection::from_socket(UnixStream::connect(path).unwrap()).unwrap();
+        Self::from_socket(UnixStream::connect(path).unwrap())
+    }
+    fn from_socket(socket: UnixStream) -> Self {
+        let connection = Connection::from_socket(socket).unwrap();
         let mut queue = connection.new_event_queue();
         connection.display().get_registry(&queue.handle(), ());
         let mut state = Client::default();
@@ -846,4 +858,205 @@ fn layer_render_and_pointer_order_follow_protocol_layers() {
         }),
         "overlay"
     );
+}
+
+#[test]
+fn shell_globals_are_private_and_ordinary_serialless_tokens_cannot_activate() {
+    let h = Harness::new();
+    let mut ordinary = Peer::new(&h.runtime.path().join("shell"));
+    assert!(ordinary.state.layer.is_none());
+    assert!(ordinary.state.foreign.is_none());
+    assert!(ordinary.state.list.is_none());
+    assert!(ordinary.state.lock.is_none());
+    assert!(ordinary.state.idle.is_none());
+    let shell = h.client();
+    assert!(shell.state.layer.is_some());
+    assert!(shell.state.foreign.is_some());
+    assert!(shell.state.list.is_some());
+    assert!(shell.state.lock.is_some());
+    assert!(shell.state.idle.is_some());
+    let (first, _) = ordinary.window("first");
+    ordinary.window("second");
+    let before = h.inspect(|s| s.model.focus);
+    let token = ordinary
+        .state
+        .activation
+        .as_ref()
+        .unwrap()
+        .get_activation_token(&ordinary.queue.handle(), ());
+    token.commit();
+    ordinary.sync();
+    // xdg-activation always returns an opaque string; rejected tokens are untracked.
+    ordinary
+        .state
+        .activation
+        .as_ref()
+        .unwrap()
+        .activate(ordinary.state.token.take().unwrap(), &first);
+    ordinary.sync();
+    assert_eq!(h.inspect(|s| s.model.focus), before);
+    ordinary
+        .state
+        .seat
+        .as_ref()
+        .unwrap()
+        .get_pointer(&ordinary.queue.handle(), ());
+    ordinary.sync();
+    let serial: u32 = h.inspect(|s| {
+        let rect = s.model.rect(s.windows[1].0).unwrap();
+        s.pointer = (f64::from(rect.x + 10), f64::from(rect.y + 40)).into();
+        let surface = mimshel_compositor::xwayland::surface(&s.windows[1].1).unwrap();
+        let focus = mimshel_compositor::xwayland::Focus::pointer(s, surface);
+        s.pointer_handle.clone().motion(
+            s,
+            Some((focus, (0., 0.).into())),
+            &smithay::input::pointer::MotionEvent {
+                location: s.pointer,
+                serial: smithay::utils::SERIAL_COUNTER.next_serial(),
+                time: 1,
+            },
+        );
+        input::click(s);
+        s.last_input.as_ref().unwrap().1.into()
+    });
+    let mut another = Peer::new(&h.runtime.path().join("shell"));
+    let token = another
+        .state
+        .activation
+        .as_ref()
+        .unwrap()
+        .get_activation_token(&another.queue.handle(), ());
+    token.set_serial(serial, another.state.seat.as_ref().unwrap());
+    token.commit();
+    another.sync();
+    ordinary
+        .state
+        .activation
+        .as_ref()
+        .unwrap()
+        .activate(another.state.token.take().unwrap(), &first);
+    ordinary.sync();
+    assert_eq!(
+        h.inspect(|s| s.model.focus),
+        before,
+        "another client reused an input serial"
+    );
+    let token = ordinary
+        .state
+        .activation
+        .as_ref()
+        .unwrap()
+        .get_activation_token(&ordinary.queue.handle(), ());
+    token.set_serial(serial, ordinary.state.seat.as_ref().unwrap());
+    token.commit();
+    ordinary.sync();
+    ordinary
+        .state
+        .activation
+        .as_ref()
+        .unwrap()
+        .activate(ordinary.state.token.take().unwrap(), &first);
+    ordinary.sync();
+    assert_ne!(
+        h.inspect(|s| s.model.focus),
+        before,
+        "valid input serial did not activate"
+    );
+}
+
+// Re-enter this test executable as an actual --shell client, an ordinary
+// -- command, and the shell's child. connect_to_env must consume the capability.
+#[test]
+fn shell_connection_probe() {
+    let Ok(role) = std::env::var("MIMSHEL_SHELL_PROBE") else {
+        return;
+    };
+    let connection = Connection::connect_to_env().unwrap();
+    assert!(std::env::var_os("WAYLAND_SOCKET").is_none());
+    let mut queue = connection.new_event_queue();
+    connection.display().get_registry(&queue.handle(), ());
+    let mut client = Client::default();
+    queue.roundtrip(&mut client).unwrap();
+    let privileged = role == "shell";
+    assert_eq!(client.layer.is_some(), privileged);
+    assert_eq!(client.lock.is_some(), privileged);
+    assert_eq!(client.idle.is_some(), privileged);
+    assert_eq!(client.list.is_some(), privileged);
+    assert_eq!(client.foreign.is_some(), privileged);
+    if privileged {
+        // Wait for eager XWayland initialization before the parent tears down
+        // this short session and its runtime directory.
+        let (_x11, _) = x11rb::connect(None).unwrap();
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "shell_connection_probe", "--nocapture"])
+                .env("MIMSHEL_SHELL_PROBE", "child")
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    std::fs::write(
+        std::path::PathBuf::from(std::env::var_os("MIMSHEL_PROBE_DIR").unwrap()).join(role),
+        b"ok",
+    )
+    .unwrap();
+}
+
+#[test]
+fn nested_shell_gets_capability_but_its_child_and_command_do_not() {
+    if std::env::var_os("DISPLAY").is_none()
+        || std::process::Command::new("Xwayland")
+            .arg("-version")
+            .output()
+            .is_err()
+    {
+        eprintln!("SKIP: --shell process test needs DISPLAY and Xwayland");
+        return;
+    }
+    let runtime = tempfile::tempdir().unwrap();
+    let executable = std::env::current_exe().unwrap();
+    let mut compositor = std::process::Command::new(env!("CARGO_BIN_EXE_mimshel-compositor"))
+        .args([
+            "--nested",
+            "--shell",
+            "env",
+            "MIMSHEL_SHELL_PROBE=shell",
+            "dbus-run-session",
+        ])
+        .arg(&executable)
+        .args([
+            "--exact",
+            "shell_connection_probe",
+            "--nocapture",
+            "--",
+            "env",
+            "MIMSHEL_SHELL_PROBE=ordinary",
+        ])
+        .arg(&executable)
+        .args(["--exact", "shell_connection_probe", "--nocapture"])
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("MIMSHEL_PROBE_DIR", runtime.path())
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("MIMSHEL_COMPOSITOR_OPEN_PROTOCOLS")
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let success = loop {
+        if ["shell", "child", "ordinary"]
+            .iter()
+            .all(|name| runtime.path().join(name).exists())
+        {
+            break true;
+        }
+        if compositor.try_wait().unwrap().is_some() || std::time::Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+    kill_process(Pid::from_child(&compositor), Signal::TERM).unwrap();
+    compositor.wait().unwrap();
+    assert!(success, "shell/ordinary/child connection probe failed");
 }

@@ -2648,8 +2648,7 @@ checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
 [[package]]
 name = "smithay"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "740cea6927892bc182d5bf70c8f79806c8bc9f68f2fb96e55a30be171b63af98"
+source = "git+https://github.com/Smithay/smithay?rev=2b285e2d2d5ecbabea249906c36ef20fe4c6808d#2b285e2d2d5ecbabea249906c36ef20fe4c6808d"
 dependencies = [
  "appendlist",
  "atomic_float",
@@ -2686,7 +2685,7 @@ dependencies = [
  "wayland-sys",
  "winit",
  "x11rb 0.13.2",
- "xkbcommon 0.8.0",
+ "xkbcommon 0.9.0",
 ]
 
 [[package]]
@@ -3593,9 +3592,9 @@ dependencies = [
 
 [[package]]
 name = "xkbcommon"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d66ca9352cbd4eecbbc40871d8a11b4ac8107cfc528a6e14d7c19c69d0e1ac9"
+checksum = "a7a974f48060a14e95705c01f24ad9c3345022f4d97441b8a36beb7ed5c4a02d"
 dependencies = [
  "libc",
  "memmap2 0.9.11",

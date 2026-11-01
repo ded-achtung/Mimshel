@@ -180,7 +180,15 @@ fn real_x11_window_policy_and_cleanup() {
         server.state.windows[0].1.x11_surface().unwrap().class(),
         "XWaylandTest"
     );
-    let path = runtime.path().join("wayland-test");
+    let (server_socket, path) = std::os::unix::net::UnixStream::pair().unwrap();
+    server
+        .state
+        .dh
+        .insert_client(
+            server_socket,
+            std::sync::Arc::new(mimshel_compositor::state::ClientState::privileged()),
+        )
+        .unwrap();
     let (listed, listing) = mpsc::channel();
     let observer = std::thread::spawn(move || {
         lists::check(path, "XWayland title");
@@ -246,7 +254,15 @@ fn real_x11_window_policy_and_cleanup() {
         Some(id),
         "click did not focus X11 window"
     );
-    let path = runtime.path().join("wayland-test");
+    let (server_socket, path) = std::os::unix::net::UnixStream::pair().unwrap();
+    server
+        .state
+        .dh
+        .insert_client(
+            server_socket,
+            std::sync::Arc::new(mimshel_compositor::state::ClientState::privileged()),
+        )
+        .unwrap();
     let (listed, listing) = mpsc::channel();
     let observer = std::thread::spawn(move || {
         lists::check(path, "Changed title");

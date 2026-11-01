@@ -263,3 +263,69 @@ Chrome, Telegram, Steam, hardware GL/dmabuf paths and hybrid-GPU selection
 still need laptop validation. XWayland restart after an unexpected crash is
 not implemented. Session-lock takeover and activation-token restrictions
 remain phase 3 work.
+
+## Steps 2.6–2.7: XDND and shell capabilities
+
+File drags (`text/uri-list`) cross XWayland in both directions through
+Smithay's generic DnD grab and X11Wm XDND transport. Pointer targets retain
+X11 surface identity, so an X11 destination receives XDND messages rather
+than a Wayland data offer. Native drag icons render above the unlocked
+scene at the pointer plus the surface's accumulated attachment offset.
+Drops and cancellation remove the icon; lock scenes exclude it. Icon frame
+callbacks use the existing damage-driven presentation path.
+
+The crates.io Smithay 0.7.0 release has no XDND bridge. The compositor pins
+upstream revision `2b285e2d2d5ecbabea249906c36ef20fe4c6808d`, which includes
+that bridge and the subsequent XDND fixes while retaining stable winit 0.30.
+`xkbcommon` moves from 0.8 to 0.9 as required by this revision. The git source
+is explicitly allowed in cargo-deny; the existing cgmath exception remains.
+
+Launch the shell with:
+
+```sh
+mimshel-compositor --nested --shell mimshel daemon --child -- kitty
+```
+
+`--shell` consumes arguments up to the optional `--`; the command after
+`--` is ordinary. The shell receives a socketpair connection registered with
+privileged server-side client data. The socket is installed safely as stdin
+(fd 0) through `Command::stdin`, with `WAYLAND_SOCKET=0`. The display name is
+absolute, allowing the shell to use a different runtime directory.
+
+Only privileged clients see session-lock, layer-shell, both foreign-toplevel
+protocols and idle-notify. Socket listener clients, XWayland and the separate
+command are ordinary. Ordinary xdg-activation tokens require a seat and the
+last genuine input serial delivered to that client within ten seconds;
+serialless shell tokens remain available for dock launches. Rejected tokens
+still receive the opaque protocol `done` string, but are untracked and cannot
+activate anything. Tokens are consumed on activation.
+
+The shell must connect before launching programs. Our shell uses
+`wayland-client::Connection::connect_to_env`: wayland-client 0.31 removes
+`WAYLAND_SOCKET` and sets `FD_CLOEXEC` on the consumed socket. Its children
+therefore connect through the ordinary listener. This is covered by a real
+`--shell` process test, including a child launched after connection. Wrappers
+before the shell must preserve stdin and the environment; `env` and
+`dbus-run-session` do so. A shell that deliberately passes its connection to
+another process can delegate its authority, as any privileged client can.
+
+`MIMSHEL_COMPOSITOR_OPEN_PROTOCOLS=1` exposes shell globals to all clients for
+development. The default is restricted. `tools/nested-session.sh` now uses
+`--shell`, retaining its isolated runtime/state/cache, copied configuration
+and private D-Bus session.
+
+Headless tests exercise actual XWayland Copy negotiation and URI bytes in
+both directions, native drag-icon ordering/offset/removal, hidden globals,
+privileged globals, serialless and cross-client activation rejection, and
+activation with a valid input serial. The nested launch test additionally
+uses Xvfb and software EGL. Tests print a clear skip message when Xwayland is
+missing (or a host DISPLAY is missing for nested process tests). Physical
+pointer interaction with file managers and hardware rendering still need a
+live desktop check.
+
+Validation on 2026-11-01: all five required checks passed with
+`CARGO_INCREMENTAL=0`: workspace formatting and Clippy (`-D warnings`),
+workspace tests under Xvfb, all five ignored `mimshel-x11` window tests, and
+cargo-deny. XWayland was installed, so the XDND and nested process tests ran
+rather than skipping. The exact `env` / `dbus-run-session` shell launch path
+also passed. No files in `apps/mimshel` or `crates/wayland` changed.

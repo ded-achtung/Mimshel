@@ -22,11 +22,12 @@ impl State {
         let keyboard = self.keyboard.clone();
         match event {
             InputEvent::Keyboard { event, .. } => {
+                let serial = SERIAL_COUNTER.next_serial();
                 keyboard.input::<(), _>(
                     self,
                     event.key_code(),
                     event.state(),
-                    SERIAL_COUNTER.next_serial(),
+                    serial,
                     event.time_msec(),
                     |state, modifiers, keys| {
                         if !state.protocols.locked
@@ -41,6 +42,10 @@ impl State {
                             }
                             FilterResult::Intercept(())
                         } else {
+                            if let Some(focus) = state.keyboard.current_focus() {
+                                let surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface = focus.into();
+                                state.record_input(&surface, serial);
+                            }
                             FilterResult::Forward
                         }
                     },
@@ -49,6 +54,9 @@ impl State {
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 self.pointer = event.position_transformed(size);
                 self.pointer_inside = true;
+                if self.dnd_icon.is_some() {
+                    self.dirty = true;
+                }
                 if let Some(drag) = self.drag.clone() {
                     self.update_drag(drag);
                 }
@@ -60,7 +68,9 @@ impl State {
                 };
                 pointer.motion(
                     self,
-                    under,
+                    under.map(|(surface, origin)| {
+                        (crate::xwayland::Focus::pointer(self, surface), origin)
+                    }),
                     &MotionEvent {
                         location: self.pointer,
                         serial: SERIAL_COUNTER.next_serial(),
@@ -163,6 +173,10 @@ impl State {
                             .x11_surface()
                             .is_some_and(|x| x.is_override_redirect())
                         {
+                            if let Some(focus) = pointer.current_focus() {
+                                let surface = focus.into();
+                                self.record_input(&surface, serial);
+                            }
                             pointer.button(
                                 self,
                                 &smithay::input::pointer::ButtonEvent {
@@ -202,6 +216,10 @@ impl State {
                     if self.drag.is_some() {
                         return;
                     }
+                }
+                if let Some(focus) = pointer.current_focus() {
+                    let surface = focus.into();
+                    self.record_input(&surface, serial);
                 }
                 pointer.button(
                     self,
@@ -455,5 +473,17 @@ impl State {
         }
         self.model.geometry(id, r);
         self.sync_positions();
+    }
+}
+
+impl State {
+    fn record_input(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        serial: smithay::utils::Serial,
+    ) {
+        if let Some(client) = surface.client() {
+            self.last_input = Some((client.id(), serial, std::time::Instant::now()));
+        }
     }
 }

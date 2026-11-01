@@ -101,7 +101,8 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for Client {
     ) {
         match e {
             wl_data_device::Event::Selection { id } => s.offer = id,
-            wl_data_device::Event::Enter { id, .. } => {
+            wl_data_device::Event::Enter { id, serial, .. } => {
+                s.serial = serial;
                 s.offer = id;
                 s.drag = true;
             }
@@ -295,6 +296,10 @@ enum Action {
     Focus(usize),
     DragStart,
     DragTarget,
+    Press(usize),
+    Target(usize),
+    Release,
+    IconPresent,
     Key(u32, bool),
     Gesture(bool),
     Xwayland,
@@ -392,25 +397,50 @@ impl Harness {
                             state.model.focus = Some(state.windows[i].0);
                             state.sync_focus();
                         }
-                        Action::DragStart | Action::DragTarget => {
-                            let i = if matches!(action, Action::DragStart) {
-                                0
-                            } else {
-                                1
+                        Action::IconPresent => {
+                            let mut scene = Vec::new();
+                            mimshel_compositor::render::scene(state, &mut scene);
+                            result = u32::from(
+                                matches!(scene.first(), Some(mimshel_compositor::render::SceneElement::Surface { location, lock: false, .. }) if *location == smithay::utils::Point::from((6, 13))),
+                            );
+                        }
+                        Action::Release => {
+                            state.pointer_handle.clone().button(
+                                state,
+                                &smithay::input::pointer::ButtonEvent {
+                                    serial,
+                                    time: 2,
+                                    button: 0x110,
+                                    state: smithay::backend::input::ButtonState::Released,
+                                },
+                            );
+                        }
+                        Action::DragStart
+                        | Action::DragTarget
+                        | Action::Press(_)
+                        | Action::Target(_) => {
+                            let i = match action {
+                                Action::DragStart => 0,
+                                Action::DragTarget => 1,
+                                Action::Press(i) | Action::Target(i) => i,
+                                _ => unreachable!(),
                             };
                             let surface =
                                 mimshel_compositor::xwayland::surface(&state.windows[i].1).unwrap();
                             let pointer = state.pointer_handle.clone();
+                            state.pointer = (10., 10.).into();
+                            let focus =
+                                mimshel_compositor::xwayland::Focus::pointer(state, surface);
                             pointer.motion(
                                 state,
-                                Some((surface, (0., 0.).into())),
+                                Some((focus, (0., 0.).into())),
                                 &smithay::input::pointer::MotionEvent {
                                     location: (10., 10.).into(),
                                     serial,
                                     time: 1,
                                 },
                             );
-                            if i == 0 {
+                            if matches!(action, Action::DragStart | Action::Press(_)) {
                                 pointer.button(
                                     state,
                                     &smithay::input::pointer::ButtonEvent {
@@ -549,14 +579,34 @@ fn clipboard_primary_drag_and_shared_layout() {
         .unwrap()
         .create_data_source(&a.queue.handle(), ());
     source.offer("text/uri-list".into());
+    let icon = a
+        .client
+        .compositor
+        .as_ref()
+        .unwrap()
+        .create_surface(&a.queue.handle(), ());
     a.data
-        .start_drag(Some(&source), &a.surface, None, a.client.serial);
+        .start_drag(Some(&source), &a.surface, Some(&icon), a.client.serial);
+    let icon_file = tempfile::tempfile().unwrap();
+    icon_file.set_len(8 * 8 * 4).unwrap();
+    let pool = a.client.shm.as_ref().unwrap().create_pool(
+        icon_file.as_fd(),
+        8 * 8 * 4,
+        &a.queue.handle(),
+        (),
+    );
+    let buffer = pool.create_buffer(0, 8, 8, 32, wl_shm::Format::Argb8888, &a.queue.handle(), ());
+    icon.attach(Some(&buffer), -4, 3);
+    icon.commit();
     a.sync();
     b.client.mimes.clear();
     server.action(Action::DragTarget);
     b.sync();
     assert!(b.client.drag);
     assert!(b.client.mimes.iter().any(|s| s == "text/uri-list"));
+    assert_eq!(server.action(Action::IconPresent), 1);
+    server.action(Action::Release);
+    assert_eq!(server.action(Action::IconPresent), 0);
 }
 
 #[test]
@@ -801,5 +851,265 @@ fn x11_clipboard_and_primary_both_directions() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+}
+
+#[test]
+fn xdnd_uri_list_both_directions() {
+    use x11rb::{
+        connection::Connection as _,
+        protocol::{
+            Event,
+            xproto::{
+                self, AtomEnum, ClientMessageEvent, ConnectionExt, CreateWindowAux, EventMask,
+                PropMode, SelectionNotifyEvent,
+            },
+        },
+        wrapper::ConnectionExt as _,
+    };
+    if std::process::Command::new("Xwayland")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        eprintln!("SKIP: XDND integration needs Xwayland in PATH");
+        return;
+    }
+    let runtime = tempfile::tempdir().unwrap();
+    let path = runtime.path().join("xdnd");
+    let server = Harness::new(path.clone());
+    let mut peer = Peer::new(&path);
+    let display = server.action(Action::Xwayland);
+    let (x, screen) = x11rb::connect(Some(&format!(":{display}"))).unwrap();
+    let root = x.setup().roots[screen].root;
+    let window = x.generate_id().unwrap();
+    x.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        window,
+        root,
+        0,
+        0,
+        100,
+        80,
+        0,
+        xproto::WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new(),
+    )
+    .unwrap();
+    let atom = |name: &[u8]| x.intern_atom(false, name).unwrap().reply().unwrap().atom;
+    let aware = atom(b"XdndAware");
+    let enter = atom(b"XdndEnter");
+    let position = atom(b"XdndPosition");
+    let status = atom(b"XdndStatus");
+    let drop_atom = atom(b"XdndDrop");
+    let finished = atom(b"XdndFinished");
+    let selection = atom(b"XdndSelection");
+    let copy = atom(b"XdndActionCopy");
+    let uri = atom(b"text/uri-list");
+    let property = atom(b"MIMSHEL_XDND_TEST");
+    x.change_property32(PropMode::REPLACE, window, aware, AtomEnum::ATOM, &[5])
+        .unwrap();
+    x.map_window(window).unwrap();
+    x.flush().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while server.action(Action::Count) < 2 {
+        assert!(std::time::Instant::now() < deadline, "X11 map timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let send = |target, type_, data: [u32; 5]| {
+        x.send_event(
+            false,
+            target,
+            EventMask::NO_EVENT,
+            ClientMessageEvent::new(32, target, type_, data),
+        )
+        .unwrap();
+        x.flush().unwrap();
+    };
+    // Wayland source -> X11 destination: negotiate Copy, then request the URI bytes.
+    server.action(Action::Press(0));
+    peer.sync();
+    let source = peer
+        .client
+        .manager
+        .as_ref()
+        .unwrap()
+        .create_data_source(&peer.queue.handle(), ());
+    source.offer("text/uri-list".into());
+    source.set_actions(wl_data_device_manager::DndAction::Copy);
+    peer.data
+        .start_drag(Some(&source), &peer.surface, None, peer.client.serial);
+    peer.sync();
+    server.action(Action::Target(1));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let proxy = loop {
+        peer.sync();
+        if let Some(Event::ClientMessage(e)) = x.poll_for_event().unwrap() {
+            if e.type_ == enter {
+                assert!(e.data.as_data32()[2..].contains(&uri));
+            }
+            if e.type_ == position {
+                let proxy = e.data.as_data32()[0];
+                send(proxy, status, [window, 1, 0, 0, copy]);
+                break proxy;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "XDND position timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    // A roundtrip on X11 ensures Status reaches XWayland before releasing.
+    x.get_input_focus().unwrap().reply().unwrap();
+    peer.sync();
+    server.action(Action::Release);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(Event::ClientMessage(e)) = x.poll_for_event().unwrap()
+            && e.type_ == drop_atom
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "XDND drop timed out");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    x.convert_selection(window, selection, uri, property, x11rb::CURRENT_TIME)
+        .unwrap();
+    x.flush().unwrap();
+    loop {
+        peer.sync();
+        if let Some(Event::SelectionNotify(e)) = x.poll_for_event().unwrap() {
+            assert_eq!(e.property, property);
+            let bytes = x
+                .get_property(true, window, property, AtomEnum::ANY, 0, 4096)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .value;
+            assert_eq!(bytes, b"file:///tmp/selection-test\r\n");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Wayland -> X11 URI transfer timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    send(proxy, finished, [window, 1, copy, 0, 0]);
+    peer.sync();
+    // X11 source -> Wayland destination: X11Wm creates a proxy over the X root.
+    server.action(Action::Press(1));
+    x.set_selection_owner(window, selection, x11rb::CURRENT_TIME)
+        .unwrap();
+    x.flush().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let proxy = loop {
+        let children = x.query_tree(root).unwrap().reply().unwrap().children;
+        let found = children.into_iter().find(|child| {
+            x.get_property(false, *child, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 128)
+                .unwrap()
+                .reply()
+                .is_ok_and(|p| p.value == b"Smithay XDND proxy")
+        });
+        if let Some(proxy) = found {
+            break proxy;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "incoming XDND proxy timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    send(proxy, enter, [window, 5 << 24, uri, 0, 0]);
+    send(proxy, position, [window, 0, 0, x11rb::CURRENT_TIME, copy]);
+    x.get_input_focus().unwrap().reply().unwrap();
+    peer.client.mimes.clear();
+    server.action(Action::Target(0));
+    loop {
+        peer.sync();
+        if peer.client.mimes.iter().any(|m| m == "text/uri-list") {
+            break;
+        }
+        server.action(Action::Target(0));
+        assert!(
+            std::time::Instant::now() < deadline,
+            "incoming URI offer timed out"
+        );
+    }
+    let offer = peer.client.offer.as_ref().unwrap();
+    offer.accept(peer.client.serial, Some("text/uri-list".into()));
+    offer.set_actions(
+        wl_data_device_manager::DndAction::Copy,
+        wl_data_device_manager::DndAction::Copy,
+    );
+    peer.sync();
+    send(proxy, drop_atom, [window, 0, x11rb::CURRENT_TIME, 0, 0]);
+    server.action(Action::Release);
+    let (mut reader, writer) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    peer.client
+        .offer
+        .as_ref()
+        .unwrap()
+        .receive("text/uri-list".into(), writer.as_fd());
+    peer.sync();
+    drop(writer);
+    loop {
+        if let Some(Event::SelectionRequest(r)) = x.poll_for_event().unwrap() {
+            assert_eq!(r.target, uri);
+            x.change_property8(
+                PropMode::REPLACE,
+                r.requestor,
+                r.property,
+                uri,
+                b"file:///tmp/from-x11\r\n",
+            )
+            .unwrap();
+            x.send_event(
+                false,
+                r.requestor,
+                EventMask::NO_EVENT,
+                SelectionNotifyEvent {
+                    response_type: xproto::SELECTION_NOTIFY_EVENT,
+                    sequence: 0,
+                    time: r.time,
+                    requestor: r.requestor,
+                    selection: r.selection,
+                    target: r.target,
+                    property: r.property,
+                },
+            )
+            .unwrap();
+            x.flush().unwrap();
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "X11 URI request timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let mut bytes = String::new();
+    reader.read_to_string(&mut bytes).unwrap();
+    assert_eq!(bytes, "file:///tmp/from-x11\r\n");
+    peer.client.offer.as_ref().unwrap().finish();
+    peer.sync();
+    loop {
+        if let Some(Event::ClientMessage(e)) = x.poll_for_event().unwrap()
+            && e.type_ == finished
+        {
+            assert_eq!(e.data.as_data32()[1], 1);
+            assert_eq!(e.data.as_data32()[2], copy);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "X11 source did not receive XdndFinished"
+        );
+        std::thread::sleep(Duration::from_millis(2));
     }
 }

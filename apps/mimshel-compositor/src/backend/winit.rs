@@ -45,7 +45,7 @@ impl Drop for Launcher {
 }
 
 /// Run the nested compositor and manage its launched client.
-pub fn run(command: Vec<OsString>) -> Result<(), Error> {
+pub fn run(shell: Vec<OsString>, command: Vec<OsString>) -> Result<(), Error> {
     let mut render_state = render::RenderState::default();
     let mut server = Server::new()?;
     let display = server.start_xwayland()?;
@@ -53,12 +53,51 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
         "WAYLAND_DISPLAY={} DISPLAY=:{display}",
         server.socket_name.to_string_lossy()
     );
+    let shell_child = if let Some(program) = shell.first() {
+        let (server_socket, shell_socket) = std::os::unix::net::UnixStream::pair()?;
+        server.state.dh.insert_client(
+            server_socket,
+            std::sync::Arc::new(crate::state::ClientState::privileged()),
+        )?;
+        // Stdio installs the socket as fd 0 safely in the child. wayland-client
+        // consumes WAYLAND_SOCKET, removes it, and sets CLOEXEC before connecting.
+        Some(
+            Command::new(program)
+                .args(&shell[1..])
+                .process_group(0)
+                .stdin(std::process::Stdio::from(std::os::fd::OwnedFd::from(
+                    shell_socket,
+                )))
+                .env("WAYLAND_SOCKET", "0")
+                .env(
+                    "WAYLAND_DISPLAY",
+                    std::path::PathBuf::from(
+                        std::env::var_os("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR is not set")?,
+                    )
+                    .join(&server.socket_name),
+                )
+                .env("DISPLAY", format!(":{display}"))
+                .spawn()?,
+        )
+    } else {
+        None
+    };
+    let shell_launcher = Launcher {
+        group: shell_child.as_ref().map(Pid::from_child),
+        child: Rc::new(RefCell::new(shell_child)),
+    };
     let child = if let Some(program) = command.first() {
         Some(
             Command::new(program)
                 .args(&command[1..])
                 .process_group(0)
-                .env("WAYLAND_DISPLAY", &server.socket_name)
+                .env(
+                    "WAYLAND_DISPLAY",
+                    std::path::PathBuf::from(
+                        std::env::var_os("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR is not set")?,
+                    )
+                    .join(&server.socket_name),
+                )
                 .env("DISPLAY", format!(":{display}"))
                 .env_remove("WAYLAND_SOCKET")
                 .spawn()?,
@@ -70,18 +109,20 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
         group: child.as_ref().map(Pid::from_child),
         child: Rc::new(RefCell::new(child)),
     };
-    if let Some(child) = launcher.child.borrow().as_ref() {
-        let fd = pidfd_open(Pid::from_child(child), PidfdFlags::empty())?;
-        let child = launcher.child.clone();
-        server.events.handle().insert_source(
-            Generic::new(fd, Interest::READ, PollMode::Level),
-            move |_, _, _| {
-                if let Some(mut child) = child.borrow_mut().take() {
-                    child.wait()?;
-                }
-                Ok(PostAction::Remove)
-            },
-        )?;
+    for launcher in [&launcher, &shell_launcher] {
+        if let Some(child) = launcher.child.borrow().as_ref() {
+            let fd = pidfd_open(Pid::from_child(child), PidfdFlags::empty())?;
+            let child = launcher.child.clone();
+            server.events.handle().insert_source(
+                Generic::new(fd, Interest::READ, PollMode::Level),
+                move |_, _, _| {
+                    if let Some(mut child) = child.borrow_mut().take() {
+                        child.wait()?;
+                    }
+                    Ok(PostAction::Remove)
+                },
+            )?;
+        }
     }
     // Mask before EGL/winit creates threads; the child was spawned unmasked.
     let signals = smithay::reexports::calloop::signals::Signals::new(&[
@@ -213,6 +254,7 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
         Ok(())
     })();
     drop(launcher);
+    drop(shell_launcher);
     result
 }
 

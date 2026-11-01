@@ -26,7 +26,11 @@ sed -E 's/^(desktop|notify) = .*/\1 = "xfce"/; s/^dock = .*/dock = "plank"/; s/^
 # dGPU not woken) for a compositor drawing on the integrated GPU.
 MESA=/usr/share/glvnd/egl_vendor.d/50_mesa.json
 [ -e "$MESA" ] && export __EGL_VENDOR_LIBRARY_FILENAMES="$MESA"
-setsid "$R/mimshel-compositor" --nested > "$N/compositor.log" 2>&1 &
+setsid "$R/mimshel-compositor" --nested --shell \
+    env -u DISPLAY XDG_RUNTIME_DIR="$N/rt" XDG_STATE_HOME="$N/state" \
+    XDG_CACHE_HOME="$N/cache" MIMSHEL_CONFIG="$N/config.toml" \
+    MIMSHEL_DEBUG_WAYLAND="${MIMSHEL_DEBUG_WAYLAND:-}" \
+    dbus-run-session "$R/mimshel" daemon --child > "$N/compositor.log" 2>&1 &
 i=0
 until grep -q '^WAYLAND_DISPLAY=' "$N/compositor.log" 2>/dev/null; do
     i=$((i + 1))
@@ -41,8 +45,6 @@ iso() {
     env XDG_RUNTIME_DIR="$N/rt" XDG_STATE_HOME="$N/state" XDG_CACHE_HOME="$N/cache" \
         MIMSHEL_CONFIG="$N/config.toml" "$@"
 }
-iso env -u DISPLAY WAYLAND_DISPLAY="$RUNTIME/$WD" \
-    MIMSHEL_DEBUG_WAYLAND="${MIMSHEL_DEBUG_WAYLAND:-}" setsid dbus-run-session -- "$R/mimshel" daemon --child > "$N/service.log" 2>&1 &
 sleep 2
 iso env -u DISPLAY WAYLAND_DISPLAY="$RUNTIME/$WD" setsid "$R/mimshel" terminal \
     > "$N/term-wayland.log" 2>&1 &

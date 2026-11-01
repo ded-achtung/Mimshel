@@ -68,9 +68,8 @@ observer!(
     1
 );
 
-pub fn check(path: std::path::PathBuf, title: &str) {
-    let connection =
-        Connection::from_socket(std::os::unix::net::UnixStream::connect(path).unwrap()).unwrap();
+pub fn check(socket: std::os::unix::net::UnixStream, title: &str) {
+    let connection = Connection::from_socket(socket).unwrap();
     let mut events = connection.new_event_queue::<Client>();
     connection.display().get_registry(&events.handle(), ());
     let mut client = Client::default();

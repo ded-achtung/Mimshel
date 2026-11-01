@@ -199,6 +199,9 @@ fn send_metadata(
     handle.done();
 }
 impl GlobalDispatch<ZwlrForeignToplevelManagerV1, ()> for State {
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::state::privileged(&client)
+    }
     fn bind(
         state: &mut Self,
         _: &DisplayHandle,

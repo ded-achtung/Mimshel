@@ -64,7 +64,7 @@ pub(crate) fn start(state: &State, handle: LoopHandle<'static, State>) -> Result
                 let Some(wm_handle) = wm_handle.upgrade() else {
                     return;
                 };
-                match X11Wm::start_wm(wm_handle, x11_socket, client.clone()) {
+                match X11Wm::start_wm(wm_handle, &state.dh, x11_socket, client.clone()) {
                     Ok(mut wm) => {
                         use smithay::wayland::selection::SelectionTarget;
                         for (index, target) in
@@ -153,8 +153,8 @@ impl State {
                 if x11.is_fullscreen() != (record.mode == Mode::Fullscreen) {
                     let _ = x11.set_fullscreen(record.mode == Mode::Fullscreen);
                 }
-                if x11.is_minimized() != (record.mode == Mode::Minimized) {
-                    let _ = x11.set_suspended(record.mode == Mode::Minimized);
+                if x11.is_hidden() != (record.mode == Mode::Minimized) {
+                    let _ = x11.set_hidden(record.mode == Mode::Minimized);
                 }
             }
         }
@@ -519,14 +519,14 @@ impl KeyboardTarget<State> for Focus {
         serial: Serial,
     ) {
         if let Some(x11) = &self.x11 {
-            x11.enter(seat, data, keys, serial);
+            KeyboardTarget::enter(x11, seat, data, keys, serial);
         } else {
             KeyboardTarget::enter(&self.surface, seat, data, keys, serial);
         }
     }
     fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial) {
         if let Some(x11) = &self.x11 {
-            x11.leave(seat, data, serial);
+            KeyboardTarget::leave(x11, seat, data, serial);
         } else {
             KeyboardTarget::leave(&self.surface, seat, data, serial);
         }
@@ -557,6 +557,269 @@ impl KeyboardTarget<State> for Focus {
             x11.modifiers(seat, data, modifiers, serial);
         } else {
             self.surface.modifiers(seat, data, modifiers, serial);
+        }
+    }
+}
+
+use smithay::input::pointer::*;
+impl Focus {
+    fn inner_pointer_target(&self) -> &dyn PointerTarget<State> {
+        // X11Surface forwards regular input to its Wayland transport.
+        match &self.x11 {
+            Some(x11) => x11,
+            None => &self.surface,
+        }
+    }
+    /// Retain the X11 identity when selecting a pointer target.
+    pub fn pointer(state: &State, surface: WlSurface) -> Self {
+        let x11 = state
+            .windows
+            .iter()
+            .map(|(_, w)| w)
+            .chain(state.overrides.iter())
+            .find(|w| crate::xwayland::surface(w).as_ref() == Some(&surface))
+            .and_then(|w| w.x11_surface())
+            .cloned();
+        Self { surface, x11 }
+    }
+}
+impl PointerTarget<State> for Focus {
+    fn enter(&self, seat: &Seat<State>, data: &mut State, event: &MotionEvent) {
+        self.inner_pointer_target().enter(seat, data, event)
+    }
+    fn motion(&self, seat: &Seat<State>, data: &mut State, event: &MotionEvent) {
+        self.inner_pointer_target().motion(seat, data, event)
+    }
+    fn relative_motion(&self, seat: &Seat<State>, data: &mut State, event: &RelativeMotionEvent) {
+        self.inner_pointer_target()
+            .relative_motion(seat, data, event)
+    }
+    fn button(&self, seat: &Seat<State>, data: &mut State, event: &ButtonEvent) {
+        self.inner_pointer_target().button(seat, data, event)
+    }
+    fn axis(&self, seat: &Seat<State>, data: &mut State, frame: AxisFrame) {
+        self.inner_pointer_target().axis(seat, data, frame)
+    }
+    fn frame(&self, seat: &Seat<State>, data: &mut State) {
+        self.inner_pointer_target().frame(seat, data)
+    }
+    fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial, time: u32) {
+        self.inner_pointer_target().leave(seat, data, serial, time)
+    }
+    fn gesture_swipe_begin(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GestureSwipeBeginEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_swipe_begin(seat, data, event)
+    }
+    fn gesture_swipe_update(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GestureSwipeUpdateEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_swipe_update(seat, data, event)
+    }
+    fn gesture_swipe_end(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GestureSwipeEndEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_swipe_end(seat, data, event)
+    }
+    fn gesture_pinch_begin(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GesturePinchBeginEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_pinch_begin(seat, data, event)
+    }
+    fn gesture_pinch_update(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GesturePinchUpdateEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_pinch_update(seat, data, event)
+    }
+    fn gesture_pinch_end(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GesturePinchEndEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_pinch_end(seat, data, event)
+    }
+    fn gesture_hold_begin(
+        &self,
+        seat: &Seat<State>,
+        data: &mut State,
+        event: &GestureHoldBeginEvent,
+    ) {
+        self.inner_pointer_target()
+            .gesture_hold_begin(seat, data, event)
+    }
+    fn gesture_hold_end(&self, seat: &Seat<State>, data: &mut State, event: &GestureHoldEndEvent) {
+        self.inner_pointer_target()
+            .gesture_hold_end(seat, data, event)
+    }
+}
+
+use smithay::{
+    input::dnd::{DndFocus, OfferData, Source},
+    reexports::wayland_server::DisplayHandle,
+    utils::Point,
+    wayland::selection::data_device::WlOfferData,
+    xwayland::xwm::XwmOfferData,
+};
+use std::sync::Arc;
+/// Offer transport selected by the destination surface.
+pub enum DragOffer<S: Source> {
+    /// Native Wayland data offer.
+    Wayland(WlOfferData<S>),
+    /// XDND offer managed by X11Wm.
+    X11(XwmOfferData<S>),
+}
+
+impl<S: Source> OfferData for DragOffer<S> {
+    fn disable(&self) {
+        match self {
+            DragOffer::Wayland(data) => data.disable(),
+            DragOffer::X11(data) => data.disable(),
+        }
+    }
+
+    fn drop(&self) {
+        match self {
+            DragOffer::Wayland(data) => data.drop(),
+            DragOffer::X11(data) => data.drop(),
+        }
+    }
+
+    fn validated(&self) -> bool {
+        match self {
+            DragOffer::Wayland(data) => data.validated(),
+            DragOffer::X11(data) => data.validated(),
+        }
+    }
+}
+
+impl DndFocus<State> for Focus {
+    type OfferData<S>
+        = DragOffer<S>
+    where
+        S: Source;
+
+    fn enter<S: Source>(
+        &self,
+        data: &mut State,
+        dh: &DisplayHandle,
+        source: Arc<S>,
+        seat: &Seat<State>,
+        location: Point<f64, Logical>,
+        serial: &Serial,
+    ) -> Option<DragOffer<S>> {
+        match &self.x11 {
+            None => {
+                let surface = &self.surface;
+                DndFocus::enter(surface, data, dh, source, seat, location, serial)
+                    .map(DragOffer::Wayland)
+            }
+            Some(surface) => DndFocus::enter(surface, data, dh, source, seat, location, serial)
+                .map(DragOffer::X11),
+        }
+    }
+
+    fn motion<S: Source>(
+        &self,
+        data: &mut State,
+        offer: Option<&mut DragOffer<S>>,
+        seat: &Seat<State>,
+        location: Point<f64, Logical>,
+        time: u32,
+    ) {
+        match &self.x11 {
+            None => {
+                let surface = &self.surface;
+                let offer = match offer {
+                    Some(DragOffer::Wayland(offer)) => Some(offer),
+                    None => None,
+                    _ => return,
+                };
+                DndFocus::motion(surface, data, offer, seat, location, time)
+            }
+            Some(surface) => {
+                let offer = match offer {
+                    Some(DragOffer::X11(offer)) => Some(offer),
+                    None => None,
+                    _ => return,
+                };
+                DndFocus::motion(surface, data, offer, seat, location, time)
+            }
+        }
+    }
+
+    fn leave<S: Source>(
+        &self,
+        data: &mut State,
+        offer: Option<&mut DragOffer<S>>,
+        seat: &Seat<State>,
+    ) {
+        match &self.x11 {
+            None => {
+                let surface = &self.surface;
+                let offer = match offer {
+                    Some(DragOffer::Wayland(offer)) => Some(offer),
+                    None => None,
+                    _ => return,
+                };
+                DndFocus::leave(surface, data, offer, seat)
+            }
+            Some(surface) => {
+                let offer = match offer {
+                    Some(DragOffer::X11(offer)) => Some(offer),
+                    None => None,
+                    _ => return,
+                };
+                DndFocus::leave(surface, data, offer, seat)
+            }
+        }
+    }
+
+    fn drop<S: Source>(
+        &self,
+        data: &mut State,
+        offer: Option<&mut DragOffer<S>>,
+        seat: &Seat<State>,
+    ) {
+        match &self.x11 {
+            None => {
+                let surface = &self.surface;
+                let offer = match offer {
+                    Some(DragOffer::Wayland(offer)) => Some(offer),
+                    None => None,
+                    _ => return,
+                };
+                DndFocus::drop(surface, data, offer, seat)
+            }
+            Some(surface) => {
+                let offer = match offer {
+                    Some(DragOffer::X11(offer)) => Some(offer),
+                    None => None,
+                    _ => return,
+                };
+                DndFocus::drop(surface, data, offer, seat)
+            }
         }
     }
 }
