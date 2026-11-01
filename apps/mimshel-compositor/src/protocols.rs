@@ -113,6 +113,19 @@ impl State {
         // negotiates size; it must not reserve space before the panel is shown.
         if !buffered(surface) {
             map.unmap_layer(&layer);
+            // Unmapped after its first configure (a popup hidden by attaching
+            // no buffer): as the protocol says, the client starts over, so its
+            // next commit must get a configure again. Without it a menu
+            // reopened after being closed never appeared.
+            if initial {
+                smithay::wayland::compositor::with_states(surface, |s| {
+                    if let Some(data) = s.data_map.get::<wlr_layer::LayerSurfaceData>()
+                        && let Ok(mut data) = data.lock()
+                    {
+                        data.initial_configure_sent = false;
+                    }
+                });
+            }
         }
         drop(map);
         self.arrange_layers();
