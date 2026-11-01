@@ -609,16 +609,10 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let area = self.model.area;
-        surface.with_pending_state(|s| {
-            s.size = Some(
-                (
-                    640.min(area.width),
-                    400.min((area.height - crate::model::TITLE_HEIGHT).max(1)),
-                )
-                    .into(),
-            )
-        });
+        // No size in the first configure: a new window chooses its own (the
+        // protocol's 0×0). A suggested 640×400 made windows with a size of
+        // their own (the About window, our terminal) draw twice and jump.
+        // Placement and the oversize clamp still happen when it maps.
         self.pending.push(Window::new_wayland_window(surface));
     }
 
