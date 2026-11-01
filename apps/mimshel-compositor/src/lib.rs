@@ -30,3 +30,6 @@ pub type Error = Box<dyn std::error::Error>;
 
 /// XWayland process and X11 window policy.
 pub mod xwayland;
+
+mod selection;
+

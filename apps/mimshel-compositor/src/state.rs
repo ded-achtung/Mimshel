@@ -68,6 +68,11 @@ pub struct State {
         smithay::backend::allocator::dmabuf::Dmabuf,
         smithay::wayland::dmabuf::ImportNotifier,
     )>,
+    pub(crate) wayland_selections: [Option<Vec<String>>; 2],
+    pub(crate) data_device: smithay::wayland::selection::data_device::DataDeviceState,
+    pub(crate) primary_selection:
+        smithay::wayland::selection::primary_selection::PrimarySelectionState,
+    pub(crate) selection_loop: smithay::reexports::calloop::LoopHandle<'static, Self>,
     compositor: CompositorState,
     shm: ShmState,
     xdg: XdgShellState,
@@ -106,7 +111,7 @@ impl State {
         dh: DisplayHandle,
         handle: smithay::reexports::calloop::LoopHandle<'static, Self>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let protocols = crate::protocols::Protocols::new(&dh, handle);
+        let protocols = crate::protocols::Protocols::new(&dh, handle.clone());
         let compositor = CompositorState::new::<Self>(&dh);
         let shm = ShmState::new::<Self>(&dh, vec![]);
         let xdg = XdgShellState::new::<Self>(&dh);
@@ -135,9 +140,18 @@ impl State {
             protocols,
             dirty: true,
             output_scale: 1.0,
-            dh,
+            dh: dh.clone(),
             dmabuf: smithay::wayland::dmabuf::DmabufState::new(),
             imports: Vec::new(),
+            wayland_selections: [None, None],
+            data_device: smithay::wayland::selection::data_device::DataDeviceState::new::<Self>(
+                &dh,
+            ),
+            primary_selection:
+                smithay::wayland::selection::primary_selection::PrimarySelectionState::new::<Self>(
+                    &dh,
+                ),
+            selection_loop: handle,
             compositor,
             shm,
             xdg,
@@ -718,6 +732,10 @@ impl SeatHandler for State {
     type TouchFocus = WlSurface;
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seats
+    }
+
+    fn focus_changed(&mut self, seat: &Seat<Self>, focus: Option<&Self::KeyboardFocus>) {
+        self.selection_focus(seat, focus);
     }
 
     fn cursor_image(&mut self, _: &Seat<Self>, _: smithay::input::pointer::CursorImageStatus) {}

@@ -65,7 +65,19 @@ pub(crate) fn start(state: &State, handle: LoopHandle<'static, State>) -> Result
                     return;
                 };
                 match X11Wm::start_wm(wm_handle, x11_socket, client.clone()) {
-                    Ok(wm) => state.xwms.push(wm),
+                    Ok(mut wm) => {
+                        use smithay::wayland::selection::SelectionTarget;
+                        for (index, target) in
+                            [SelectionTarget::Clipboard, SelectionTarget::Primary]
+                                .into_iter()
+                                .enumerate()
+                        {
+                            if let Some(mimes) = state.wayland_selections[index].clone() {
+                                let _ = wm.new_selection(target, Some(mimes));
+                            }
+                        }
+                        state.xwms.push(wm);
+                    }
                     Err(error) => eprintln!("XWayland WM: {error}"),
                 }
             }
@@ -281,7 +293,45 @@ impl XWaylandShellHandler for State {
 }
 smithay::delegate_xwayland_shell!(State);
 impl XwmHandler for State {
-    fn disconnected(&mut self, _: XwmId) {
+    fn allow_selection_access(
+        &mut self,
+        _: XwmId,
+        _: smithay::wayland::selection::SelectionTarget,
+    ) -> bool {
+        !self.protocols.locked
+            && self
+                .keyboard
+                .current_focus()
+                .is_some_and(|focus| focus.x11.is_some())
+    }
+    fn new_selection(
+        &mut self,
+        id: XwmId,
+        target: smithay::wayland::selection::SelectionTarget,
+        mimes: Vec<String>,
+    ) {
+        self.x11_selection(id, target, mimes);
+    }
+    fn cleared_selection(
+        &mut self,
+        id: XwmId,
+        target: smithay::wayland::selection::SelectionTarget,
+    ) {
+        self.clear_x11_selection(id, target);
+    }
+    fn send_selection(
+        &mut self,
+        _: XwmId,
+        target: smithay::wayland::selection::SelectionTarget,
+        mime: String,
+        fd: std::os::fd::OwnedFd,
+    ) {
+        self.send_wayland_selection(target, mime, fd);
+    }
+
+    fn disconnected(&mut self, id: XwmId) {
+        self.clear_x11_selection(id, smithay::wayland::selection::SelectionTarget::Clipboard);
+        self.clear_x11_selection(id, smithay::wayland::selection::SelectionTarget::Primary);
         let surfaces: Vec<_> = self
             .windows
             .iter()
