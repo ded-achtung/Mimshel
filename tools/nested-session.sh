@@ -42,7 +42,7 @@ iso() {
         MIMSHEL_CONFIG="$N/config.toml" "$@"
 }
 iso env -u DISPLAY WAYLAND_DISPLAY="$RUNTIME/$WD" \
-    setsid dbus-run-session -- "$R/mimshel" daemon --child > "$N/service.log" 2>&1 &
+    MIMSHEL_DEBUG_WAYLAND="${MIMSHEL_DEBUG_WAYLAND:-}" setsid dbus-run-session -- "$R/mimshel" daemon --child > "$N/service.log" 2>&1 &
 sleep 2
 iso env -u DISPLAY WAYLAND_DISPLAY="$RUNTIME/$WD" setsid "$R/mimshel" terminal \
     > "$N/term-wayland.log" 2>&1 &
