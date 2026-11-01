@@ -286,7 +286,10 @@ impl State {
                     .max(1),
                 )),
                 Mode::Fullscreen => Some((self.model.output.width, self.model.output.height)),
-                Mode::Normal => Some((640.min(area.width), 400.min(area.height))),
+                // Not mapped yet: a normal window chooses its own size. A
+                // fixed 640×400 here made the About window open at 770 points,
+                // jump to 640×400 and keep an empty strip.
+                Mode::Normal => None,
                 Mode::Minimized => None,
             }
         };
