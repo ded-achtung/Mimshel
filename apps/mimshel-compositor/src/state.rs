@@ -44,6 +44,8 @@ pub struct Drag {
 pub struct State {
     /// Protocol-independent placement and focus policy.
     pub model: crate::model::Model,
+    /// Shell protocol resources and policy.
+    pub protocols: crate::protocols::Protocols,
     /// Mapped windows in stack or creation order.
     pub windows: Vec<(crate::model::WindowId, Window)>,
     pending: Vec<Window>,
@@ -94,7 +96,11 @@ pub struct State {
 
 impl State {
     /// Create initialized state.
-    pub fn new(dh: DisplayHandle) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        dh: DisplayHandle,
+        handle: smithay::reexports::calloop::LoopHandle<'static, Self>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let protocols = crate::protocols::Protocols::new(&dh, handle);
         let compositor = CompositorState::new::<Self>(&dh);
         let shm = ShmState::new::<Self>(&dh, vec![]);
         let xdg = XdgShellState::new::<Self>(&dh);
@@ -117,6 +123,7 @@ impl State {
             model: crate::model::Model::new(1280, 800),
             windows: Vec::new(),
             pending: Vec::new(),
+            protocols,
             dirty: true,
             output_scale: 1.0,
             dh,
@@ -145,6 +152,11 @@ impl State {
 
     /// Publish policy activation and keyboard focus to clients.
     pub fn sync_focus(&mut self) {
+        self.protocols.toplevels_dirty = true;
+        if self.protocols.locked {
+            self.focus_lock();
+            return;
+        }
         for (id, window) in &self.windows {
             window.set_activated(self.model.focus == Some(*id));
             if let Some(top) = window.toplevel() {
@@ -152,10 +164,14 @@ impl State {
             }
         }
         let focus = self
-            .windows
-            .iter()
-            .find(|(id, _)| Some(*id) == self.model.focus)
-            .and_then(|(_, w)| w.toplevel().map(|top| top.wl_surface().clone()));
+            .exclusive_layer_focus()
+            .or_else(|| self.current_layer_focus())
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .find(|(id, _)| Some(*id) == self.model.focus)
+                    .and_then(|(_, w)| w.toplevel().map(|top| top.wl_surface().clone()))
+            });
         self.keyboard
             .clone()
             .set_focus(self, focus, smithay::utils::SERIAL_COUNTER.next_serial());
@@ -176,6 +192,7 @@ impl State {
         }
         self.windows.retain(|(id, _)| !dead.contains(id));
         self.pending.retain(|w| w.alive());
+        self.refresh_protocols();
         self.space.refresh();
         self.popups.cleanup();
         if !dead.is_empty() {
@@ -185,6 +202,7 @@ impl State {
 
     /// Apply the policy stack and positions to the desktop space.
     pub fn sync_positions(&mut self) {
+        self.protocols.toplevels_dirty = true;
         // map_element also raises; replay the model stack, not creation order.
         for record in &self.model.windows {
             if let Some((_, window)) = self.windows.iter().find(|(id, _)| *id == record.id) {
@@ -233,7 +251,7 @@ impl State {
                         })
                     .max(1),
                 )),
-                Mode::Fullscreen => Some((area.width, area.height)),
+                Mode::Fullscreen => Some((self.model.output.width, self.model.output.height)),
                 Mode::Normal => Some((640.min(area.width), 400.min(area.height))),
                 Mode::Minimized => None,
             }
@@ -258,6 +276,7 @@ impl State {
 
     /// Publish geometry and state after output resize or restoring a hidden window.
     pub fn configure_windows(&mut self) {
+        self.configure_locks();
         for (id, window) in &self.windows {
             let Some(record) = self.model.windows.iter().find(|w| w.id == *id) else {
                 continue;
@@ -284,6 +303,9 @@ impl State {
 
     /// Locate a compositor frame control in front-to-back order.
     pub fn decoration_under(&self) -> Option<(crate::model::WindowId, crate::decoration::Hit)> {
+        if self.protocols.locked || self.layer_under(true).is_some() {
+            return None;
+        }
         for w in self.model.windows.iter().rev() {
             if w.mode == crate::model::Mode::Minimized {
                 continue;
@@ -327,7 +349,7 @@ impl State {
     }
 
     /// Constrain a popup to the logical output bounds.
-    fn popup_geometry(
+    pub(crate) fn popup_geometry(
         &self,
         surface: &PopupSurface,
         positioner: PositionerState,
@@ -344,6 +366,13 @@ impl State {
                     .rect(*id)
                     .map(|r| Point::from((r.x, r.y + self.model.title_height(*id))))
             })
+            .or_else(|| {
+                let root = root.as_ref()?;
+                let output = self.space.outputs().next()?;
+                let map = smithay::desktop::layer_map_for_output(output);
+                let layer = map.layer_for_surface(root, WindowSurfaceType::ALL)?;
+                map.layer_geometry(layer).map(|g| g.loc)
+            })
             .unwrap_or_default();
         let offset = origin + get_popup_toplevel_coords(&kind);
         let area = self.model.area;
@@ -355,6 +384,12 @@ impl State {
 
     /// Find the surface and origin under the pointer.
     pub fn surface_under(&self) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if self.protocols.locked {
+            return self.lock_under();
+        }
+        if let Some(hit) = self.layer_under(true) {
+            return Some(hit);
+        }
         if self.decoration_under().is_some() {
             return None;
         }
@@ -364,6 +399,7 @@ impl State {
                 w.surface_under(self.pointer - origin.to_f64(), WindowSurfaceType::ALL)
                     .map(|(surface, local)| (surface, (local + origin).to_f64()))
             })
+            .or_else(|| self.layer_under(false))
     }
 }
 
@@ -470,6 +506,10 @@ impl CompositorHandler for State {
                 }
             }
         }
+        self.commit_layers(surface);
+        if self.protocols.locked {
+            self.focus_lock();
+        }
         self.popups.commit(surface);
         if let Some(PopupKind::Xdg(popup)) = self.popups.find_popup(surface)
             && !popup.is_initial_configure_sent()
@@ -567,7 +607,14 @@ impl XdgShellHandler for State {
         self.request_mode(&surface, crate::model::Mode::Minimized);
     }
 
+    fn app_id_changed(&mut self, _: ToplevelSurface) {
+        self.protocols.toplevels_dirty = true;
+        self.publish_toplevels();
+    }
+
     fn title_changed(&mut self, _: ToplevelSurface) {
+        self.protocols.toplevels_dirty = true;
+        self.publish_toplevels();
         self.dirty = true;
     }
 
@@ -602,6 +649,9 @@ impl XdgShellHandler for State {
         seat: smithay::reexports::wayland_server::protocol::wl_seat::WlSeat,
         serial: smithay::utils::Serial,
     ) {
+        if self.protocols.locked {
+            return;
+        }
         use smithay::desktop::{PopupKeyboardGrab, PopupPointerGrab, find_popup_root_surface};
         if Seat::from_resource(&seat).as_ref() != Some(&self.seat) {
             return;
@@ -704,8 +754,7 @@ impl State {
             if let Some(w) = self.model.windows.iter_mut().find(|w| w.id == *id) {
                 w.decorated = !client;
             }
-            self.model
-                .resize_output(self.model.area.width, self.model.area.height);
+            self.model.set_work_area(self.model.area);
             self.configure_windows();
         } else if let Some(mode) = self
             .requested_modes

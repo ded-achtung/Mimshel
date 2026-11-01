@@ -19,6 +19,9 @@ pub mod model;
 /// Damage-based rendering.
 pub mod render;
 
+/// Shell protocol policy.
+pub mod protocols;
+
 /// Wayland protocol state.
 pub mod state;
 

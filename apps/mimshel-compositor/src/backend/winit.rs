@@ -195,7 +195,12 @@ pub fn run(command: Vec<OsString>) -> Result<(), Error> {
             let size = backend.window_size();
             if server.state.dirty && size.w > 0 && size.h > 0 {
                 server.state.dirty = false;
-                render::frame(&mut backend, &server.state, &mut tracker, &mut render_state)?;
+                render::frame(
+                    &mut backend,
+                    &mut server.state,
+                    &mut tracker,
+                    &mut render_state,
+                )?;
                 render::callbacks(&server.state, &output, start.elapsed());
                 server.state.dh.flush_clients()?;
             }

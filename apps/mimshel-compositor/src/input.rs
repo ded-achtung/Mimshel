@@ -17,6 +17,7 @@ use smithay::{
 impl State {
     /// Forward host input and update focus and interactive drags.
     pub fn input<I: InputBackend>(&mut self, event: InputEvent<I>, size: Size<i32, Logical>) {
+        self.notify_activity();
         let pointer = self.pointer_handle.clone();
         let keyboard = self.keyboard.clone();
         match event {
@@ -28,7 +29,9 @@ impl State {
                     SERIAL_COUNTER.next_serial(),
                     event.time_msec(),
                     |state, modifiers, keys| {
-                        if modifiers.logo
+                        if !state.protocols.locked
+                            && state.exclusive_layer_focus().is_none()
+                            && modifiers.logo
                             && keys.raw_latin_sym_or_raw_current_sym()
                                 == Some(smithay::input::keyboard::Keysym::u)
                         {
@@ -98,6 +101,7 @@ impl State {
                     && !pointer.is_grabbed()
                     && let Some((id, hit)) = self.decoration_under()
                 {
+                    self.leave_on_demand_layer();
                     self.decoration_pressed = true;
                     self.model.raise(id);
                     self.sync_positions();
@@ -149,7 +153,11 @@ impl State {
                     }
                     return;
                 }
-                if event.state() == ButtonState::Pressed && !pointer.is_grabbed() {
+                if event.state() == ButtonState::Pressed
+                    && !pointer.is_grabbed()
+                    && !self.focus_shell_click()
+                {
+                    self.leave_on_demand_layer();
                     let hit = self
                         .space
                         .element_under(self.pointer)
@@ -322,7 +330,9 @@ impl State {
             smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
         >,
     ) {
-        if smithay::input::Seat::from_resource(&seat).as_ref() != Some(&self.seat) {
+        if self.protocols.locked
+            || smithay::input::Seat::from_resource(&seat).as_ref() != Some(&self.seat)
+        {
             return;
         }
         let pointer = self.pointer_handle.clone();

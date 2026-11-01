@@ -59,6 +59,8 @@ pub struct Model {
     pub focus: Option<WindowId>,
     /// Available logical output bounds.
     pub area: Rect,
+    /// Complete output bounds, including shell exclusive zones.
+    pub output: Rect,
     next: WindowId,
     cascade: usize,
     minimize_clock: u64,
@@ -71,6 +73,12 @@ impl Model {
             windows: Vec::new(),
             focus: None,
             area: Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            output: Rect {
                 x: 0,
                 y: 0,
                 width,
@@ -186,7 +194,11 @@ impl Model {
                     w.rect = saved;
                 }
             } else {
-                w.rect = self.area;
+                w.rect = if mode == Mode::Fullscreen {
+                    self.output
+                } else {
+                    self.area
+                };
                 if mode == Mode::Maximized && w.decorated {
                     w.rect.height = (w.rect.height - TITLE_HEIGHT).max(1);
                 }
@@ -201,6 +213,19 @@ impl Model {
                 .find(|w| w.mode != Mode::Minimized)
                 .map(|w| w.id);
         }
+    }
+
+    /// Restore a particular minimized window to its previous presentation mode.
+    pub fn restore(&mut self, id: WindowId) {
+        if let Some(mode) = self
+            .windows
+            .iter()
+            .find(|w| w.id == id && w.mode == Mode::Minimized)
+            .map(|w| w.resume)
+        {
+            self.set_mode(id, mode);
+        }
+        self.raise(id);
     }
 
     /// Restore and focus the most recently minimized window.
@@ -218,11 +243,21 @@ impl Model {
 
     /// Update output bounds and keep window origins visible.
     pub fn resize_output(&mut self, width: i32, height: i32) {
-        self.area.width = width.max(1);
-        self.area.height = height.max(1);
+        self.output.width = width.max(1);
+        self.output.height = height.max(1);
+        self.set_work_area(self.output);
+    }
+
+    /// Apply shell exclusive zones without constraining fullscreen windows.
+    pub fn set_work_area(&mut self, area: Rect) {
+        self.area = area;
         for w in &mut self.windows {
             if matches!(w.mode, Mode::Maximized | Mode::Fullscreen) {
-                w.rect = self.area;
+                w.rect = if w.mode == Mode::Fullscreen {
+                    self.output
+                } else {
+                    self.area
+                };
                 if w.mode == Mode::Maximized && w.decorated {
                     w.rect.height = (w.rect.height - TITLE_HEIGHT).max(1);
                 }

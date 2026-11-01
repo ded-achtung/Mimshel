@@ -28,6 +28,83 @@ render_elements! {
     Border=Border,
 }
 
+/// A render source selected before importing buffers into GLES.
+#[derive(Clone)]
+pub enum SceneElement {
+    /// A desktop window, including its decorations and popups.
+    Window(smithay::desktop::Window),
+    /// A shell surface and its logical origin.
+    Surface {
+        /// Surface tree to import.
+        surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        /// Logical output location.
+        location: smithay::utils::Point<i32, smithay::utils::Logical>,
+        /// This source belongs to the session lock.
+        lock: bool,
+    },
+}
+
+/// Select all render sources, front to back. The lock branch is exhaustive:
+/// neither windows, decorations, layer surfaces nor their popups can enter it.
+pub fn scene(state: &State, elements: &mut Vec<SceneElement>) {
+    elements.clear();
+    if state.protocols.locked {
+        for lock in &state.protocols.locks {
+            if lock.alive() && crate::protocols::buffered(lock.wl_surface()) {
+                elements.push(SceneElement::Surface {
+                    surface: lock.wl_surface().clone(),
+                    location: (0, 0).into(),
+                    lock: true,
+                });
+            }
+        }
+        return;
+    }
+    use smithay::wayland::shell::wlr_layer::Layer;
+    let layers = |above: bool, elements: &mut Vec<SceneElement>| {
+        if let Some(output) = state.space.outputs().next() {
+            let map = smithay::desktop::layer_map_for_output(output);
+            for kind in if above {
+                [Layer::Overlay, Layer::Top]
+            } else {
+                [Layer::Bottom, Layer::Background]
+            } {
+                for layer in map.layers_on(kind).rev() {
+                    if !crate::protocols::buffered(layer.wl_surface()) {
+                        continue;
+                    }
+                    if let Some(geometry) = map.layer_geometry(layer) {
+                        for (popup, offset) in
+                            smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+                        {
+                            elements.push(SceneElement::Surface {
+                                surface: popup.wl_surface().clone(),
+                                location: geometry.loc + offset - popup.geometry().loc,
+                                lock: false,
+                            });
+                        }
+                        elements.push(SceneElement::Surface {
+                            surface: layer.wl_surface().clone(),
+                            location: geometry.loc,
+                            lock: false,
+                        });
+                    }
+                }
+            }
+        }
+    };
+    layers(true, elements);
+    elements.extend(
+        state
+            .space
+            .elements()
+            .rev()
+            .cloned()
+            .map(SceneElement::Window),
+    );
+    layers(false, elements);
+}
+
 struct DecorationCache {
     id: crate::model::WindowId,
     title: String,
@@ -47,6 +124,7 @@ fn fonts() -> mimshel_text::Fonts {
 /// Reusable render storage and startup timing policy.
 pub struct RenderState {
     elements: Vec<Elements>,
+    scene: Vec<SceneElement>,
     decorations: Vec<DecorationCache>,
     fonts: mimshel_text::Fonts,
     timing: bool,
@@ -56,6 +134,7 @@ impl Default for RenderState {
     fn default() -> Self {
         Self {
             elements: Vec::new(),
+            scene: Vec::new(),
             decorations: Vec::new(),
             fonts: fonts(),
             timing: std::env::var_os("MIMSHEL_TIMING").as_deref()
@@ -67,7 +146,7 @@ impl Default for RenderState {
 /// Render damage using reusable storage and optional GPU timing.
 pub fn frame(
     backend: &mut WinitGraphicsBackend<GlesRenderer>,
-    state: &State,
+    state: &mut State,
     tracker: &mut OutputDamageTracker,
     render: &mut RenderState,
 ) -> Result<(), Error> {
@@ -78,7 +157,23 @@ pub fn frame(
     render
         .decorations
         .retain(|cache| state.windows.iter().any(|(id, _)| *id == cache.id));
-    for window in state.space.elements().rev() {
+    scene(state, &mut render.scene);
+    for item in &render.scene {
+        let window = match item {
+            SceneElement::Surface {
+                surface, location, ..
+            } => {
+                append_surface(
+                    renderer,
+                    surface,
+                    *location,
+                    state.output_scale,
+                    &mut render.elements,
+                );
+                continue;
+            }
+            SceneElement::Window(window) => window,
+        };
         let Some(origin) = state.space.element_location(window) else {
             continue;
         };
@@ -222,9 +317,13 @@ pub fn frame(
         &mut fb,
         age,
         &render.elements,
-        [0.025, 0.035, 0.06, 1.0],
+        if state.protocols.locked {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [0.025, 0.035, 0.06, 1.0]
+        },
     )?;
-    if render.timing {
+    if render.timing || state.protocols.locked {
         result.sync.wait()?;
     }
     let elapsed = start.elapsed();
@@ -235,11 +334,31 @@ pub fn frame(
         }
         backend.submit(Some(damage))?;
     }
+    state.lock_frame_presented();
     Ok(())
 }
 
 /// Deliver frame callbacks to mapped windows.
 pub fn callbacks(state: &State, output: &Output, elapsed: std::time::Duration) {
+    if state.protocols.locked {
+        for lock in &state.protocols.locks {
+            smithay::desktop::utils::send_frames_surface_tree(
+                lock.wl_surface(),
+                output,
+                elapsed,
+                Some(std::time::Duration::ZERO),
+                |_, _| Some(output.clone()),
+            );
+        }
+        return;
+    }
+    let map = smithay::desktop::layer_map_for_output(output);
+    for layer in map.layers() {
+        layer.send_frame(output, elapsed, Some(std::time::Duration::ZERO), |_, _| {
+            Some(output.clone())
+        });
+    }
+    drop(map);
     for (id, window) in &state.windows {
         if state
             .model

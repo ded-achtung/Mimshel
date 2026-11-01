@@ -1394,6 +1394,7 @@ dependencies = [
  "tiny-skia",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

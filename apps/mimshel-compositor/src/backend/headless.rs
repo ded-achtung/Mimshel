@@ -56,7 +56,8 @@ impl Server {
         let mut display = Display::<State>::new()?;
         let display_fd = display.as_fd().try_clone_to_owned()?;
         let mut dh = display.handle();
-        let mut state = State::new(dh.clone())?;
+        let events = EventLoop::try_new()?;
+        let mut state = State::new(dh.clone(), events.handle())?;
         use smithay::{
             output::{Mode, Output, PhysicalProperties, Subpixel},
             utils::Transform,
@@ -83,7 +84,6 @@ impl Server {
         );
         output.set_preferred(mode);
         state.space.map_output(&output, (0, 0));
-        let events = EventLoop::try_new()?;
         let name = socket.path.file_name().unwrap_or_default().to_owned();
         events.handle().insert_source(
             Generic::new(socket, Interest::READ, PollMode::Level),
