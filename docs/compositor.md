@@ -58,6 +58,14 @@ Laptop (Radeon 780M, nested in X11, kitty inside, Mesa EGL only —
 | Without the EGL vendor choice | 184 MB: GLVND also loads NVIDIA's EGL (96 MB) |
 | `kill -TERM` | the client is stopped, no `wayland-*` left behind |
 
+After step 2.3 (2026-11-01, our own terminal inside, decorations on): render
+median 2.1 ms; idle 20 s → 0 frames, 0 CPU ticks. PSS 148 MB, but read it with
+care: PSS splits shared pages among the processes using them, and right after a
+reboot few others map Mesa's `libLLVM`, so its share alone went 49 → 96 MB. What
+is the compositor's own: anonymous memory (`Pss_Anon`) 20 MB, the binary 7.6 MB,
+the title font 2 MB (only the configured family is loaded now). Compare
+`Pss_Anon` between builds, not the total.
+
 ## Step 2.3 — shell protocols
 
 The nested compositor publishes these globals; the shell's Wayland clients are
