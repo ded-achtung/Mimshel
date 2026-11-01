@@ -543,6 +543,8 @@ impl Popup {
 
     pub fn set_geometry(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
         d.layer_change(self.id, |layer, win| {
+            layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+            layer.set_exclusive_zone(-1);
             layer.set_margin(i32::from(y), 0, 0, i32::from(x));
             layer.set_size(u32::from(w), u32::from(h));
             win.size = (u32::from(w), u32::from(h));
@@ -556,6 +558,11 @@ impl Popup {
         keys: KeyboardInteractivity,
     ) -> Result<()> {
         d.layer_change(self.id, |layer, win| {
+            // Hiding unmapped it, and an unmapped layer surface is back to its
+            // state right after creation (wlr-layer-shell): anchor, zone and
+            // margins all go again, or the compositor centres it.
+            layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+            layer.set_exclusive_zone(-1);
             layer.set_keyboard_interactivity(keys);
             layer.set_margin(i32::from(y), 0, 0, i32::from(x));
             layer.set_size(u32::from(w), u32::from(h));
