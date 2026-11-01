@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-resvg = "0.48.1"
+resvg = "0.49.0"
 mimshel-render = { path = "../render" }
 zune-jpeg = "0.5"
 tiny-skia = "0.12.0"
