@@ -120,15 +120,8 @@ impl State {
         OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(&dh, "mimshel");
-        let keyboard = seat.add_keyboard(
-            smithay::input::keyboard::XkbConfig {
-                layout: "us,ru",
-                options: Some("grp:alt_shift_toggle".into()),
-                ..Default::default()
-            },
-            600,
-            25,
-        )?;
+        let settings = crate::keyboard::Settings::read();
+        let keyboard = seat.add_keyboard(settings.config(), 600, 25)?;
         let pointer_handle = seat.add_pointer();
         Ok(Self {
             model: crate::model::Model::new(1280, 800),

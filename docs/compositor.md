@@ -18,8 +18,8 @@ working one; nothing on it changes in this phase. Branch `platform/boundary`
     placement of new windows. **No Smithay types**, fully unit-tested.
   - `state` — Smithay state and the protocol handlers; turns protocol events
     into `model` calls and back.
-  - `input` — keyboard (xkb keymap: layouts and the switch key from Mimshel's
-    config, us+ru by default), pointer, grabs for moving and resizing.
+  - `input` — keyboard (xkb keymap: layouts and the switch key from the enclosing
+    session, us as fallback), pointer, grabs for moving and resizing.
   - `render` — GLES through Smithay's `GlesRenderer`, damage-tracked: only
     changed regions are redrawn, nothing at all when nothing changed.
   - `backend` — `winit` (nested, phase 2) and `headless` (no output, for
@@ -42,7 +42,7 @@ working one; nothing on it changes in this phase. Branch `platform/boundary`
 | 2.3 | Protocols for the shell: `wlr-layer-shell`, `ext-foreign-toplevel-list` + `wlr-foreign-toplevel-management`, `xdg-activation`, `ext-session-lock-v1`, `ext-idle-notify-v1`. | Codex — **done** |
 | 2.4 | The door's Wayland backend (`platform.rs` gets the second variant): the menu bar, the dock and the desktop run inside the nested compositor. | Claude — **under way**: `crates/wayland`; our terminal and the menu bar run inside (2026-11-01) |
 | 2.5 | XWayland: Houdini, Blender, Chrome, Telegram, Steam inside (needs `xorg-xwayland` on the laptop). | Codex — **done** (started at launch for now, ~29 MB; to start on first use) |
-| 2.6 | Clipboard and drag and drop between programs and our windows; keyboard layout switching. | — |
+| 2.6 | Clipboard and drag and drop between programs and our windows; keyboard layout switching. | Codex — partial: selections, Wayland DnD, layouts; XDND bridge outstanding |
 
 ## Trying it
 
@@ -168,3 +168,60 @@ then releasing it before `spawn` would lose queued connections and race other
 servers. Clean activation requires an upstream API exposing socket reservation
 and deferred spawn (or maintaining a separate process launcher). DISPLAY is
 still available to clients from startup; the Xwayland idle memory cost remains.
+
+## Step 2.6 — selections, Wayland DnD and keyboard groups
+
+The compositor publishes `wl_data_device_manager` and
+`zwp_primary_selection_device_manager_v1`. Seat keyboard focus controls which
+client may set or receive selections. Smithay forwards data through the supplied
+file descriptor; the compositor does not buffer payloads or poll selections.
+Both clipboard and primary selection bridge through X11Wm: X11 ownership creates
+a Wayland offer, Wayland ownership is announced to X11, and reads transfer
+asynchronously through calloop. X11 reads require an X11 keyboard target and an
+unlocked session. XWM disconnect clears only selections belonging to that WM.
+Wayland selections already present at WM startup are advertised to it too.
+
+Wayland client DnD uses Smithay's implicit pointer grab and offer negotiation;
+`text/uri-list` is passed through like any other MIME type. Title/decorations and
+Super+drag consume the press without giving clients an implicit pointer grab.
+**X11↔Wayland DnD remains unimplemented.** Smithay 0.7.0 X11Wm only bridges
+CLIPBOARD/PRIMARY, has no XDND state machine, and exposes neither its connection
+nor an arbitrary ClientMessage hook. This needs a separate XDND proxy connection
+and integration with the Wayland DnD grab, or an upstream XWM extension. Drag
+icons are not yet rendered. Step 2.6 is not complete on that account.
+
+Keyboard startup reads Xfce's `keyboard-layout` channel (`XkbLayout`, `XkbVariant`,
+`XkbOptions/Group`, `XkbOptions/Compose` under `/Default`), unless `XkbDisable` is
+true. Missing settings fall back to `localectl status`, `setxkbmap -query`, then
+`us`. Settings are read once at startup. The single Smithay keyboard retains its
+XKB group across focus changes and includes the group in `wl_keyboard.modifiers`.
+For the shell's future layout indicator, expose the effective group index and
+human-readable XKB layout names from this shared keyboard, using
+`KeyboardHandle::with_xkb_state` and `Xkb::active_layout/layouts/layout_name`;
+there is no shell protocol for that yet and no shell client code changed here.
+
+`tests/selection.rs` uses independent socket-connected Wayland clients and a
+headless server. It checks exact clipboard and primary bytes in both directions,
+a `text/uri-list` DnD offer, compositor gesture presses without client grabs,
+Alt+Shift switching and the modifiers group received after changing focus twice.
+A real Xwayland connection owns and converts both X11 selections and verifies
+exact bytes in both X11↔Wayland directions. This test prints an explicit skip if
+Xwayland is absent. These are protocol tests; interactive laptop validation and
+XDND coverage remain outstanding.
+
+Idle measurement on this server (debug build, Xvfb, Mesa software rendering;
+10 seconds after settling in each case):
+
+| Scene | Frames / CPU ticks (compositor, Xwayland) | Compositor PSS / anonymous | Xwayland PSS / anonymous |
+|---|---|---|---|
+| No X11 client | 0 / (0, 0) | 102174 / 43640 KiB | 28638 / 13068 KiB |
+| One mapped, static X11 client | 0 / (0, 0) | 106570 / 44976 KiB | 29023 / 13080 KiB |
+
+These are software-rendered server figures, not a comparison with laptop release
+builds. Eager Xwayland still costs approximately 28 MiB PSS without an X11 client.
+
+Validation: `cargo fmt --all -- --check`, workspace/all-targets Clippy with
+`-D warnings`, `xvfb-run -a cargo test --workspace --locked`, the ignored
+`mimshel-x11` windows suite under Xvfb, and `cargo deny --locked check` pass.
+All builds/checks used `CARGO_INCREMENTAL=0`. The existing temporary cargo-deny
+installation was reused. No new dependency or shell code changes are included.

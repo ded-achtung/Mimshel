@@ -33,3 +33,4 @@ pub mod xwayland;
 
 mod selection;
 
+mod keyboard;
