@@ -1,7 +1,8 @@
 //! The Wayland backend of the shell's door (`apps/mimshel/src/platform.rs`):
 //! the same events and windows the X11 backend gives, from a Wayland
-//! compositor. Step 2.4 of `docs/compositor.md`, starting with what a single
-//! app window needs (the terminal): an `xdg_toplevel` with shm buffers, the
+//! compositor. Step 2.4 of `docs/compositor.md`: app windows (`xdg_toplevel`),
+//! panels for the menu bar and the dock (`wlr-layer-shell`, top layer, with
+//! reserved space), popups (overlay layer surfaces), all with shm buffers; the
 //! keyboard with xkb layouts and key repeat, the pointer and the wheel.
 //!
 //! Threads: one thread waits in [`Display::next_event`] (it alone reads the
@@ -17,7 +18,7 @@ use std::time::{Duration, Instant};
 use mimshel_platform::{Event, Key, KeyPress, Property, Result};
 use mimshel_render::Image;
 use rustix::event::{PollFd, PollFlags, poll};
-use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
@@ -26,6 +27,10 @@ use smithay_client_toolkit::seat::keyboard::{
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::shell::wlr_layer::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+    LayerSurfaceConfigure,
+};
 use smithay_client_toolkit::shell::xdg::XdgShell;
 use smithay_client_toolkit::shell::xdg::window::{
     Window, WindowConfigure, WindowDecorations, WindowHandler,
@@ -33,8 +38,9 @@ use smithay_client_toolkit::shell::xdg::window::{
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window, registry_handlers,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
+    registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
@@ -61,15 +67,54 @@ pub struct AppWindow {
     id: u32,
 }
 
+/// A strip at a screen edge ([`Display::create_panel`]): a top-layer surface.
+pub struct Panel {
+    id: u32,
+}
+
+/// A popup ([`Display::create_popup`]): an overlay-layer surface placed by
+/// its margins from the top left corner, mapped while shown.
+pub struct Popup {
+    id: u32,
+}
+
+enum Role {
+    Window(Window),
+    Layer(LayerSurface),
+}
+
 struct Win {
     id: u32,
-    window: Window,
+    role: Role,
     /// Size in points (logical coordinates).
     size: (u32, u32),
     configured: bool,
     /// The last buffer shown, to update only a rectangle of it when the
     /// compositor has released it.
     buffer: Option<Buffer>,
+}
+
+impl Win {
+    fn surface(&self) -> &wl_surface::WlSurface {
+        match &self.role {
+            Role::Window(w) => w.wl_surface(),
+            Role::Layer(l) => l.wl_surface(),
+        }
+    }
+
+    fn commit(&self) {
+        match &self.role {
+            Role::Window(w) => w.commit(),
+            Role::Layer(l) => l.commit(),
+        }
+    }
+
+    fn layer(&self) -> Option<&LayerSurface> {
+        match &self.role {
+            Role::Layer(l) => Some(l),
+            Role::Window(_) => None,
+        }
+    }
 }
 
 struct Held {
@@ -84,6 +129,9 @@ struct State {
     outputs: OutputState,
     compositor: CompositorState,
     xdg: XdgShell,
+    /// `None` when the compositor has no layer shell (panels and popups
+    /// cannot be made then).
+    layers: Option<LayerShell>,
     shm: Shm,
     pool: Option<SlotPool>,
     windows: Vec<Win>,
@@ -118,6 +166,7 @@ impl Display {
             outputs: OutputState::new(&globals, &qh),
             compositor: CompositorState::bind(&globals, &qh)?,
             xdg: XdgShell::bind(&globals, &qh)?,
+            layers: LayerShell::bind(&globals, &qh).ok(),
             shm: Shm::bind(&globals, &qh)?,
             pool: None,
             windows: Vec::new(),
@@ -251,7 +300,7 @@ impl Display {
         state.next_id += 1;
         state.windows.push(Win {
             id,
-            window,
+            role: Role::Window(window),
             size,
             configured: false,
             buffer: None,
@@ -259,6 +308,81 @@ impl Display {
         drop(state);
         self.conn.flush()?;
         Ok(AppWindow { id })
+    }
+
+    /// A strip at a screen edge: a top-layer surface named `name` that takes
+    /// no keyboard. Placed by [`Panel::set_geometry`] and the `reserve_*`
+    /// calls; maps with its first picture.
+    pub fn create_panel(&self, name: &str) -> Result<Panel> {
+        let id = self.create_layer(name, Layer::Top, KeyboardInteractivity::None)?;
+        Ok(Panel { id })
+    }
+
+    /// A popup: an overlay-layer surface named `name`, shown and hidden by
+    /// [`Popup::show`] and [`Popup::hide`].
+    pub fn create_popup(&self, name: &str) -> Result<Popup> {
+        let id = self.create_layer(name, Layer::Overlay, KeyboardInteractivity::None)?;
+        Ok(Popup { id })
+    }
+
+    fn create_layer(&self, name: &str, layer: Layer, keys: KeyboardInteractivity) -> Result<u32> {
+        let mut guard = lock(&self.state);
+        let state = &mut *guard;
+        let shell = state
+            .layers
+            .as_ref()
+            .ok_or("the compositor has no wlr-layer-shell")?;
+        let surface = state.compositor.create_surface(&self.qh);
+        surface.set_buffer_scale(state.buffer_scale);
+        let layer = shell.create_layer_surface(&self.qh, surface, layer, Some(name), None);
+        layer.set_keyboard_interactivity(keys);
+        layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+        layer.set_size(1, 1);
+        let id = state.next_id;
+        state.next_id += 1;
+        state.windows.push(Win {
+            id,
+            role: Role::Layer(layer),
+            size: (1, 1),
+            configured: false,
+            buffer: None,
+        });
+        Ok(id)
+    }
+
+    /// Output rectangles in points.
+    pub fn monitors(&self) -> Vec<(i32, i32, u32, u32)> {
+        let state = lock(&self.state);
+        state
+            .outputs
+            .outputs()
+            .filter_map(|o| state.outputs.info(&o))
+            .filter_map(|info| {
+                let (x, y) = info.logical_position?;
+                let (w, h) = info.logical_size?;
+                Some((x, y, u32::try_from(w).ok()?, u32::try_from(h).ok()?))
+            })
+            .collect()
+    }
+
+    /// The first output in points: where the menu bar and the dock go.
+    pub fn primary_area(&self) -> (i32, i32, u32, u32) {
+        self.monitors().first().copied().unwrap_or((0, 0, 0, 0))
+    }
+
+    /// Send a layer surface's new state: commit without a picture, which the
+    /// compositor answers with a configure (and an [`Event::Expose`]).
+    fn layer_change(&self, id: u32, change: impl FnOnce(&LayerSurface, &mut Win)) -> Result<()> {
+        let mut state = lock(&self.state);
+        if let Some(win) = state.window(id)
+            && let Some(layer) = win.layer().cloned()
+        {
+            change(&layer, win);
+            layer.commit();
+        }
+        drop(state);
+        self.conn.flush()?;
+        Ok(())
     }
 }
 
@@ -274,8 +398,10 @@ impl AppWindow {
     }
 
     pub fn set_title(&self, d: &Display, title: &str) -> Result<()> {
-        if let Some(w) = lock(&d.state).window(self.id) {
-            w.window.set_title(title);
+        if let Some(w) = lock(&d.state).window(self.id)
+            && let Role::Window(window) = &w.role
+        {
+            window.set_title(title);
         }
         d.conn.flush()?;
         Ok(())
@@ -299,8 +425,7 @@ impl AppWindow {
 
     /// Show a picture the size of the window, in pixels.
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
-        let pixmap = image.image();
-        self.present_part(d, pixmap, (0, 0, pixmap.width(), pixmap.height()))
+        present(d, self.id, image.image(), None)
     }
 
     /// Show only `(x0, y0, x1, y1)` of a whole-window picture: written into
@@ -312,15 +437,165 @@ impl AppWindow {
         image: &impl Image,
         rect: (u32, u32, u32, u32),
     ) -> Result<()> {
-        self.present_part(d, image.image(), rect)
+        present(d, self.id, image.image(), Some(rect))
     }
 
-    fn present_part(
+    pub fn destroy(&self, d: &Display) -> Result<()> {
+        forget(d, self.id)
+    }
+}
+
+impl Panel {
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Nothing to do: the panel maps with its first picture.
+    pub fn show(&self, d: &Display) -> Result<()> {
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// Place it at `(x, y)` with size `w`×`h`, in points.
+    pub fn set_geometry(&self, d: &Display, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        d.layer_change(self.id, |layer, win| {
+            layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+            layer.set_margin(y, 0, 0, x);
+            layer.set_size(w, h);
+            win.size = (w, h);
+        })
+    }
+
+    /// Where the pointer may click it, in panel points; the rest passes
+    /// through to what is below.
+    pub fn set_input(&self, d: &Display, rects: &[(i32, i32, u32, u32)]) -> Result<()> {
+        let state = lock(&d.state);
+        if let Some(win) = state.windows.iter().find(|w| w.id == self.id) {
+            let region = Region::new(&state.compositor)?;
+            for &(x, y, w, h) in rects {
+                region.add(x, y, w as i32, h as i32);
+            }
+            win.surface().set_input_region(Some(region.wl_region()));
+            win.commit();
+        }
+        drop(state);
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// Keep `height` points at the top of the screen for this panel: windows
+    /// are maximized below it (the layer surface's exclusive zone; the
+    /// panel spans the whole width, `x_from..x_to` is for X11's struts).
+    pub fn reserve_top(&self, d: &Display, height: u32, _x_from: u32, _x_to: u32) -> Result<()> {
+        d.layer_change(self.id, |layer, _| {
+            layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
+            layer.set_exclusive_zone(height as i32);
+        })
+    }
+
+    /// The same at the bottom; 0 reserves nothing.
+    pub fn reserve_bottom(&self, d: &Display, height: u32, _x_from: u32, _x_to: u32) -> Result<()> {
+        d.layer_change(self.id, |layer, _| {
+            layer.set_exclusive_zone(height as i32);
+        })
+    }
+
+    pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
+        present(d, self.id, image.image(), None)
+    }
+
+    /// Show only columns `x0..x1` of a whole-panel picture, in pixels.
+    pub fn present_columns(&self, d: &Display, image: &impl Image, x0: u32, x1: u32) -> Result<()> {
+        let pixmap = image.image();
+        present(d, self.id, pixmap, Some((x0, 0, x1, pixmap.height())))
+    }
+}
+
+impl Popup {
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Show at `(x, y)` with size `w`×`h` (points) and take the keyboard.
+    pub fn show(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        self.place(d, (x, y, w, h), KeyboardInteractivity::Exclusive)
+    }
+
+    /// Show without taking the keyboard.
+    pub fn show_passive(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        self.place(d, (x, y, w, h), KeyboardInteractivity::None)
+    }
+
+    pub fn set_geometry(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
+        d.layer_change(self.id, |layer, win| {
+            layer.set_margin(i32::from(y), 0, 0, i32::from(x));
+            layer.set_size(u32::from(w), u32::from(h));
+            win.size = (u32::from(w), u32::from(h));
+        })
+    }
+
+    fn place(
         &self,
         d: &Display,
-        pixmap: &tiny_skia::Pixmap,
-        rect: (u32, u32, u32, u32),
+        (x, y, w, h): (i16, i16, u16, u16),
+        keys: KeyboardInteractivity,
     ) -> Result<()> {
+        d.layer_change(self.id, |layer, win| {
+            layer.set_keyboard_interactivity(keys);
+            layer.set_margin(i32::from(y), 0, 0, i32::from(x));
+            layer.set_size(u32::from(w), u32::from(h));
+            win.size = (u32::from(w), u32::from(h));
+        })
+    }
+
+    /// Unmap: attach no picture. Showing again waits for a new configure.
+    pub fn hide(&self, d: &Display) -> Result<()> {
+        let mut state = lock(&d.state);
+        if let Some(win) = state.window(self.id) {
+            win.surface().attach(None, 0, 0);
+            win.commit();
+            win.configured = false;
+            win.buffer = None;
+        }
+        drop(state);
+        d.conn.flush()?;
+        Ok(())
+    }
+
+    /// The same as [`Popup::hide`]: the keyboard was never taken.
+    pub fn hide_passive(&self, d: &Display) -> Result<()> {
+        self.hide(d)
+    }
+
+    pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
+        present(d, self.id, image.image(), None)
+    }
+}
+
+/// Forget surface `id` (dropping it destroys it on the server).
+fn forget(d: &Display, id: u32) -> Result<()> {
+    let mut state = lock(&d.state);
+    state.windows.retain(|w| w.id != id);
+    if state.focus == Some(id) {
+        state.focus = None;
+        state.held = None;
+    }
+    drop(state);
+    d.conn.flush()?;
+    Ok(())
+}
+
+/// Show `pixmap` (the whole surface, in pixels) on surface `id`; with `rect`
+/// only those pixels change — written into the last buffer when the
+/// compositor has released it, else the whole picture goes into a new one.
+fn present(
+    d: &Display,
+    id: u32,
+    pixmap: &tiny_skia::Pixmap,
+    rect: Option<(u32, u32, u32, u32)>,
+) -> Result<()> {
+    let rect = rect.unwrap_or((0, 0, pixmap.width(), pixmap.height()));
+    {
         let mut guard = lock(&d.state);
         let state = &mut *guard;
         let (w, h) = (pixmap.width(), pixmap.height());
@@ -329,7 +604,7 @@ impl AppWindow {
             Some(pool) => pool,
             slot => slot.insert(SlotPool::new((stride * h) as usize, &state.shm)?),
         };
-        let Some(win) = state.windows.iter_mut().find(|win| win.id == self.id) else {
+        let Some(win) = state.windows.iter_mut().find(|win| win.id == id) else {
             return Ok(());
         };
         if !win.configured {
@@ -356,7 +631,7 @@ impl AppWindow {
             return Ok(());
         };
         copy_rect(pixmap, canvas, rect);
-        let surface = win.window.wl_surface();
+        let surface = win.surface();
         let (x0, y0, x1, y1) = rect;
         surface.damage_buffer(
             x0 as i32,
@@ -365,23 +640,10 @@ impl AppWindow {
             y1.saturating_sub(y0) as i32,
         );
         buffer.attach_to(surface)?;
-        win.window.commit();
-        drop(guard);
-        d.conn.flush()?;
-        Ok(())
+        win.commit();
     }
-
-    pub fn destroy(&self, d: &Display) -> Result<()> {
-        let mut state = lock(&d.state);
-        state.windows.retain(|w| w.id != self.id);
-        if state.focus == Some(self.id) {
-            state.focus = None;
-            state.held = None;
-        }
-        drop(state);
-        d.conn.flush()?;
-        Ok(())
-    }
+    d.conn.flush()?;
+    Ok(())
 }
 
 /// Copy `rect` of a premultiplied RGBA picture into an ARGB8888 shm buffer
@@ -420,7 +682,7 @@ impl State {
     fn id_of(&self, surface: &wl_surface::WlSurface) -> Option<u32> {
         self.windows
             .iter()
-            .find(|w| w.window.wl_surface() == surface)
+            .find(|w| w.surface() == surface)
             .map(|w| w.id)
     }
 
@@ -534,6 +796,46 @@ impl WindowHandler for State {
             (Some(w), Some(h)) => (w.get(), h.get()),
             _ => win.size,
         };
+        let changed = size != win.size;
+        let first = !win.configured;
+        win.size = size;
+        win.configured = true;
+        if changed {
+            win.buffer = None;
+            self.events.push_back(Event::Configure { window: id });
+        }
+        if first || changed {
+            self.events.push_back(Event::Expose { window: id });
+        }
+    }
+}
+
+impl LayerShellHandler for State {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if let Some(id) = self.id_of(layer.wl_surface()) {
+            self.events.push_back(Event::Close { window: id });
+        }
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _: u32,
+    ) {
+        let Some(id) = self.id_of(layer.wl_surface()) else {
+            return;
+        };
+        let Some(win) = self.window(id) else {
+            return;
+        };
+        let (w, h) = configure.new_size;
+        let size = (
+            if w == 0 { win.size.0 } else { w },
+            if h == 0 { win.size.1 } else { h },
+        );
         let changed = size != win.size;
         let first = !win.configured;
         win.size = size;
@@ -798,6 +1100,7 @@ delegate_keyboard!(State);
 delegate_pointer!(State);
 delegate_xdg_shell!(State);
 delegate_xdg_window!(State);
+delegate_layer!(State);
 delegate_registry!(State);
 
 #[cfg(test)]

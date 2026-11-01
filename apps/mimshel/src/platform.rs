@@ -32,12 +32,28 @@ enum Backend {
 const NOT_ON_WAYLAND: &str = "not available on Wayland yet";
 
 /// Calls the X11 backend; on Wayland gives `$none` until that call has its
-/// Wayland side.
+/// Wayland side. Harmless actions (watching, activating, grabbing) answer
+/// `Ok` there and do nothing, so a part keeps running; calls that would
+/// create something answer an error through [`Display::x11`].
 macro_rules! x11_or {
     ($d:expr, $none:expr, |$x:ident| $body:expr) => {
         match &$d.backend {
             Backend::X11($x) => $body,
             Backend::Wayland(_) => $none,
+        }
+    };
+}
+
+/// Calls a wrapper's own backend with the matching display: `$x11` with the
+/// X11 object and display, `$wl` with the Wayland ones; a wrapper and a
+/// display of different backends cannot meet (one display per process), so
+/// that case is an error.
+macro_rules! on_backend {
+    ($obj:expr, $kind:ident, $d:expr, |$o:ident, $disp:ident| $x11:expr, $wl:expr) => {
+        match ($obj, &$d.backend) {
+            ($kind::X11($o), Backend::X11($disp)) => $x11,
+            ($kind::Wayland($o), Backend::Wayland($disp)) => $wl,
+            _ => Err(NOT_ON_WAYLAND.into()),
         }
     };
 }
@@ -74,7 +90,10 @@ impl Display {
 
     /// Output rectangles in points. Wayland: outputs from our compositor.
     pub fn monitors(&self) -> Vec<(i32, i32, u32, u32)> {
-        x11_or!(self, Vec::new(), |xd| xd.monitors())
+        match &self.backend {
+            Backend::X11(x) => x.monitors(),
+            Backend::Wayland(w) => w.monitors(),
+        }
     }
 
     /// Usable output area in points. Wayland: output minus exclusive zones.
@@ -187,7 +206,7 @@ impl Display {
     /// Bring a window forward and give it keyboard focus. Wayland: an
     /// activation request through foreign-toplevel management in our compositor.
     pub fn activate(&self, window: u32) -> Result<()> {
-        self.x11()?.activate(window)
+        x11_or!(self, Ok(()), |xd| xd.activate(window))
     }
 
     /// Find an already running app window by its class and try to raise it.
@@ -230,18 +249,27 @@ impl Display {
     /// The primary output's area in points. Wayland: the primary output
     /// chosen by our compositor.
     pub fn primary_area(&self) -> (i32, i32, u32, u32) {
-        x11_or!(self, (0, 0, 0, 0), |xd| xd.primary_area())
+        match &self.backend {
+            Backend::X11(x) => x.primary_area(),
+            Backend::Wayland(w) => w.primary_area(),
+        }
     }
 
     /// A popup for transient shell UI. Wayland: an `xdg_popup` or a
     /// layer-shell surface for panels and full-screen overlays.
     pub fn create_popup(&self, name: &str) -> Result<Popup> {
-        Ok(Popup(self.x11()?.create_popup(name)?))
+        Ok(match &self.backend {
+            Backend::X11(x) => Popup::X11(x.create_popup(name)?),
+            Backend::Wayland(w) => Popup::Wayland(w.create_popup(name)?),
+        })
     }
 
     /// A strip at a screen edge. Wayland: a layer-shell surface.
     pub fn create_panel(&self, name: &str) -> Result<Panel> {
-        Ok(Panel(self.x11()?.create_dock(name)?))
+        Ok(match &self.backend {
+            Backend::X11(x) => Panel::X11(x.create_dock(name)?),
+            Backend::Wayland(w) => Panel::Wayland(w.create_panel(name)?),
+        })
     }
 
     /// Whether an event concerns the whole screen / desktop state rather
@@ -281,13 +309,13 @@ impl Display {
     /// Follow one program window's title, icon and state changes.
     /// Wayland: foreign-toplevel updates from our compositor.
     pub fn watch_window(&self, window: u32) -> Result<()> {
-        self.x11()?.watch_window(window)
+        x11_or!(self, Ok(()), |xd| xd.watch_window(window))
     }
 
     /// Watch new program windows and their first frame.
     /// Wayland: our compositor tells the shell directly.
     pub fn watch_new_windows(&self) -> Result<()> {
-        self.x11()?.watch_new_windows()
+        x11_or!(self, Ok(()), |xd| xd.watch_new_windows())
     }
 
     /// How much longer to wait for a new window's first frame over a screen
@@ -298,12 +326,12 @@ impl Display {
 
     /// Close a program window. Wayland: foreign-toplevel management.
     pub fn close(&self, window: u32) -> Result<()> {
-        self.x11()?.close(window)
+        x11_or!(self, Ok(()), |xd| xd.close(window))
     }
 
     /// Minimize a program window. Wayland: foreign-toplevel management.
     pub fn minimize(&self, window: u32) -> Result<()> {
-        self.x11()?.minimize(window)
+        x11_or!(self, Ok(()), |xd| xd.minimize(window))
     }
 
     /// Read an app-menu address property by name. X11 only; None on Wayland,
@@ -314,7 +342,7 @@ impl Display {
 
     /// Watch layout/group changes. Wayland: the compositor's xkb keymap.
     pub fn watch_keyboard(&self) -> Result<()> {
-        self.x11()?.watch_keyboard()
+        x11_or!(self, Ok(()), |xd| xd.watch_keyboard())
     }
 
     /// Layout names. Wayland: the compositor's xkb keymap.
@@ -329,7 +357,7 @@ impl Display {
 
     /// Select a layout group. Wayland: the compositor's xkb keymap.
     pub fn set_keyboard_group(&self, group: u8) -> Result<()> {
-        self.x11()?.set_keyboard_group(group)
+        x11_or!(self, Ok(()), |xd| xd.set_keyboard_group(group))
     }
 
     /// Pointer position on screen, in points.
@@ -341,12 +369,12 @@ impl Display {
     /// Keep pointer events during an icon drag. Wayland: an implicit grab
     /// during the press or an xdg_popup grab.
     pub fn grab_pointer_for_drag(&self, window: u32) -> Result<bool> {
-        self.x11()?.grab_pointer_for_drag(window)
+        x11_or!(self, Ok(false), |xd| xd.grab_pointer_for_drag(window))
     }
 
     /// Release the drag's pointer grab. Wayland: finish the implicit or popup grab.
     pub fn ungrab_pointer(&self) -> Result<()> {
-        self.x11()?.ungrab_pointer()
+        x11_or!(self, Ok(()), |xd| xd.ungrab_pointer())
     }
 
     /// Hear about any window appearing or being restacked, and the screen
@@ -354,13 +382,13 @@ impl Display {
     /// screen can stay on top. Wayland: not needed — under
     /// `ext-session-lock-v1` nothing else is shown while locked.
     pub fn watch_stacking(&self) -> Result<()> {
-        self.x11()?.watch_stacking()
+        x11_or!(self, Ok(()), |xd| xd.watch_stacking())
     }
 
     /// Give the keyboard back to the active window after the lock screen
     /// had it. Wayland: the compositor restores focus when the lock ends.
     pub fn restore_focus(&self) -> Result<()> {
-        self.x11()?.restore_focus()
+        x11_or!(self, Ok(()), |xd| xd.restore_focus())
     }
 
     /// A picture of the whole screen (the Apps window's blurred background).
@@ -378,48 +406,90 @@ impl Display {
 
 /// A strip at a screen edge that reserves space. Positions and sizes are
 /// in points. Wayland: a layer-shell surface with an exclusive zone.
-pub struct Panel(mimshel_x11::DockWindow);
+pub enum Panel {
+    X11(mimshel_x11::DockWindow),
+    Wayland(mimshel_wayland::Panel),
+}
 
 impl Panel {
     pub fn id(&self) -> u32 {
-        self.0.id()
+        match self {
+            Panel::X11(p) => p.id(),
+            Panel::Wayland(p) => p.id(),
+        }
     }
 
     pub fn show(&self, d: &Display) -> Result<()> {
-        self.0.show(d.x11()?)
+        on_backend!(self, Panel, d, |p, x| p.show(x), p.show(x))
     }
 
     pub fn set_geometry(&self, d: &Display, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.0.set_geometry(d.x11()?, x, y, w, h)
+        on_backend!(
+            self,
+            Panel,
+            d,
+            |p, disp| p.set_geometry(disp, x, y, w, h),
+            p.set_geometry(disp, x, y, w, h)
+        )
     }
 
     /// Set the input region in panel-local points. Wayland: a surface input region.
     pub fn set_input(&self, d: &Display, rects: &[(i32, i32, u32, u32)]) -> Result<()> {
-        self.0.set_input(d.x11()?, rects)
+        on_backend!(
+            self,
+            Panel,
+            d,
+            |p, x| p.set_input(x, rects),
+            p.set_input(x, rects)
+        )
     }
 
     /// Reserve space from the screen's top over x_from..x_to, in points.
     /// Wayland: a layer-shell surface with an exclusive zone.
     pub fn reserve_top(&self, d: &Display, height: u32, x_from: u32, x_to: u32) -> Result<()> {
-        self.0.set_strut_top(d.x11()?, height, x_from, x_to)
+        on_backend!(
+            self,
+            Panel,
+            d,
+            |p, x| p.set_strut_top(x, height, x_from, x_to),
+            p.reserve_top(x, height, x_from, x_to)
+        )
     }
 
     /// Reserve space from the screen's bottom over x_from..x_to, in points.
     /// A height of 0 clears the reservation.
     /// Wayland: a layer-shell surface with an exclusive zone.
     pub fn reserve_bottom(&self, d: &Display, height: u32, x_from: u32, x_to: u32) -> Result<()> {
-        self.0.set_strut(d.x11()?, height, x_from, x_to)
+        on_backend!(
+            self,
+            Panel,
+            d,
+            |p, x| p.set_strut(x, height, x_from, x_to),
+            p.reserve_bottom(x, height, x_from, x_to)
+        )
     }
 
     /// Show only columns `x0..x1` of a whole-panel picture, in pixels.
     /// Wayland: update the surface buffer with damage for these columns.
     pub fn present_columns(&self, d: &Display, image: &impl Image, x0: u32, x1: u32) -> Result<()> {
-        self.0.present_columns(d.x11()?, image, x0, x1)
+        on_backend!(
+            self,
+            Panel,
+            d,
+            |p, x| p.present_columns(x, image, x0, x1),
+            p.present_columns(x, image, x0, x1)
+        )
     }
 
     /// Show a picture the size of the panel, in pixels.
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
-        self.0.present(d.x11()?, image)
+        on_backend!(
+            self,
+            Panel,
+            d,
+            |p, x| p.present(x, image),
+            p.present(x, image)
+        )
     }
 }
 
@@ -505,23 +575,41 @@ impl AppWindow {
 /// A transient shell popup ([`Display::create_popup`]). Positions and sizes
 /// are in points. Wayland: menus use `xdg_popup` with a grab; panels and
 /// full-screen overlays use layer-shell surfaces.
-pub struct Popup(mimshel_x11::Popup);
+pub enum Popup {
+    X11(mimshel_x11::Popup),
+    Wayland(mimshel_wayland::Popup),
+}
 
 impl Popup {
     pub fn id(&self) -> u32 {
-        self.0.id()
+        match self {
+            Popup::X11(p) => p.id(),
+            Popup::Wayland(p) => p.id(),
+        }
     }
 
     /// Show and take keyboard and pointer input. Wayland: a popup grab
     /// or input focus for a layer-shell surface.
     pub fn show(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
-        self.0.show(d.x11()?, x, y, w, h)
+        on_backend!(
+            self,
+            Popup,
+            d,
+            |p, disp| p.show(disp, x, y, w, h),
+            p.show(disp, x, y, w, h)
+        )
     }
 
     /// Show above other windows without taking keyboard or pointer input.
     /// Wayland: a layer-shell surface without an input grab.
     pub fn show_passive(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
-        self.0.show_passive(d.x11()?, x, y, w, h)
+        on_backend!(
+            self,
+            Popup,
+            d,
+            |p, disp| p.show_passive(disp, x, y, w, h),
+            p.show_passive(disp, x, y, w, h)
+        )
     }
 
     /// Show over the whole screen and take the keyboard and the pointer for
@@ -529,53 +617,80 @@ impl Popup {
     /// lock screen must then exit so its guard starts it again (CLAUDE.md
     /// lessons 1, 21). Wayland: an `ext-session-lock-v1` surface.
     pub fn show_lock(&self, d: &Display, w: u16, h: u16) -> Result<bool> {
-        self.0.show_lock(d.x11()?, w, h)
+        match (self, &d.backend) {
+            (Popup::X11(p), Backend::X11(x)) => p.show_lock(x, w, h),
+            _ => Err(NOT_ON_WAYLAND.into()),
+        }
     }
 
     /// Raise above every other window. Wayland: not needed under the
     /// session lock.
     pub fn raise(&self, d: &Display) -> Result<()> {
-        self.0.raise(d.x11()?)
+        match (self, &d.backend) {
+            (Popup::X11(p), Backend::X11(x)) => p.raise(x),
+            _ => Err(NOT_ON_WAYLAND.into()),
+        }
     }
 
     /// Check the keyboard grab and take it back if another program took it;
     /// `true` — it is ours. Wayland: the session lock keeps input; always
     /// `true` there.
     pub fn regrab(&self, d: &Display) -> Result<bool> {
-        self.0.regrab(d.x11()?)
+        match (self, &d.backend) {
+            (Popup::X11(p), Backend::X11(x)) => p.regrab(x),
+            _ => Err(NOT_ON_WAYLAND.into()),
+        }
     }
 
     /// Hide and release keyboard and pointer input. Wayland: dismiss the
     /// popup or overlay and release its input focus.
     pub fn hide(&self, d: &Display) -> Result<()> {
-        self.0.hide(d.x11()?)
+        on_backend!(self, Popup, d, |p, x| p.hide(x), p.hide(x))
     }
 
     /// Hide without changing keyboard or pointer input. Wayland: unmap
     /// the surface without changing another surface's focus.
     pub fn hide_passive(&self, d: &Display) -> Result<()> {
-        self.0.hide_passive(d.x11()?)
+        on_backend!(self, Popup, d, |p, x| p.hide_passive(x), p.hide_passive(x))
     }
 
     /// Change the position and size. Wayland: configure the popup or layer surface
     /// through our compositor.
     pub fn set_geometry(&self, d: &Display, x: i16, y: i16, w: u16, h: u16) -> Result<()> {
-        self.0.set_geometry(d.x11()?, x, y, w, h)
+        on_backend!(
+            self,
+            Popup,
+            d,
+            |p, disp| p.set_geometry(disp, x, y, w, h),
+            p.set_geometry(disp, x, y, w, h)
+        )
     }
 
     /// Let pointer input reach the surface below. Wayland: an empty input region.
     pub fn pass_through(&self, d: &Display) -> Result<()> {
-        self.0.pass_through(d.x11()?)
+        match (self, &d.backend) {
+            (Popup::X11(p), Backend::X11(x)) => p.pass_through(x),
+            _ => Err(NOT_ON_WAYLAND.into()),
+        }
     }
 
     /// Update a picture at an offset in pixels. Wayland: surface buffer damage.
     pub fn present_at(&self, d: &Display, image: &impl Image, x: i32, y: i32) -> Result<()> {
-        self.0.present_at(d.x11()?, image, x, y)
+        match (self, &d.backend) {
+            (Popup::X11(p), Backend::X11(xd)) => p.present_at(xd, image, x, y),
+            _ => Err(NOT_ON_WAYLAND.into()),
+        }
     }
 
     /// Show a picture the size of the popup, in pixels.
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
-        self.0.present(d.x11()?, image)
+        on_backend!(
+            self,
+            Popup,
+            d,
+            |p, x| p.present(x, image),
+            p.present(x, image)
+        )
     }
 }
 
