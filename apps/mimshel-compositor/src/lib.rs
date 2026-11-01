@@ -27,3 +27,6 @@ pub mod state;
 
 /// Error propagated to the compositor entry point.
 pub type Error = Box<dyn std::error::Error>;
+
+/// XWayland process and X11 window policy.
+pub mod xwayland;

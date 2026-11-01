@@ -66,7 +66,7 @@ impl State {
             .locks
             .iter()
             .find(|s| s.alive() && buffered(s.wl_surface()))
-            .map(|s| s.wl_surface().clone());
+            .map(|s| s.wl_surface().clone().into());
         self.keyboard
             .clone()
             .set_focus(self, focus, smithay::utils::SERIAL_COUNTER.next_serial());

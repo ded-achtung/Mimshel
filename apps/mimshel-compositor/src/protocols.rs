@@ -157,7 +157,7 @@ impl State {
     }
 
     pub(crate) fn current_layer_focus(&self) -> Option<WlSurface> {
-        let focus = self.keyboard.current_focus()?;
+        let focus = WlSurface::from(self.keyboard.current_focus()?);
         let output = self.space.outputs().next()?;
         let map = layer_map_for_output(output);
         map.layer_for_surface(&focus, WindowSurfaceType::ALL)
@@ -221,7 +221,7 @@ impl State {
         if interactive && self.exclusive_layer_focus().is_none() {
             self.keyboard.clone().set_focus(
                 self,
-                Some(surface),
+                Some(surface.into()),
                 smithay::utils::SERIAL_COUNTER.next_serial(),
             );
         }
@@ -234,7 +234,7 @@ impl State {
         }
         self.leave_on_demand_layer();
         if let Some((_, window)) = self.windows.iter().find(|(i, _)| *i == id)
-            && window.toplevel().is_some()
+            && (window.toplevel().is_some() || window.x11_surface().is_some())
         {
             if self
                 .model

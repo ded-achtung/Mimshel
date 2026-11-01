@@ -191,3 +191,75 @@ Artifacts from the run:
 - Fullscreen: `/tmp/22-fullscreen.png`
 - Protocol/frame trace: `/tmp/22-kitty.stderr`
 - Smoke assertions and timing: `/tmp/22-smoke-final.log`
+
+## Step 2.5: XWayland
+
+The nested backend starts XWayland eagerly using Smithay 0.7's `xwayland`
+feature and `X11Wm`. Startup prints both `WAYLAND_DISPLAY=wayland-N` and
+`DISPLAY=:N`; the `--nested -- COMMAND…` process receives both variables.
+The host X11 display remains reserved for winit. Display selection skips
+existing socket and lock paths, including stale files, before asking Smithay
+for its atomic X11 display reservation. TCP is not enabled.
+
+Lazy activation remains deferred: Smithay's process API starts XWayland
+immediately. The server owns the XWayland event source, closes its Wayland
+connection on shutdown, and drains the WM's closed channel to release its
+retained event-loop handle. Listener removal is explicit as well. SIGTERM,
+SIGINT and SIGHUP tests keep an actual X11 window connected and verify the
+XWayland process exits and both X11 and Wayland socket/lock paths disappear.
+
+Managed X11 windows share the window model, click focus, stack, compositor
+frame controls, move/resize, maximize/minimize/restore and fullscreen policy.
+Minimum and maximum client sizes constrain normal geometry and maximize;
+maximize uses the largest size the hints permit rather than rejecting the
+request. Fullscreen uses the complete output. Titles come from Smithay's
+`_NET_WM_NAME` / `WM_NAME` handling, and both foreign-toplevel lists publish
+`WM_CLASS` as the app id. Override-redirect menus and tooltips use their X11
+geometry without decorations, model entries, foreign-toplevel entries, or
+keyboard focus. Clipboard bridging between X11 and Wayland is outside this
+step.
+
+`cargo test -p mimshel-compositor --test xwayland --locked -- --nocapture`
+starts the real `/usr/bin/Xwayland` with the GPU-free headless server. It
+checks mapping, title/class, both foreign-toplevel protocols, a 700×500
+maximum-size hint, maximize/minimize/restore, a real EWMH fullscreen request,
+title changes, override-redirect geometry and focus, click focus, and shutdown
+cleanup. It skips with a diagnostic only when Xwayland cannot be found.
+Here it ran successfully: glamor was unavailable and XWayland automatically
+fell back to software rendering. No GPU or host display was needed.
+
+A nested Xvfb/Mesa software-rendering run used the stationary dev-only x11rb
+client in `examples/x11-window.rs`:
+
+```sh
+CARGO_INCREMENTAL=0 cargo build -p mimshel-compositor --bins --examples --locked
+target/debug/mimshel-compositor --nested -- target/debug/examples/x11-window
+```
+
+It received an X11 key press and supported frame maximize/restore, title
+move and edge resize. Maximize clamped to its 900×600 maximum. Screenshots:
+`/tmp/mimshel-compositor-2-5.png` and
+`/tmp/mimshel-compositor-2-5-maximized.png`.
+
+Over 20 idle seconds with the X11 client stationary, frames stayed **16 →
+16**. Compositor CPU ticks stayed **140 → 140**, and main-thread voluntary
+context switches **256 → 256**. XWayland CPU ticks stayed **21 → 21**, and
+voluntary context switches **64 → 64**. XWayland PSS was **30,681 → 30,655
+KiB** (about 30 MiB); compositor PSS was **108,407 → 108,275 KiB**. These are
+server software-rendering measurements, not laptop GPU measurements. A
+SIGTERM then exited successfully, reaped XWayland and removed all socket
+and lock files.
+
+A second 20-second run started XWayland with **no X11 clients at all**.
+Frames stayed **1 → 1**, compositor ticks **52 → 52**, and compositor voluntary
+context switches **96 → 96**. XWayland ticks stayed **13 → 13**, voluntary
+context switches **24 → 24**, and PSS **28,768 → 28,760 KiB** (about 28 MiB).
+This run also shut down cleanly.
+
+All requested format, workspace Clippy/test, ignored X11-window test and
+cargo-deny checks pass. No shell crate changes or dependency on `mimshel-x11`
+were introduced. x11rb is a compositor dev-dependency only. Houdini, Blender,
+Chrome, Telegram, Steam, hardware GL/dmabuf paths and hybrid-GPU selection
+still need laptop validation. XWayland restart after an unexpected crash is
+not implemented. Session-lock takeover and activation-token restrictions
+remain phase 3 work.

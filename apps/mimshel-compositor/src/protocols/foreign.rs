@@ -65,10 +65,13 @@ impl State {
             .published
             .retain(|(id, ..)| self.windows.iter().any(|(i, _)| i == id));
         for (id, window) in &self.windows {
-            let Some(top) = window.toplevel() else {
+            let (title, app_id) = if let Some(top) = window.toplevel() {
+                metadata(top.wl_surface())
+            } else if let Some(x11) = window.x11_surface() {
+                (x11.title(), x11.class())
+            } else {
                 continue;
             };
-            let (title, app_id) = metadata(top.wl_surface());
             let mode = self
                 .model
                 .windows
@@ -241,14 +244,9 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, crate::model::WindowId> for State {
         if state.protocols.locked {
             return;
         }
-        let Some(top) = state
-            .windows
-            .iter()
-            .find(|(i, _)| i == id)
-            .and_then(|(_, w)| w.toplevel().cloned())
-        else {
+        if !state.windows.iter().any(|(i, _)| i == id) {
             return;
-        };
+        }
         match request {
             R::Activate { seat }
                 if smithay::input::Seat::<Self>::from_resource(&seat).as_ref()
@@ -262,16 +260,16 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, crate::model::WindowId> for State {
                     "Negative rectangle size",
                 );
             }
-            R::Close => top.send_close(),
-            R::SetMaximized => state.request_mode(&top, Mode::Maximized),
-            R::UnsetMaximized => state.request_mode(&top, Mode::Normal),
-            R::SetMinimized => state.request_mode(&top, Mode::Minimized),
+            R::Close => state.close_window(*id),
+            R::SetMaximized => state.window_mode(*id, Mode::Maximized),
+            R::UnsetMaximized => state.window_mode(*id, Mode::Normal),
+            R::SetMinimized => state.window_mode(*id, Mode::Minimized),
             R::UnsetMinimized => {
                 state.model.restore(*id);
                 state.configure_windows();
             }
-            R::SetFullscreen { .. } => state.request_mode(&top, Mode::Fullscreen),
-            R::UnsetFullscreen => state.request_mode(&top, Mode::Normal),
+            R::SetFullscreen { .. } => state.window_mode(*id, Mode::Fullscreen),
+            R::UnsetFullscreen => state.window_mode(*id, Mode::Normal),
             _ => {}
         }
     }

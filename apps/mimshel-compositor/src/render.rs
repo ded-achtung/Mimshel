@@ -178,11 +178,10 @@ pub fn frame(
             continue;
         };
         let location = origin - window.geometry().loc;
-        let Some(top) = window.toplevel() else {
+        let Some(surface) = crate::xwayland::surface(window) else {
             continue;
         };
-        for (popup, offset) in smithay::desktop::PopupManager::popups_for_surface(top.wl_surface())
-        {
+        for (popup, offset) in smithay::desktop::PopupManager::popups_for_surface(&surface) {
             let offset = window.geometry().loc + offset - popup.geometry().loc;
             append_surface(
                 renderer,
@@ -223,12 +222,7 @@ pub fn frame(
                 }
             };
             let cache = &mut render.decorations[index];
-            smithay::wayland::compositor::with_states(top.wl_surface(), |states| {
-                let data = states
-                    .data_map
-                    .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
-                    .and_then(|d| d.lock().ok());
-                let title = data.as_ref().and_then(|d| d.title.as_deref()).unwrap_or("");
+            let mut update_title = |title: &str| {
                 if cache.width != rect.width
                     || cache.height != title_height
                     || cache.title != title
@@ -261,7 +255,24 @@ pub fn frame(
                         ));
                     }
                 }
-            });
+            };
+            if window.is_x11() {
+                let title = state
+                    .model
+                    .windows
+                    .iter()
+                    .find(|w| w.id == *id)
+                    .map_or("", |w| w.x11_title.as_str());
+                update_title(title);
+            } else {
+                smithay::wayland::compositor::with_states(&surface, |states| {
+                    let data = states
+                        .data_map
+                        .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                        .and_then(|d| d.lock().ok());
+                    update_title(data.as_ref().and_then(|d| d.title.as_deref()).unwrap_or(""));
+                });
+            }
             if let Some(buffer) = &cache.pixels {
                 render.elements.push(
                     MemoryRenderBufferRenderElement::from_buffer(
@@ -306,7 +317,7 @@ pub fn frame(
         }
         append_surface(
             renderer,
-            top.wl_surface(),
+            &surface,
             location,
             state.output_scale,
             &mut render.elements,
@@ -359,6 +370,11 @@ pub fn callbacks(state: &State, output: &Output, elapsed: std::time::Duration) {
         });
     }
     drop(map);
+    for window in &state.overrides {
+        window.send_frame(output, elapsed, Some(std::time::Duration::ZERO), |_, _| {
+            Some(output.clone())
+        });
+    }
     for (id, window) in &state.windows {
         if state
             .model

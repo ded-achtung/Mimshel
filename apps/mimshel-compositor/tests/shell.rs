@@ -1,7 +1,6 @@
 #[path = "support/input.rs"]
 mod input;
 use mimshel_compositor::backend::headless::Server;
-use smithay::reexports::wayland_server::Resource;
 use std::{
     io::Write,
     os::{fd::AsFd, unix::net::UnixStream},

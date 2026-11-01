@@ -75,10 +75,9 @@ impl State {
                     && event.state() == ButtonState::Released
                     && let Some(drag) = self.drag.take()
                 {
-                    if drag.edges.is_some() {
-                        let Some(top) = drag.window.toplevel() else {
-                            return;
-                        };
+                    if drag.edges.is_some()
+                        && let Some(top) = drag.window.toplevel()
+                    {
                         top.with_pending_state(|s| { s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing); });
                         top.send_pending_configure();
                     }
@@ -110,16 +109,13 @@ impl State {
                         return;
                     };
                     let window = window.clone();
-                    let Some(top) = window.toplevel() else {
-                        return;
-                    };
                     use crate::decoration::Hit;
                     match hit {
                         Hit::Close => {
-                            top.send_close();
+                            self.close_window(id);
                         }
                         Hit::Minimize => {
-                            self.request_mode(top, crate::model::Mode::Minimized);
+                            self.window_mode(id, crate::model::Mode::Minimized);
                         }
                         Hit::Maximize => {
                             self.toggle_maximize(id);
@@ -163,10 +159,26 @@ impl State {
                         .element_under(self.pointer)
                         .map(|(w, p)| (w.clone(), p));
                     if let Some((window, _)) = hit {
+                        if window
+                            .x11_surface()
+                            .is_some_and(|x| x.is_override_redirect())
+                        {
+                            pointer.button(
+                                self,
+                                &smithay::input::pointer::ButtonEvent {
+                                    serial,
+                                    time: event.time_msec(),
+                                    button: event.button_code(),
+                                    state: event.state(),
+                                },
+                            );
+                            pointer.frame(self);
+                            return;
+                        }
                         if let Some((id, _)) = self.windows.iter().find(|(_, w)| w == &window) {
                             self.model.raise(*id);
                         }
-                        self.space.raise_element(&window, true);
+                        self.sync_positions();
                         if event.button_code() == 0x110 && keyboard.modifier_state().logo {
                             let Some(origin) = self
                                 .windows
@@ -236,15 +248,7 @@ impl State {
         } else {
             crate::model::Mode::Maximized
         };
-        if let Some(top) = self
-            .windows
-            .iter()
-            .find(|(i, _)| *i == id)
-            .and_then(|(_, w)| w.toplevel())
-            .cloned()
-        {
-            self.request_mode(&top, mode);
-        }
+        self.window_mode(id, mode);
     }
 
     fn frame_drag(
@@ -435,15 +439,13 @@ impl State {
             if bottom {
                 r.height = (r.height + delta.y).max(1);
             }
-            let Some(top) = drag.window.toplevel() else {
-                self.drag = None;
-                return;
-            };
-            top.with_pending_state(|s| {
-                s.size = Some((r.width, r.height).into());
-                s.states.set(XdgState::Resizing);
-            });
-            top.send_pending_configure();
+            if let Some(top) = drag.window.toplevel() {
+                top.with_pending_state(|s| {
+                    s.size = Some((r.width, r.height).into());
+                    s.states.set(XdgState::Resizing);
+                });
+                top.send_pending_configure();
+            }
         } else {
             if delta.x.abs() > 3 || delta.y.abs() > 3 {
                 self.title_click = None;

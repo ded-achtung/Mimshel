@@ -12,6 +12,9 @@ use std::{os::fd::AsFd, path::Path, sync::Arc, time::Duration};
 
 /// Wayland listener and event loop with a virtual output.
 pub struct Server {
+    xwayland: Option<crate::xwayland::Instance>,
+    listener_token: smithay::reexports::calloop::RegistrationToken,
+    display_token: smithay::reexports::calloop::RegistrationToken,
     /// Virtual nested output.
     pub output: smithay::output::Output,
     /// Shared compositor state.
@@ -85,7 +88,7 @@ impl Server {
         output.set_preferred(mode);
         state.space.map_output(&output, (0, 0));
         let name = socket.path.file_name().unwrap_or_default().to_owned();
-        events.handle().insert_source(
+        let listener_token = events.handle().insert_source(
             Generic::new(socket, Interest::READ, PollMode::Level),
             move |_, socket, _| {
                 while let Some(stream) = socket.accept()? {
@@ -94,7 +97,7 @@ impl Server {
                 Ok(PostAction::Continue)
             },
         )?;
-        events.handle().insert_source(
+        let display_token = events.handle().insert_source(
             Generic::new(display_fd, Interest::READ, PollMode::Level),
             move |_, _, state| {
                 display.dispatch_clients(state)?;
@@ -102,11 +105,25 @@ impl Server {
             },
         )?;
         Ok(Self {
+            xwayland: None,
+            listener_token,
+            display_token,
             output,
             state,
             events,
             socket_name: name,
         })
+    }
+
+    /// Reserve a display and start the server-owned XWayland process.
+    pub fn start_xwayland(&mut self) -> Result<u32, Error> {
+        if self.xwayland.is_none() {
+            self.xwayland = Some(crate::xwayland::start(&self.state, self.events.handle())?);
+        }
+        self.xwayland
+            .as_ref()
+            .map(|x| x.display)
+            .ok_or_else(|| "XWayland was not started".into())
     }
 
     /// Dispatch protocol events and flush replies.
@@ -115,6 +132,29 @@ impl Server {
         self.state.refresh();
         self.state.dh.flush_clients()?;
         Ok(())
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if self.xwayland.take().is_some() {
+            // The WM channel removes itself on Closed. Dispatch it after closing
+            // XWayland to release Smithay's retained LoopHandle and listeners.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !self.state.xwms.is_empty() && std::time::Instant::now() < deadline {
+                if self
+                    .events
+                    .dispatch(Some(Duration::from_millis(10)), &mut self.state)
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+        // Listener ownership must not depend on third-party callback lifetimes.
+        let handle = self.events.handle();
+        handle.remove(self.listener_token);
+        handle.remove(self.display_token);
     }
 }
 

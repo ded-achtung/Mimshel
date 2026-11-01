@@ -4,10 +4,20 @@ use std::{
     process::Command,
     time::{Duration, Instant},
 };
+use x11rb::{
+    connection::Connection,
+    protocol::xproto::{ConnectionExt, CreateWindowAux, MapState, WindowClass},
+};
 
 #[test]
 fn signals_remove_socket_and_terminate_client() {
-    if std::env::var_os("DISPLAY").is_none() {
+    if std::env::var_os("DISPLAY").is_none()
+        || std::process::Command::new("Xwayland")
+            .arg("-version")
+            .output()
+            .is_err()
+    {
+        eprintln!("SKIP: shutdown test needs a host DISPLAY and Xwayland");
         return;
     }
     for signal in [Signal::TERM, Signal::INT, Signal::HUP] {
@@ -19,7 +29,7 @@ fn signals_remove_socket_and_terminate_client() {
                 "--",
                 "/bin/sh",
                 "-c",
-                "echo $$ > \"$1\"; exec sleep 60",
+                "echo $$ > \"$1\"; echo \"$DISPLAY\" > \"$1.display\"; exec sleep 60",
                 "client",
             ])
             .arg(&pid_file)
@@ -58,6 +68,56 @@ fn signals_remove_socket_and_terminate_client() {
             .trim()
             .parse()
             .unwrap();
+        let display = std::fs::read_to_string(pid_file.with_extension("pid.display")).unwrap();
+        let number = display.trim().strip_prefix(':').unwrap();
+        let (connection, screen) = x11rb::connect(Some(display.trim())).unwrap();
+        let window = connection.generate_id().unwrap();
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                connection.setup().roots[screen].root,
+                0,
+                0,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap();
+        connection.map_window(window).unwrap();
+        connection.flush().unwrap();
+        while connection
+            .get_window_attributes(window)
+            .unwrap()
+            .reply()
+            .unwrap()
+            .map_state
+            != MapState::VIEWABLE
+        {
+            assert!(Instant::now() < deadline, "X11 window was not mapped");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let x_socket = format!("/tmp/.X11-unix/X{number}");
+        let x_lock = format!("/tmp/.X{number}-lock");
+        assert!(std::path::Path::new(&x_socket).exists());
+        assert!(std::path::Path::new(&x_lock).exists());
+        let children = std::fs::read_to_string(format!(
+            "/proc/{}/task/{}/children",
+            compositor.id(),
+            compositor.id()
+        ))
+        .unwrap();
+        let xwayland = children
+            .split_whitespace()
+            .find(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                    .is_ok_and(|name| name.trim() == "Xwayland")
+            })
+            .map(str::to_owned)
+            .expect("XWayland child");
         kill_process(Pid::from_child(&compositor), signal).unwrap();
         while compositor.try_wait().unwrap().is_none() {
             if Instant::now() >= deadline {
@@ -67,6 +127,15 @@ fn signals_remove_socket_and_terminate_client() {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(compositor.wait().unwrap().success());
+        assert!(!std::path::Path::new(&x_socket).exists());
+        assert!(!std::path::Path::new(&x_lock).exists());
+        while std::path::Path::new(&format!("/proc/{xwayland}")).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "XWayland survived compositor shutdown"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(!std::path::Path::new(&format!("/proc/{client}")).exists());
         assert!(!runtime.path().join("wayland-1").exists());
         assert!(!runtime.path().join("wayland-1.lock").exists());

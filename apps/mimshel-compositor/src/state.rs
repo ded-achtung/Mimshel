@@ -49,6 +49,12 @@ pub struct State {
     /// Mapped windows in stack or creation order.
     pub windows: Vec<(crate::model::WindowId, Window)>,
     pending: Vec<Window>,
+    /// XWayland shell protocol state.
+    pub xwayland_shell: smithay::wayland::xwayland_shell::XWaylandShellState,
+    /// The single WM; installed before any XWM callbacks are dispatched.
+    pub xwms: Vec<smithay::xwayland::X11Wm>,
+    /// Unmanaged menus and tooltips, in stacking order.
+    pub overrides: Vec<Window>,
     /// Whether an event requires a frame.
     pub dirty: bool,
     /// Physical pixels per logical point on the nested output.
@@ -123,6 +129,9 @@ impl State {
             model: crate::model::Model::new(1280, 800),
             windows: Vec::new(),
             pending: Vec::new(),
+            xwayland_shell: smithay::wayland::xwayland_shell::XWaylandShellState::new::<Self>(&dh),
+            xwms: Vec::new(),
+            overrides: Vec::new(),
             protocols,
             dirty: true,
             output_scale: 1.0,
@@ -166,11 +175,12 @@ impl State {
         let focus = self
             .exclusive_layer_focus()
             .or_else(|| self.current_layer_focus())
+            .map(crate::xwayland::Focus::from)
             .or_else(|| {
                 self.windows
                     .iter()
                     .find(|(id, _)| Some(*id) == self.model.focus)
-                    .and_then(|(_, w)| w.toplevel().map(|top| top.wl_surface().clone()))
+                    .and_then(|(_, w)| crate::xwayland::Focus::window(w))
             });
         self.keyboard
             .clone()
@@ -220,6 +230,7 @@ impl State {
                 }
             }
         }
+        self.sync_x11_positions();
         self.update_frame_pointer();
         self.dirty = true;
     }
@@ -304,6 +315,13 @@ impl State {
     /// Locate a compositor frame control in front-to-back order.
     pub fn decoration_under(&self) -> Option<(crate::model::WindowId, crate::decoration::Hit)> {
         if self.protocols.locked || self.layer_under(true).is_some() {
+            return None;
+        }
+        if self
+            .space
+            .element_under(self.pointer)
+            .is_some_and(|(w, _)| w.x11_surface().is_some_and(|x| x.is_override_redirect()))
+        {
             return None;
         }
         for w in self.model.windows.iter().rev() {
@@ -422,6 +440,9 @@ impl CompositorHandler for State {
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         // Foreign client data still needs a valid compositor state reference.
         static FALLBACK: std::sync::OnceLock<CompositorClientState> = std::sync::OnceLock::new();
+        if let Some(data) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &data.compositor_state;
+        }
         client
             .get_data::<ClientState>()
             .map(|data| &data.compositor)
@@ -431,6 +452,16 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         self.dirty = true;
+        for (_, window) in &self.windows {
+            if window.is_x11() && crate::xwayland::surface(window).as_ref() == Some(surface) {
+                window.on_commit();
+            }
+        }
+        for window in &self.overrides {
+            if crate::xwayland::surface(window).as_ref() == Some(surface) {
+                window.on_commit();
+            }
+        }
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {
@@ -665,7 +696,10 @@ impl XdgShellHandler for State {
         if !pointer.has_grab(serial) && !keyboard.has_grab(serial) {
             return;
         }
-        if let Ok(grab) = self.popups.grab_popup(root, kind, &self.seat, serial) {
+        if let Ok(grab) = self
+            .popups
+            .grab_popup(root.into(), kind, &self.seat, serial)
+        {
             keyboard.set_focus(self, grab.current_grab(), serial);
             keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
             pointer.set_grab(
@@ -679,7 +713,7 @@ impl XdgShellHandler for State {
 }
 
 impl SeatHandler for State {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = crate::xwayland::Focus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
     fn seat_state(&mut self) -> &mut SeatState<Self> {

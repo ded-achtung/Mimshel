@@ -48,14 +48,18 @@ impl Drop for Launcher {
 pub fn run(command: Vec<OsString>) -> Result<(), Error> {
     let mut render_state = render::RenderState::default();
     let mut server = Server::new()?;
-    println!("WAYLAND_DISPLAY={}", server.socket_name.to_string_lossy());
+    let display = server.start_xwayland()?;
+    println!(
+        "WAYLAND_DISPLAY={} DISPLAY=:{display}",
+        server.socket_name.to_string_lossy()
+    );
     let child = if let Some(program) = command.first() {
         Some(
             Command::new(program)
                 .args(&command[1..])
                 .process_group(0)
                 .env("WAYLAND_DISPLAY", &server.socket_name)
-                .env_remove("DISPLAY")
+                .env("DISPLAY", format!(":{display}"))
                 .env_remove("WAYLAND_SOCKET")
                 .spawn()?,
         )

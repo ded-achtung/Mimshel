@@ -46,6 +46,12 @@ pub struct Window {
     pub saved: Option<Rect>,
     /// Whether this window uses compositor decorations.
     pub decorated: bool,
+    /// Cached X11 title, updated on property events.
+    pub x11_title: String,
+    /// Minimum client size.
+    pub min_size: (i32, i32),
+    /// Maximum client size; zero means unconstrained.
+    pub max_size: (i32, i32),
     resume: Mode,
     minimized_order: u64,
 }
@@ -105,6 +111,9 @@ impl Model {
             mode: Mode::Normal,
             saved: None,
             decorated: true,
+            x11_title: String::new(),
+            min_size: (1, 1),
+            max_size: (0, 0),
             resume: Mode::Normal,
             minimized_order: 0,
             rect: Rect {
@@ -155,6 +164,7 @@ impl Model {
         rect.width = rect.width.max(1);
         rect.height = rect.height.max(1);
         if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+            constrain(w, &mut rect);
             w.rect = rect;
         }
     }
@@ -203,6 +213,11 @@ impl Model {
                     w.rect.height = (w.rect.height - TITLE_HEIGHT).max(1);
                 }
             }
+        }
+        if mode != Mode::Fullscreen {
+            let mut rect = w.rect;
+            constrain(w, &mut rect);
+            w.rect = rect;
         }
         w.mode = mode;
         if mode == Mode::Minimized && self.focus == Some(id) {
@@ -261,6 +276,11 @@ impl Model {
                 if w.mode == Mode::Maximized && w.decorated {
                     w.rect.height = (w.rect.height - TITLE_HEIGHT).max(1);
                 }
+                if w.mode == Mode::Maximized {
+                    let mut rect = w.rect;
+                    constrain(w, &mut rect);
+                    w.rect = rect;
+                }
                 continue;
             }
             w.rect.x = w
@@ -273,6 +293,18 @@ impl Model {
                 .clamp(self.area.y, self.area.y + self.area.height - 1);
         }
     }
+}
+
+fn constrain(window: &Window, rect: &mut Rect) {
+    let limit = |value: i32, min: i32, max: i32| {
+        value.max(min.max(1)).min(if max > 0 {
+            max.max(min.max(1))
+        } else {
+            i32::MAX
+        })
+    };
+    rect.width = limit(rect.width, window.min_size.0, window.max_size.0);
+    rect.height = limit(rect.height, window.min_size.1, window.max_size.1);
 }
 
 #[cfg(test)]
