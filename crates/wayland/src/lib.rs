@@ -348,6 +348,10 @@ impl Display {
         let layer = shell.create_layer_surface(&self.qh, surface, layer, Some(name), None);
         layer.set_keyboard_interactivity(keys);
         layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+        // Placed by the part itself, from the screen's edge: the compositor
+        // must not move it out of other panels' reserved space (with the
+        // default 0 a menu opened one menu-bar height too low).
+        layer.set_exclusive_zone(-1);
         layer.set_size(1, 1);
         let id = state.next_id;
         state.next_id += 1;
@@ -500,14 +504,14 @@ impl Panel {
     pub fn reserve_top(&self, d: &Display, height: u32, _x_from: u32, _x_to: u32) -> Result<()> {
         d.layer_change(self.id, |layer, _| {
             layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
-            layer.set_exclusive_zone(height as i32);
+            layer.set_exclusive_zone(zone(height));
         })
     }
 
     /// The same at the bottom; 0 reserves nothing.
     pub fn reserve_bottom(&self, d: &Display, height: u32, _x_from: u32, _x_to: u32) -> Result<()> {
         d.layer_change(self.id, |layer, _| {
-            layer.set_exclusive_zone(height as i32);
+            layer.set_exclusive_zone(zone(height));
         })
     }
 
@@ -580,6 +584,17 @@ impl Popup {
 
     pub fn present(&self, d: &Display, image: &impl Image) -> Result<()> {
         present(d, self.id, image.image(), None)
+    }
+}
+
+/// The exclusive zone for reserving `height` points: none at all is -1
+/// ("place me from the edge, ignore other panels"), not 0, which would move
+/// the surface out of the menu bar's reserved strip.
+fn zone(height: u32) -> i32 {
+    if height == 0 {
+        -1
+    } else {
+        i32::try_from(height).unwrap_or(i32::MAX)
     }
 }
 
@@ -1117,6 +1132,12 @@ delegate_registry!(State);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_reservation_is_minus_one() {
+        assert_eq!(zone(0), -1);
+        assert_eq!(zone(25), 25);
+    }
 
     #[test]
     fn buttons_like_x11() {
