@@ -67,6 +67,32 @@ impl Fonts {
         })
     }
 
+    /// Load the configured family and fontconfig's sans-serif fallback only.
+    pub fn with_fallback(family: &str) -> Fonts {
+        let mut db = cosmic_text::fontdb::Database::new();
+        if let Ok(out) = std::process::Command::new("fc-list")
+            .args([family, "-f", "%{file}\n"])
+            .output()
+        {
+            for path in String::from_utf8_lossy(&out.stdout).lines() {
+                let _ = db.load_font_file(path);
+            }
+        }
+        if let Ok(out) = std::process::Command::new("fc-match")
+            .args(["sans-serif", "-f", "%{file}\n"])
+            .output()
+        {
+            for path in String::from_utf8_lossy(&out.stdout).lines() {
+                let _ = db.load_font_file(path);
+            }
+        }
+        Fonts {
+            system: FontSystem::new_with_locale_and_db(locale(), db),
+            cache: SwashCache::new(),
+            family: family.to_string(),
+        }
+    }
+
     /// Ширина строки в пикселях.
     pub fn measure(&mut self, text: &str, style: &Style) -> f32 {
         let buffer = self.layout(text, style, None);

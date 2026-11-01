@@ -32,6 +32,7 @@ struct DecorationCache {
     id: crate::model::WindowId,
     title: String,
     width: i32,
+    height: i32,
     focused: bool,
     hover: bool,
     scale: f64,
@@ -40,21 +41,7 @@ struct DecorationCache {
 }
 
 fn fonts() -> mimshel_text::Fonts {
-    let path = mimshel_core::names::env("CONFIG")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            let base = std::env::var_os("XDG_CONFIG_HOME")
-                .map(std::path::PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(|home| std::path::PathBuf::from(home).join(".config"))
-                })?;
-            Some(base.join("mimshel/config.toml"))
-        });
-    let text = path
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .unwrap_or_default();
-    mimshel_text::Fonts::new(&mimshel_core::config::Config::from_toml(&text).font)
+    mimshel_text::Fonts::with_fallback(&mimshel_core::config::load().font)
 }
 
 /// Reusable render storage and startup timing policy.
@@ -114,6 +101,7 @@ pub fn frame(
             && state.model.title_height(*id) > 0
             && let Some(rect) = state.model.rect(*id)
         {
+            let title_height = state.model.title_height(*id);
             let focused = state.model.focus == Some(*id);
             let hover = state.hovered == Some(*id);
             let scale = state.output_scale;
@@ -124,6 +112,7 @@ pub fn frame(
                         id: *id,
                         title: String::new(),
                         width: 0,
+                        height: 0,
                         focused,
                         hover,
                         scale,
@@ -146,6 +135,7 @@ pub fn frame(
                     .and_then(|d| d.lock().ok());
                 let title = data.as_ref().and_then(|d| d.title.as_deref()).unwrap_or("");
                 if cache.width != rect.width
+                    || cache.height != title_height
                     || cache.title != title
                     || cache.focused != focused
                     || cache.hover != hover
@@ -154,6 +144,7 @@ pub fn frame(
                     cache.title.clear();
                     cache.title.push_str(title);
                     cache.width = rect.width;
+                    cache.height = title_height;
                     cache.focused = focused;
                     cache.hover = hover;
                     cache.scale = scale;
@@ -184,9 +175,13 @@ pub fn frame(
                         buffer,
                         None,
                         Some(smithay::utils::Rectangle::from_size(
-                            ((rect.width as f64 * scale).round(), (30.0 * scale).round()).into(),
+                            (
+                                (rect.width as f64 * scale).round(),
+                                (f64::from(title_height) * scale).round(),
+                            )
+                                .into(),
                         )),
-                        Some((rect.width, 30).into()),
+                        Some((rect.width, title_height).into()),
                         Kind::Unspecified,
                     )?
                     .into(),
@@ -196,8 +191,8 @@ pub fn frame(
             let (left, right, top, bottom) = (
                 px(rect.x),
                 px(rect.x + rect.width),
-                px(rect.y + 30),
-                px(rect.y + 30 + rect.height),
+                px(rect.y + title_height),
+                px(rect.y + title_height + rect.height),
             );
             for (i, (x, y, w, h)) in [
                 (left - 1, top, 1, bottom - top),
