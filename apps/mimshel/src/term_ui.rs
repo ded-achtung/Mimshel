@@ -62,6 +62,9 @@ enum Wake {
     Fonts,
     /// Cursor blink tick.
     Blink,
+    /// The connection to the screen is gone (the compositor or the X server
+    /// closed): nothing is left to show the tabs on.
+    Gone,
 }
 
 /// Cursor blink half-period.
@@ -1165,9 +1168,11 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> Result<()> {
         std::thread::spawn(move || {
             while let Ok(ev) = d.next_event() {
                 if tx.send(Wake::X(ev)).is_err() {
-                    break;
+                    return;
                 }
             }
+            // Without this the process outlived its compositor, windowless.
+            let _ = tx.send(Wake::Gone);
         });
     }
     win.show(&d)?;
@@ -1243,6 +1248,9 @@ fn terminal(dir: Option<PathBuf>, command: Option<Vec<String>>) -> Result<()> {
                     w.dirty = true;
                     true
                 }
+                // No window to destroy any more: just leave (the tabs'
+                // shells get their hangup when the terminals close).
+                Wake::Gone => return Ok(()),
             };
             if !keep {
                 break 'run;
