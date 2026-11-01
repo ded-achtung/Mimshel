@@ -40,9 +40,22 @@ working one; nothing on it changes in this phase. Branch `platform/boundary`
 | 2.1 | Skeleton: winit and headless backends, xdg-shell windows, keyboard and pointer, focus on click, stacking, moving (Super + drag and the client's own move request), resizing (client request), damage-tracked rendering, frame timing. kitty runs inside. | Codex — **done** |
 | 2.2 | Window decorations of our own (server side, `xdg-decoration`): title bar with the three buttons on the left, as on X11 today; maximize and minimize, fullscreen. | Codex — **done** |
 | 2.3 | Protocols for the shell: `wlr-layer-shell`, `ext-foreign-toplevel-list` + `wlr-foreign-toplevel-management`, `xdg-activation`, `ext-session-lock-v1`, `ext-idle-notify-v1`. | Codex — **done** |
-| 2.4 | The door's Wayland backend (`platform.rs` gets the second variant): the menu bar, the dock and the desktop run inside the nested compositor. | — |
-| 2.5 | XWayland: Houdini, Blender, Chrome, Telegram, Steam inside (needs `xorg-xwayland` on the laptop). | — |
+| 2.4 | The door's Wayland backend (`platform.rs` gets the second variant): the menu bar, the dock and the desktop run inside the nested compositor. | Claude — **under way**: `crates/wayland`; our terminal and the menu bar run inside (2026-11-01) |
+| 2.5 | XWayland: Houdini, Blender, Chrome, Telegram, Steam inside (needs `xorg-xwayland` on the laptop). | Codex — **done** (started at launch for now, ~29 MB; to start on first use) |
 | 2.6 | Clipboard and drag and drop between programs and our windows; keyboard layout switching. | — |
+
+## Trying it
+
+`tools/nested-session.sh` (after `cargo build --release`) opens the compositor
+in a window and starts inside it a second, isolated Mimshel service with only
+the menu bar (own runtime, state and cache folders, own config copy, own
+D-Bus), our terminal as a Wayland client and the same terminal as an X11
+program through XWayland. Closing the compositor's window ends everything.
+
+On Wayland the door has so far: app windows, panels (layer shell with an
+exclusive zone), popups (overlay layer), keyboard, pointer, outputs. Not yet:
+the window list (foreign-toplevel client — the menu bar shows no active app),
+keyboard layouts, clipboard, drag and drop, the desktop and the lock screen.
 
 ## Measurements
 
