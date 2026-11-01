@@ -60,6 +60,8 @@ pub struct Display {
     /// Only the thread in [`Display::next_event`] takes this (and at start).
     queue: Mutex<EventQueue<State>>,
     state: Mutex<State>,
+    /// `MIMSHEL_DEBUG_WAYLAND=1`: print every event handed to the program.
+    debug: bool,
 }
 
 /// An app window ([`Display::create_app_window`]), named by its id.
@@ -191,12 +193,21 @@ impl Display {
             qh,
             queue: Mutex::new(queue),
             state: Mutex::new(state),
+            debug: std::env::var_os("MIMSHEL_DEBUG_WAYLAND").is_some_and(|v| v == "1"),
         })
     }
 
     /// Wait for the next event. Reads the socket without holding the state,
     /// and makes key repeats while a key is held.
     pub fn next_event(&self) -> Result<Event> {
+        let ev = self.wait_event()?;
+        if self.debug {
+            eprintln!("wayland: {ev:?}");
+        }
+        Ok(ev)
+    }
+
+    fn wait_event(&self) -> Result<Event> {
         loop {
             let timeout = {
                 let mut state = lock(&self.state);
