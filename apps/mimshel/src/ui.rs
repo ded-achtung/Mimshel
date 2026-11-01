@@ -221,15 +221,7 @@ pub fn config_store(path: PathBuf) -> crate::config_store::Store {
 
 /// Файл настроек: из `MIMSHEL_CONFIG` или `~/.config/mimshel/config.toml`.
 pub fn config_path() -> Option<PathBuf> {
-    mimshel_core::names::env("CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let base = std::env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .filter(|p| p.is_absolute())
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-            Some(mimshel_core::names::dir_in(&base).join("config.toml"))
-        })
+    mimshel_core::config::path()
 }
 
 /// Только ярлыки, видимые в меню, — для «Поиска» и «Программ».

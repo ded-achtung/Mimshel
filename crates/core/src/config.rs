@@ -7,6 +7,37 @@ use toml_edit::{Array, DocumentMut, Value};
 
 use crate::i18n::Language;
 
+/// Resolve the settings path without creating or changing the file.
+pub fn path() -> Option<std::path::PathBuf> {
+    path_from(
+        crate::names::env("CONFIG").map(Into::into),
+        std::env::var_os("XDG_CONFIG_HOME").map(Into::into),
+        std::env::var_os("HOME").map(Into::into),
+    )
+}
+
+fn path_from(
+    override_path: Option<std::path::PathBuf>,
+    xdg: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    override_path.or_else(|| {
+        let base = xdg
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.map(|p| p.join(".config")))?;
+        Some(crate::names::dir_in(&base).join("config.toml"))
+    })
+}
+
+/// Read validated settings without migrating or writing shell-owned files.
+pub fn load() -> Config {
+    path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .filter(|text| toml_error(text).is_none())
+        .map(|text| Config::from_toml(&text))
+        .unwrap_or_default()
+}
+
 /// Когда прятать док.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockHide {
@@ -1173,6 +1204,24 @@ pub fn toml_error(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_path_precedence() {
+        let p = |s: &str| Some(std::path::PathBuf::from(s));
+        assert_eq!(
+            path_from(p("custom.toml"), p("/xdg"), p("/home/u")),
+            p("custom.toml")
+        );
+        assert_eq!(
+            path_from(None, p("/xdg"), p("/home/u")),
+            p("/xdg/mimshel/config.toml")
+        );
+        assert_eq!(
+            path_from(None, p("relative"), p("/home/u")),
+            p("/home/u/.config/mimshel/config.toml")
+        );
+        assert_eq!(path_from(None, None, None), None);
+    }
 
     #[test]
     fn scale_auto_or_number() {
