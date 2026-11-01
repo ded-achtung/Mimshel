@@ -157,3 +157,14 @@ Clippy with `-D warnings`, the locked workspace tests under Xvfb, the ignored
 `mimshel-x11` window suite under Xvfb, and `cargo deny --locked check` all pass.
 The audit used a temporary cargo-deny 0.20.2 installation (removed afterward).
 All builds used `CARGO_INCREMENTAL=0`; the existing target directory was reused.
+
+## XWayland startup (Smithay 0.7.0)
+
+Eager startup is retained. In the pinned Smithay 0.7.0,
+`XWayland::spawn` calls private `prepare_x11_sockets` and immediately calls
+`Command::spawn`. It accepts neither existing listeners nor a lazy option;
+`XWaylandEvent` only has `Ready` and `Error`. Reserving our own listener and
+then releasing it before `spawn` would lose queued connections and race other
+servers. Clean activation requires an upstream API exposing socket reservation
+and deferred spawn (or maintaining a separate process launcher). DISPLAY is
+still available to clients from startup; the Xwayland idle memory cost remains.
