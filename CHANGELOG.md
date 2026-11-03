@@ -8,9 +8,9 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 
 - **Desktop icons over a video wallpaper.** With another program's wallpaper running
   (such as Wallpaper Animator from Steam), its window used to cover the desktop icons.
-  Now the desktop draws only the icons over that video and keeps the program's window
-  beneath it, also after the program restarts its window; the window in use keeps the
-  keyboard focus.
+  Now the desktop draws only the icons over that video and keeps them above the
+  program's window, also after the program restarts its window; the window in use keeps
+  the keyboard focus.
 
 ### Fixed
 

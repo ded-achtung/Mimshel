@@ -7,8 +7,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::ImageFormat;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux,
-    ConnectionExt as _, EventMask, StackMode, Window,
+    AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
 };
 
 use std::sync::atomic::Ordering;
@@ -558,10 +557,10 @@ impl Display {
 
     /// Other programs' desktop-type windows (a video wallpaper, another
     /// program's desktop): whether there are any, and those stacked above
-    /// our own window `ours`, bottom to top. None counts as above while
-    /// ours is not in the stacking list yet: once the window manager takes
-    /// it, the list changes and this is asked again.
-    pub fn foreign_desktops(&self, ours: Window) -> (bool, Vec<Window>) {
+    /// our own window `ours`, bottom to top — `None` while ours is not in
+    /// the stacking list (not taken by the window manager yet, or being
+    /// taken anew).
+    pub fn foreign_desktops(&self, ours: Window) -> (bool, Option<Vec<Window>>) {
         let a = &self.atoms;
         let list = self.client_list();
         let ours_at = list.iter().position(|&w| w == ours);
@@ -580,19 +579,7 @@ impl Display {
                 above.push(w);
             }
         }
-        (any, above)
-    }
-
-    /// Another program's window `w` to the bottom of its layer (a video
-    /// wallpaper under our desktop icons). Theirs is lowered instead of
-    /// ours raised: xfwm4 skips a raise from the window it raised last and
-    /// turns any other raise into activation, which takes the keyboard
-    /// focus from the window in use; a lower does neither.
-    pub fn lower_window(&self, w: Window) -> Result<()> {
-        self.conn
-            .configure_window(w, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))?;
-        self.conn.flush()?;
-        Ok(())
+        (any, ours_at.map(|_| above))
     }
 
     /// Окна программ, от нижнего к верхнему (последнее — сверху).

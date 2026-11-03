@@ -19,7 +19,7 @@ jobs:
           # Wayland uses pkg-config; xkbcommon links directly. EGL/GLES are loaded
           # dynamically by Smithay; winit also loads xkbcommon-x11.
           # No DRM/GBM/libinput/udev backend is enabled.
-          sudo apt-get install -y fonts-dejavu-core dbus xvfb xdotool libclang-dev llvm-dev libpam0g-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libegl1 libgles2
+          sudo apt-get install -y fonts-dejavu-core dbus xvfb xfwm4 xdotool libclang-dev llvm-dev libpam0g-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libegl1 libgles2
       - name: Форматирование
         run: cargo fmt --all -- --check
       - name: Статические проверки

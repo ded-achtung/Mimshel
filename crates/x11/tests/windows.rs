@@ -659,3 +659,175 @@ fn isolated_x11_drop_from_another_program() -> Result<()> {
     assert_eq!(d.take_drop(ticket), [std::path::PathBuf::from("/tmp/x")]);
     Ok(())
 }
+
+/// Our desktop over another program's desktop window (a video wallpaper
+/// such as Wallpaper Animator) under a real xfwm4, which drops every
+/// stacking request of a desktop-type window: the other one, mapped later,
+/// lies above ours; a raise of ours does nothing; `remap` puts ours on top,
+/// sticky again, and the program window in use keeps the keyboard focus.
+/// Skipped without xfwm4.
+#[test]
+#[ignore = "нужны Xvfb и xfwm4; CI запускает отдельно"]
+fn isolated_x11_desktop_over_foreign_wallpaper() -> Result<()> {
+    use x11rb::protocol::xproto::{ConfigureWindowAux, CreateWindowAux, StackMode, WindowClass};
+    let xfwm4 = mimshel_core::names::env("TEST_XFWM4").unwrap_or_else(|| "xfwm4".into());
+    if std::env::var_os("MIMSHEL_TEST_PRIVATE_X11").is_none()
+        && Command::new(&xfwm4).arg("--version").output().is_err()
+    {
+        eprintln!("no {}: skipped", xfwm4.to_string_lossy());
+        return Ok(());
+    }
+    if outer_run("isolated_x11_desktop_over_foreign_wallpaper", "800x600x24")? {
+        return Ok(());
+    }
+    let _wm = Server(
+        Command::new(&xfwm4)
+            .arg("--compositor=off")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?,
+    );
+    let (other, screen) = RustConnection::connect(None)?;
+    let root = other.setup().roots[screen].root;
+    let atom = |name: &str| -> Result<u32> {
+        Ok(other.intern_atom(false, name.as_bytes())?.reply()?.atom)
+    };
+    let until = |what: &str, mut ok: Box<dyn FnMut() -> Result<bool> + '_>| -> Result<()> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !ok()? {
+            if std::time::Instant::now() > deadline {
+                return Err(format!("timed out: {what}").into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    };
+    let check = atom("_NET_SUPPORTING_WM_CHECK")?;
+    until(
+        "xfwm4 up",
+        Box::new(|| {
+            Ok(other
+                .get_property(false, root, check, AtomEnum::WINDOW, 0, 1)?
+                .reply()?
+                .value32()
+                .is_some_and(|mut v| v.next().is_some()))
+        }),
+    )?;
+
+    let d = Display::connect()?;
+    let desktop = d.create_desktop()?;
+    desktop.show(&d)?;
+    let ours = desktop.id();
+    until(
+        "ours managed",
+        Box::new(|| Ok(d.foreign_desktops(ours).1.is_some())),
+    )?;
+    assert_eq!(d.foreign_desktops(ours), (false, Some(Vec::new())));
+
+    // A program window in use: it keeps the keyboard focus throughout.
+    let app = other.generate_id()?;
+    other.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        app,
+        root,
+        100,
+        100,
+        300,
+        200,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new(),
+    )?;
+    other.map_window(app)?;
+    other.flush()?;
+    until(
+        "the program window focused",
+        Box::new(|| Ok(other.get_input_focus()?.reply()?.focus == app)),
+    )?;
+
+    // Another program's wallpaper window, desktop-typed, mapped after ours.
+    let wallpaper = other.generate_id()?;
+    other.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        wallpaper,
+        root,
+        0,
+        0,
+        800,
+        600,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new(),
+    )?;
+    other.change_property32(
+        PropMode::REPLACE,
+        wallpaper,
+        atom("_NET_WM_WINDOW_TYPE")?,
+        AtomEnum::ATOM,
+        &[atom("_NET_WM_WINDOW_TYPE_DESKTOP")?],
+    )?;
+    other.map_window(wallpaper)?;
+    other.flush()?;
+    until(
+        "the wallpaper over ours",
+        Box::new(|| Ok(d.foreign_desktops(ours) == (true, Some(vec![wallpaper])))),
+    )?;
+
+    // What the desktop did before: ask to be raised. xfwm4 drops it.
+    other.configure_window(
+        ours,
+        &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+    )?;
+    other.get_input_focus()?.reply()?;
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(d.foreign_desktops(ours), (true, Some(vec![wallpaper])));
+
+    desktop.remap(&d)?;
+    until(
+        "ours over the wallpaper",
+        Box::new(|| Ok(d.foreign_desktops(ours) == (true, Some(Vec::new())))),
+    )?;
+    assert_eq!(other.get_input_focus()?.reply()?.focus, app);
+    let state = atom("_NET_WM_STATE")?;
+    let sticky = atom("_NET_WM_STATE_STICKY")?;
+    until(
+        "ours sticky again",
+        Box::new(|| {
+            Ok(other
+                .get_property(false, ours, state, AtomEnum::ATOM, 0, 32)?
+                .reply()?
+                .value32()
+                .is_some_and(|mut v| v.any(|a| a == sticky)))
+        }),
+    )?;
+
+    // With the focus on ours (the desktop was clicked): the manager passes
+    // it on when ours hides, and the desktop asks for it back once ours is
+    // taken again.
+    d.activate(ours)?;
+    until(
+        "ours focused",
+        Box::new(|| Ok(other.get_input_focus()?.reply()?.focus == ours)),
+    )?;
+    other.unmap_window(wallpaper)?;
+    other.map_window(wallpaper)?;
+    other.flush()?;
+    until(
+        "the wallpaper over ours again",
+        Box::new(|| Ok(d.foreign_desktops(ours) == (true, Some(vec![wallpaper])))),
+    )?;
+    desktop.remap(&d)?;
+    until(
+        "ours over the wallpaper again",
+        Box::new(|| Ok(d.foreign_desktops(ours) == (true, Some(Vec::new())))),
+    )?;
+    d.activate(ours)?;
+    until(
+        "ours focused again",
+        Box::new(|| Ok(other.get_input_focus()?.reply()?.focus == ours)),
+    )?;
+    Ok(())
+}

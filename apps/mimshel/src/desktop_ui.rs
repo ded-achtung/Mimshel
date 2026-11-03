@@ -91,6 +91,16 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(450);
 const MARGIN: f32 = 12.0;
 const DOCK_ROOM: f32 = 96.0;
 
+/// Our desktop hidden and shown again to be put over another program's
+/// desktop window ([`DesktopUi::check_video`]): when it was hidden, whether
+/// the window manager has let it go yet, and whether it had the keyboard
+/// focus — the manager passes that on to another window when ours hides.
+struct Lift {
+    since: Instant,
+    gone: bool,
+    refocus: bool,
+}
+
 pub struct DesktopUi {
     window: Background,
     menu_popup: Popup,
@@ -106,10 +116,13 @@ pub struct DesktopUi {
     /// Another program's desktop window (a video wallpaper) is under ours:
     /// draw only the icons, transparent elsewhere, so it shows through.
     video: bool,
-    /// When the latest run of lowering that window began and how many
-    /// lowers it has had: a program that keeps raising its window back is
-    /// left alone after a few, not answered in an endless loop.
-    lowered: (Instant, u32),
+    /// The other desktop windows last found above ours, and how many times
+    /// in a row ours was put over them: with a window manager that does
+    /// not put it on top, or a program that keeps raising its window back,
+    /// a few tries, not an endless blinking loop.
+    lifts: (Vec<u32>, u32),
+    /// Ours is being put over them (hidden and shown again).
+    lift: Option<Lift>,
     /// Значки и папка «Рабочий стол».
     grid: IconGrid,
     dir: PathBuf,
@@ -201,7 +214,8 @@ impl DesktopUi {
             wallpaper: config.wallpaper.clone(),
             wall: None,
             video: false,
-            lowered: (Instant::now(), 0),
+            lifts: (Vec::new(), 0),
+            lift: None,
             grid: IconGrid::new((0.0, 0.0, 1.0, 1.0)),
             dir: dir.clone(),
             pending_select: None,
@@ -1352,27 +1366,47 @@ impl DesktopUi {
 
     /// Another program's desktop window (a video wallpaper such as Wallpaper
     /// Animator) appeared or went away: with one, our window shows only the
-    /// icons and theirs is kept under ours; without, our wallpaper again.
-    /// Theirs is lowered only when above ours — lowering changes the
-    /// stacking list, which comes back here.
+    /// icons and is kept above it; without, our wallpaper again. Put over it
+    /// only when below it — that changes the stacking list, which comes
+    /// back here.
     fn check_video(&mut self, d: &Display) -> Result<()> {
-        let (video, above) = d.foreign_desktops(self.window.id());
-        if !above.is_empty() {
-            let now = Instant::now();
-            if now.duration_since(self.lowered.0) > Duration::from_secs(10) {
-                self.lowered = (now, 0);
-            }
-            self.lowered.1 += 1;
-            match self.lowered.1 {
-                ..=5 => {
-                    for w in above {
-                        d.lower_window(w)?;
-                    }
+        let ours = self.window.id();
+        let (video, above) = d.foreign_desktops(ours);
+        if let Some(lift) = self.lift.as_mut() {
+            if above.is_none() {
+                lift.gone = true;
+            } else if lift.gone || lift.since.elapsed() > Duration::from_secs(2) {
+                // Taken back (or the manager never let it go).
+                let refocus = lift.gone && lift.refocus;
+                self.lift = None;
+                if refocus {
+                    d.activate(ours)?;
                 }
-                6 => eprintln!(
-                    "Стол: чужие обои снова и снова встают над значками — оставляю как есть"
-                ),
-                _ => {}
+            }
+        }
+        match (&self.lift, above) {
+            // Hiding: the stacking list may still be the one from before.
+            (Some(_), _) | (None, None) => {}
+            (None, Some(above)) if above.is_empty() => self.lifts.1 = 0,
+            (None, Some(above)) => {
+                if above != self.lifts.0 {
+                    self.lifts = (above, 0);
+                }
+                self.lifts.1 += 1;
+                match self.lifts.1 {
+                    ..=3 => {
+                        self.lift = Some(Lift {
+                            since: Instant::now(),
+                            gone: false,
+                            refocus: d.active_window() == Some(ours),
+                        });
+                        self.window.raise_over_others(d)?;
+                    }
+                    4 => eprintln!(
+                        "Стол: не получается встать над чужими обоями — оставляю как есть"
+                    ),
+                    _ => {}
+                }
             }
         }
         if video != self.video {

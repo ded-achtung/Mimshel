@@ -128,6 +128,20 @@ impl DesktopWindow {
         Ok(())
     }
 
+    /// Hide and show again, for the window manager to take the window anew:
+    /// over other programs' desktop windows (our icons on a video
+    /// wallpaper). xfwm4 drops every stacking request of a desktop-type
+    /// window, ours or theirs (clientMoveResizeWindow), but puts a newly
+    /// mapped one on top of the desktop layer without focusing it
+    /// (clientFocusNew); it gives the window its sticky and skip-taskbar
+    /// state again from the type.
+    pub fn remap(&self, d: &Display) -> Result<()> {
+        d.conn.unmap_window(self.window)?;
+        d.conn.map_window(self.window)?;
+        d.conn.flush()?;
+        Ok(())
+    }
+
     /// Поставить обои: картинка в пикселях экрана (левый верхний угол — к углу
     /// экрана).
     pub fn set_wallpaper(&self, d: &Display, image: &Pixmap) -> Result<()> {
