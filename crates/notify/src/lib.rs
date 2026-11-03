@@ -737,6 +737,39 @@ mod tests {
         );
     }
 
+    /// The disk notifications (Devices) say what is wrong and what to do
+    /// within a banner — a title line and two body lines, the rest is cut
+    /// off — in every language. Chinese wraps only at spaces and newlines.
+    /// Measured with whatever font is installed (DejaVu Sans in CI, wider
+    /// than the default Inter).
+    #[test]
+    fn disk_notices_fit_in_a_banner() {
+        use mimshel_core::i18n::{Language, t};
+        let mut fonts = Fonts::new("Inter");
+        let width = WIDTH - TEXT_X - PAD;
+        for lang in [Language::En, Language::Ru, Language::Zh, Language::ZhTw] {
+            for key in ["disk.readonly_windows", "disk.readonly_other"] {
+                let lines = wrap(&mut fonts, t(lang, key), &BODY, width, 3);
+                let widths: Vec<f32> = lines.iter().map(|l| fonts.measure(l, &BODY)).collect();
+                eprintln!("{lang:?} {key}: {widths:?} of {width}");
+                assert!(
+                    lines.len() <= 2 && widths.iter().all(|&w| w <= width),
+                    "{key} ({lang:?}) does not fit: {lines:?}"
+                );
+            }
+            // The title line cuts a long disk name off: what happened goes
+            // before the name and fits by itself.
+            let title = t(lang, "disk.readonly_title");
+            let (head, _) = title.split_once("{name}").unwrap_or((title, ""));
+            let w = fonts.measure(head, &TITLE);
+            eprintln!("{lang:?} title: {w} of {width}");
+            assert!(
+                !head.trim().is_empty() && w <= width * 0.6,
+                "title ({lang:?}) does not put what happened first: {title}"
+            );
+        }
+    }
+
     #[test]
     fn wrap_and_hits() {
         let mut fonts = Fonts::new("Inter");

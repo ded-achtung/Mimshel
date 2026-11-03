@@ -10,6 +10,10 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   were marked «always on top», which xfwm4 places above even a focused fullscreen
   window. Now they are ordinary panels — above normal windows, below the one on full
   screen, and back on top as soon as another window is active.
+- The notice about a disk opened read-only now says what to do. Its advice was cut off
+  (a notice shows two lines of text) and was wrong besides: ejecting safely in Windows
+  does not clear the «needs a check» mark, a disk check there does. The title now starts
+  with «Read-only», so a long disk name is what gets cut.
 
 ## [v0.0.6-alpha] — 2026-10-31
 
