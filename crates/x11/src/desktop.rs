@@ -128,28 +128,6 @@ impl DesktopWindow {
         Ok(())
     }
 
-    /// Over the other desktop-type windows: our icons on top of another
-    /// program's wallpaper window (the window manager keeps it in the
-    /// desktop layer, under every ordinary window).
-    pub fn raise(&self, d: &Display) -> Result<()> {
-        d.conn.configure_window(
-            self.window,
-            &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
-        )?;
-        d.conn.flush()?;
-        Ok(())
-    }
-
-    /// Back under every window (no other wallpaper window any more).
-    pub fn lower(&self, d: &Display) -> Result<()> {
-        d.conn.configure_window(
-            self.window,
-            &ConfigureWindowAux::new().stack_mode(StackMode::BELOW),
-        )?;
-        d.conn.flush()?;
-        Ok(())
-    }
-
     /// Поставить обои: картинка в пикселях экрана (левый верхний угол — к углу
     /// экрана).
     pub fn set_wallpaper(&self, d: &Display, image: &Pixmap) -> Result<()> {

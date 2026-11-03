@@ -7,7 +7,8 @@ use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::ImageFormat;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
+    AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux,
+    ConnectionExt as _, EventMask, StackMode, Window,
 };
 
 use std::sync::atomic::Ordering;
@@ -555,30 +556,46 @@ impl Display {
         (r.format == 8 && !r.value.is_empty()).then_some(r.value)
     }
 
-    /// Окна программ, от нижнего к верхнему (последнее — сверху).
     /// Other programs' desktop-type windows (a video wallpaper, another
-    /// program's desktop), bottom to top, and where our own window `ours`
-    /// is in the same stacking order: `(foreign, ours above all of them)`.
-    pub fn foreign_desktops(&self, ours: Window) -> (Vec<Window>, bool) {
+    /// program's desktop): whether there are any, and those stacked above
+    /// our own window `ours`, bottom to top. None counts as above while
+    /// ours is not in the stacking list yet: once the window manager takes
+    /// it, the list changes and this is asked again.
+    pub fn foreign_desktops(&self, ours: Window) -> (bool, Vec<Window>) {
         let a = &self.atoms;
         let list = self.client_list();
-        let foreign: Vec<Window> = list
-            .iter()
-            .copied()
-            .filter(|&w| !self.is_own(w))
-            .filter(|&w| {
-                self.cardinals(w, a._NET_WM_WINDOW_TYPE, AtomEnum::ATOM)
+        let ours_at = list.iter().position(|&w| w == ours);
+        let mut any = false;
+        let mut above = Vec::new();
+        for (i, &w) in list.iter().enumerate() {
+            if self.is_own(w)
+                || !self
+                    .cardinals(w, a._NET_WM_WINDOW_TYPE, AtomEnum::ATOM)
                     .contains(&a._NET_WM_WINDOW_TYPE_DESKTOP)
-            })
-            .collect();
-        let at = |w: Window| list.iter().position(|&x| x == w);
-        let above = match (at(ours), foreign.iter().filter_map(|&w| at(w)).max()) {
-            (Some(o), Some(f)) => o > f,
-            _ => true,
-        };
-        (foreign, above)
+            {
+                continue;
+            }
+            any = true;
+            if ours_at.is_some_and(|o| i > o) {
+                above.push(w);
+            }
+        }
+        (any, above)
     }
 
+    /// Another program's window `w` to the bottom of its layer (a video
+    /// wallpaper under our desktop icons). Theirs is lowered instead of
+    /// ours raised: xfwm4 skips a raise from the window it raised last and
+    /// turns any other raise into activation, which takes the keyboard
+    /// focus from the window in use; a lower does neither.
+    pub fn lower_window(&self, w: Window) -> Result<()> {
+        self.conn
+            .configure_window(w, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Окна программ, от нижнего к верхнему (последнее — сверху).
     pub fn client_list(&self) -> Vec<Window> {
         let a = &self.atoms;
         let list = self.cardinals(self.root, a._NET_CLIENT_LIST_STACKING, AtomEnum::WINDOW);

@@ -4,6 +4,14 @@ Kept since the first public alpha. **Mimshel** became the project name after the
 
 ## [Unreleased]
 
+### New
+
+- **Desktop icons over a video wallpaper.** With another program's wallpaper running
+  (such as Wallpaper Animator from Steam), its window used to cover the desktop icons.
+  Now the desktop draws only the icons over that video and keeps the program's window
+  beneath it, also after the program restarts its window; the window in use keeps the
+  keyboard focus.
+
 ### Fixed
 
 - The menu bar and the Dock no longer stay on top of fullscreen games and videos: they

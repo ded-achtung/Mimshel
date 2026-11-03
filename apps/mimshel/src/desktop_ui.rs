@@ -106,6 +106,10 @@ pub struct DesktopUi {
     /// Another program's desktop window (a video wallpaper) is under ours:
     /// draw only the icons, transparent elsewhere, so it shows through.
     video: bool,
+    /// When the latest run of lowering that window began and how many
+    /// lowers it has had: a program that keeps raising its window back is
+    /// left alone after a few, not answered in an endless loop.
+    lowered: (Instant, u32),
     /// Значки и папка «Рабочий стол».
     grid: IconGrid,
     dir: PathBuf,
@@ -197,6 +201,7 @@ impl DesktopUi {
             wallpaper: config.wallpaper.clone(),
             wall: None,
             video: false,
+            lowered: (Instant::now(), 0),
             grid: IconGrid::new((0.0, 0.0, 1.0, 1.0)),
             dir: dir.clone(),
             pending_select: None,
@@ -1347,20 +1352,31 @@ impl DesktopUi {
 
     /// Another program's desktop window (a video wallpaper such as Wallpaper
     /// Animator) appeared or went away: with one, our window shows only the
-    /// icons and stays above it; without, our wallpaper again and back under
-    /// everything. Raised only when below it — raising changes the stacking
-    /// list, which comes back here.
+    /// icons and theirs is kept under ours; without, our wallpaper again.
+    /// Theirs is lowered only when above ours — lowering changes the
+    /// stacking list, which comes back here.
     fn check_video(&mut self, d: &Display) -> Result<()> {
-        let (foreign, above) = d.foreign_desktops(self.window.id());
-        let video = !foreign.is_empty();
-        if video && !above {
-            self.window.raise(d)?;
+        let (video, above) = d.foreign_desktops(self.window.id());
+        if !above.is_empty() {
+            let now = Instant::now();
+            if now.duration_since(self.lowered.0) > Duration::from_secs(10) {
+                self.lowered = (now, 0);
+            }
+            self.lowered.1 += 1;
+            match self.lowered.1 {
+                ..=5 => {
+                    for w in above {
+                        d.lower_window(w)?;
+                    }
+                }
+                6 => eprintln!(
+                    "Стол: чужие обои снова и снова встают над значками — оставляю как есть"
+                ),
+                _ => {}
+            }
         }
         if video != self.video {
             self.video = video;
-            if !video {
-                self.window.lower(d)?;
-            }
             self.full_dirty = true;
             eprintln!(
                 "Стол: {}",

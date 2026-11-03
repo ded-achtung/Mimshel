@@ -88,11 +88,18 @@ impl Display {
         Ok(Background(self.x11()?.create_desktop()?))
     }
 
-    /// Other programs' desktop windows (a video wallpaper) and whether our
-    /// background `ours` is above all of them. Wayland: other clients'
-    /// background-layer surfaces, which our compositor orders (none yet).
-    pub fn foreign_desktops(&self, ours: u32) -> (Vec<u32>, bool) {
-        x11_or!(self, (Vec::new(), true), |xd| xd.foreign_desktops(ours))
+    /// Whether other programs have desktop windows (a video wallpaper),
+    /// and those of them above our background `ours`. Wayland: other
+    /// clients' background-layer surfaces, which our compositor orders
+    /// (none yet).
+    pub fn foreign_desktops(&self, ours: u32) -> (bool, Vec<u32>) {
+        x11_or!(self, (false, Vec::new()), |xd| xd.foreign_desktops(ours))
+    }
+
+    /// Another program's window to the bottom of its layer (a video
+    /// wallpaper under our icons). Wayland: the compositor orders layers.
+    pub fn lower_window(&self, window: u32) -> Result<()> {
+        x11_or!(self, Ok(()), |xd| xd.lower_window(window))
     }
 
     /// Output rectangles in points. Wayland: outputs from our compositor.
@@ -735,17 +742,6 @@ impl Background {
 
     pub fn show(&self, d: &Display) -> Result<()> {
         self.0.show(d.x11()?)
-    }
-
-    /// Over other programs' desktop windows (our icons on a video
-    /// wallpaper). Wayland: the compositor orders background layers.
-    pub fn raise(&self, d: &Display) -> Result<()> {
-        x11_or!(d, Ok(()), |xd| self.0.raise(xd))
-    }
-
-    /// Back under every window.
-    pub fn lower(&self, d: &Display) -> Result<()> {
-        x11_or!(d, Ok(()), |xd| self.0.lower(xd))
     }
 
     pub fn set_wallpaper(&self, d: &Display, image: &tiny_skia::Pixmap) -> Result<()> {
