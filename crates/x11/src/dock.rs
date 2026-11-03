@@ -63,16 +63,17 @@ impl Display {
             AtomEnum::ATOM,
             &[a._NET_WM_WINDOW_TYPE_DOCK],
         )?;
+        // Sticky and not in task lists, but not ABOVE: xfwm4 puts ABOVE
+        // windows in its above-dock layer (12), over a focused fullscreen
+        // window (10), so the menu bar and the dock stayed on top of games.
+        // The dock type alone gives the dock layer (8): above ordinary
+        // windows, below the one that is fullscreen, as Xfce's own panel.
         self.conn.change_property32(
             PropMode::REPLACE,
             window,
             a._NET_WM_STATE,
             AtomEnum::ATOM,
-            &[
-                a._NET_WM_STATE_ABOVE,
-                a._NET_WM_STATE_STICKY,
-                a._NET_WM_STATE_SKIP_TASKBAR,
-            ],
+            &[a._NET_WM_STATE_STICKY, a._NET_WM_STATE_SKIP_TASKBAR],
         )?;
         // На всех рабочих столах.
         self.conn.change_property32(
