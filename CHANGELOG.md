@@ -2,6 +2,15 @@
 
 Kept since the first public alpha. **Mimshel** became the project name after the first alpha tag, which still used the working name `shell`. Entries before v0.0.2 are in Russian.
 
+## [Unreleased]
+
+### Fixed
+
+- The menu bar and the Dock no longer stay on top of fullscreen games and videos: they
+  were marked «always on top», which xfwm4 places above even a focused fullscreen
+  window. Now they are ordinary panels — above normal windows, below the one on full
+  screen, and back on top as soon as another window is active.
+
 ## [v0.0.6-alpha] — 2026-10-31
 
 Sixth alpha, a small one: external disks that did not mount, and two window manager
