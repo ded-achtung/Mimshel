@@ -103,6 +103,9 @@ pub struct DesktopUi {
     /// (в пикселях экрана) — из неё перерисовываются клетки значков.
     wallpaper: String,
     wall: Option<Pixmap>,
+    /// Another program's desktop window (a video wallpaper) is under ours:
+    /// draw only the icons, transparent elsewhere, so it shows through.
+    video: bool,
     /// Значки и папка «Рабочий стол».
     grid: IconGrid,
     dir: PathBuf,
@@ -193,6 +196,7 @@ impl DesktopUi {
             language: config.language,
             wallpaper: config.wallpaper.clone(),
             wall: None,
+            video: false,
             grid: IconGrid::new((0.0, 0.0, 1.0, 1.0)),
             dir: dir.clone(),
             pending_select: None,
@@ -230,6 +234,8 @@ impl DesktopUi {
         ui.grid.set_saved(desktop_files::load_places());
         ui.place_icons(d);
         ui.load_wallpaper(d);
+        // A video wallpaper may be running already.
+        ui.check_video(d)?;
         desktop_files::watch(dir, tx);
         Ok(ui)
     }
@@ -351,7 +357,7 @@ impl DesktopUi {
             Event::Configure { window } => d.is_screen(window),
             Event::Property {
                 window,
-                what: Property::WorkArea,
+                what: Property::WorkArea | Property::ClientList,
             } => d.is_screen(window),
             _ => false,
         }
@@ -364,7 +370,8 @@ impl DesktopUi {
             self.window.show(d)?;
             self.place_icons(d);
             self.load_wallpaper(d);
-            return Ok(());
+            // show() put the desktop under everything again.
+            return self.check_video(d);
         }
         if let Event::Property {
             window,
@@ -374,6 +381,14 @@ impl DesktopUi {
         {
             self.place_icons(d);
             return Ok(());
+        }
+        if let Event::Property {
+            window,
+            what: Property::ClientList,
+        } = ev
+            && d.is_screen(window)
+        {
+            return self.check_video(d);
         }
         if self.rename.is_some() {
             return self.rename_event(d, ev);
@@ -1330,13 +1345,55 @@ impl DesktopUi {
         self.drag_popup.present(d, &pm)
     }
 
+    /// Another program's desktop window (a video wallpaper such as Wallpaper
+    /// Animator) appeared or went away: with one, our window shows only the
+    /// icons and stays above it; without, our wallpaper again and back under
+    /// everything. Raised only when below it — raising changes the stacking
+    /// list, which comes back here.
+    fn check_video(&mut self, d: &Display) -> Result<()> {
+        let (foreign, above) = d.foreign_desktops(self.window.id());
+        let video = !foreign.is_empty();
+        if video && !above {
+            self.window.raise(d)?;
+        }
+        if video != self.video {
+            self.video = video;
+            if !video {
+                self.window.lower(d)?;
+            }
+            self.full_dirty = true;
+            eprintln!(
+                "Стол: {}",
+                if video {
+                    "под ним чужие обои — рисую только значки"
+                } else {
+                    "чужих обоев нет — снова свои"
+                }
+            );
+        }
+        Ok(())
+    }
+
+    /// What the icons are drawn on: the wallpaper (all of it, or `rect` of
+    /// it in pixels), or a transparent picture when another program's
+    /// wallpaper window is under the desktop.
+    fn base(&self, rect: Option<IntRect>) -> Option<Pixmap> {
+        let wall = self.wall.as_ref()?;
+        match (self.video, rect) {
+            (false, None) => Some(wall.clone()),
+            (false, Some(r)) => wall.clone_rect(r),
+            (true, None) => Pixmap::new(wall.width(), wall.height()),
+            (true, Some(r)) => Pixmap::new(r.width(), r.height()),
+        }
+    }
+
     /// Весь стол: обои и все значки — новой картинкой-фоном.
     fn draw_all(&self, d: &Display, fonts: &mut Fonts, icons: &mut Icons) -> Result<()> {
-        let Some(wall) = &self.wall else {
+        let Some(base) = self.base(None) else {
             return Ok(());
         };
         let start = Instant::now();
-        let mut pm = Canvas::from_pixmap(wall.clone(), d.scale());
+        let mut pm = Canvas::from_pixmap(base, d.scale());
         for i in 0..self.grid.items().len() {
             let icon = item_icon(icons, &self.grid.items()[i]);
             self.grid.draw(&mut pm, (0.0, 0.0), i, icon.as_ref(), fonts);
@@ -1374,7 +1431,7 @@ impl DesktopUi {
         let Some(rect) = rect else {
             return Ok(());
         };
-        let Some(piece) = wall.clone_rect(rect) else {
+        let Some(piece) = self.base(Some(rect)) else {
             return Ok(());
         };
         let mut canvas = Canvas::from_pixmap(piece, k);
@@ -1406,7 +1463,7 @@ impl DesktopUi {
         let Some(rect) = IntRect::from_ltrb(x0, y0, x1, y1) else {
             return Ok(());
         };
-        let Some(piece) = wall.clone_rect(rect) else {
+        let Some(piece) = self.base(Some(rect)) else {
             return Ok(());
         };
         let mut pm = Canvas::from_pixmap(piece, k);

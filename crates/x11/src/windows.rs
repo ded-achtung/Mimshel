@@ -556,6 +556,29 @@ impl Display {
     }
 
     /// Окна программ, от нижнего к верхнему (последнее — сверху).
+    /// Other programs' desktop-type windows (a video wallpaper, another
+    /// program's desktop), bottom to top, and where our own window `ours`
+    /// is in the same stacking order: `(foreign, ours above all of them)`.
+    pub fn foreign_desktops(&self, ours: Window) -> (Vec<Window>, bool) {
+        let a = &self.atoms;
+        let list = self.client_list();
+        let foreign: Vec<Window> = list
+            .iter()
+            .copied()
+            .filter(|&w| !self.is_own(w))
+            .filter(|&w| {
+                self.cardinals(w, a._NET_WM_WINDOW_TYPE, AtomEnum::ATOM)
+                    .contains(&a._NET_WM_WINDOW_TYPE_DESKTOP)
+            })
+            .collect();
+        let at = |w: Window| list.iter().position(|&x| x == w);
+        let above = match (at(ours), foreign.iter().filter_map(|&w| at(w)).max()) {
+            (Some(o), Some(f)) => o > f,
+            _ => true,
+        };
+        (foreign, above)
+    }
+
     pub fn client_list(&self) -> Vec<Window> {
         let a = &self.atoms;
         let list = self.cardinals(self.root, a._NET_CLIENT_LIST_STACKING, AtomEnum::WINDOW);
