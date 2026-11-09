@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
@@ -142,6 +143,12 @@ impl Icons {
     pub fn find(&self, name: &str, size: u32) -> Option<PathBuf> {
         if name.starts_with('/') {
             return Path::new(name).is_file().then(|| PathBuf::from(name));
+        }
+        // An icon name is a plain name. One with a slash (`../../tmp/x`
+        // from a notification or a tray item) would leave the theme folders
+        // and get past the limits for pictures given by path.
+        if name.contains('/') {
+            return None;
         }
         // Иногда в ярлыках пишут имя с расширением — стандарт так не велит, но бывает.
         let name = name
@@ -345,10 +352,23 @@ pub fn render_file(path: &Path, w: u32, h: u32, fit: Fit) -> Option<Pixmap> {
 /// launcher's `Icon=/…`): any program can point at any file, so a
 /// 30 MB screenshot must not be decoded on the main thread.
 fn render_foreign(path: &Path, size: u32) -> Option<Pixmap> {
-    if std::fs::metadata(path).ok()?.len() > FOREIGN_FILE_MAX {
+    // Only a regular file: a device has length 0 and never ends
+    // (`/dev/zero` filled the memory), opening a FIFO waits for a writer
+    // forever — and this runs on the main thread.
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > FOREIGN_FILE_MAX {
         return None;
     }
-    let data = std::fs::read(path).ok()?;
+    // The size is checked again while reading: the file may have grown.
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(FOREIGN_FILE_MAX + 1)
+        .read_to_end(&mut data)
+        .ok()?;
+    if data.len() as u64 > FOREIGN_FILE_MAX {
+        return None;
+    }
     if raster_size(&data).is_some_and(|(w, h)| u64::from(w) * u64::from(h) > FOREIGN_PIXELS_MAX) {
         return None;
     }
@@ -470,6 +490,18 @@ fn shrink(src: &Pixmap, n: u32) -> Option<Pixmap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_that_is_no_regular_file_is_no_picture() {
+        // Returns at once: a device never ends, a FIFO never opens.
+        assert!(render_foreign(Path::new("/dev/zero"), 32).is_none());
+        let fifo = std::env::temp_dir().join(format!("mimshel-icon-fifo-{}", std::process::id()));
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if made.is_ok_and(|s| s.success()) {
+            assert!(render_foreign(&fifo, 32).is_none());
+            let _ = std::fs::remove_file(&fifo);
+        }
+    }
 
     struct TempDir(PathBuf);
 

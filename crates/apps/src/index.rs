@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 use crate::entry::{DesktopEntry, Locale};
 use crate::exec;
 
+/// No real launcher is near this size; a bound for what is read whole.
+const DESKTOP_FILE_MAX: u64 = 1024 * 1024;
+
 /// Одна программа, готовая к показу и запуску.
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
@@ -116,6 +119,10 @@ pub fn load_all(settings: &Settings) -> Vec<App> {
             // Ярлык с тем же идентификатором из более важной папки уже решил судьбу
             // программы — даже если он её скрыл.
             if !seen.insert(id.clone()) {
+                continue;
+            }
+            // A FIFO or a device named `*.desktop` would block or never end.
+            if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= DESKTOP_FILE_MAX) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else {
