@@ -84,8 +84,9 @@ pub fn apply_wallpaper(config: &Config) {
     plan.wallpaper();
 }
 
-/// Применить части (пустой список — все). Ошибка — только если нужна служба,
-/// а программы Mimshel нет: тогда ничего не трогаем, чтобы не остаться ни с чем.
+/// Применить части (пустой список — все). Ошибка до всяких перемен — если нужна
+/// служба, а программы Mimshel нет, или не удалась первая копия настроек: тогда
+/// ничего не трогаем, чтобы не остаться ни с чем.
 pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     let mut plan = Plan {
         config,
@@ -96,9 +97,18 @@ pub fn apply(config: &Config, parts: &[&str]) -> Result<(), String> {
     if config.shell_needed() && !plan.paths.shell_bin.exists() {
         return Err(format!(
             "нет {}: соберите и поставьте программу (cargo build --release; \
-             install -m 755 target/release/shell ~/.local/bin/)",
+             install -m 755 target/release/mimshel ~/.local/bin/)",
             plan.paths.shell_bin.display()
         ));
+    }
+    // The way back comes first. Only install.sh used to make the copy
+    // «original»: after a hand build or a release archive the first apply
+    // rewrote the Xfce panel, Plank, the lock command and the power
+    // settings with nothing for `mimshel restore` to return to.
+    if crate::backup::list().is_empty() {
+        println!("▶ Первая копия настроек «original» — к ней вернёт mimshel restore");
+        crate::backup::make("original")
+            .map_err(|e| format!("не сделать копию настроек перед первым применением: {e}"))?;
     }
     let want = |p: &str| parts.is_empty() || parts.contains(&p);
     if want("menubar") {
