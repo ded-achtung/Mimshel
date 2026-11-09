@@ -203,13 +203,81 @@ pub fn scan_with(dir: &Path, mime: &MimeDb, locale: Option<&Locale>, hidden: boo
     items
 }
 
-/// Ярлыку можно доверять, если у файла есть право на выполнение (как в Xfce и
-/// GNOME): скачанный или распакованный файл его обычно не получает, а свой
-/// ярлык человек помечает сам — или соглашается запустить, и пометку ставит
-/// программа.
+/// A launcher is trusted when its file has the execute bit: a downloaded
+/// file does not get it, and the user gives it by agreeing to run the
+/// launcher once (the program sets the bit then).
+///
+/// That only holds where the bit means something. On a USB stick with
+/// exFAT, FAT or NTFS, on a phone, a CD or a network share every file is
+/// «executable», so a file from there named `Photos.desktop` showed up as a
+/// folder called «Holiday photos» and ran its command on a double click.
+/// Launchers on such file systems are never trusted: they keep their file
+/// name and the question is asked every time.
 pub fn trusted_launcher(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        && !free_modes(path)
+}
+
+/// Whether `path` is on a file system that hands the execute bit to every
+/// file (or takes it from the other side, as a phone or a share does).
+fn free_modes(path: &Path) -> bool {
+    let Ok(real) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let mounts = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    fs_type(&mounts, &real).is_some_and(no_modes)
+}
+
+fn no_modes(fs: &str) -> bool {
+    const FREE: [&str; 11] = [
+        "vfat", "msdos", "exfat", "ntfs", "ntfs3", "iso9660", "udf", "cifs", "smb3", "nfs", "9p",
+    ];
+    FREE.contains(&fs) || fs.starts_with("fuse") || fs.starts_with("nfs")
+}
+
+/// The type of the file system `path` is on, from the text of
+/// `/proc/self/mountinfo`: the mount with the longest mount point above the
+/// path (the last such line wins — a later mount covers an earlier one).
+fn fs_type<'a>(mountinfo: &'a str, path: &Path) -> Option<&'a str> {
+    let mut best: Option<(usize, &str)> = None;
+    for line in mountinfo.lines() {
+        let Some((before, after)) = line.split_once(" - ") else {
+            continue;
+        };
+        let (Some(point), Some(fs)) = (before.split(' ').nth(4), after.split(' ').next()) else {
+            continue;
+        };
+        // Spaces and the like are written as octal: `\040`.
+        let point = unescape_octal(point);
+        if path.starts_with(&point) && best.is_none_or(|(len, _)| point.len() >= len) {
+            best = Some((point.len(), fs));
+        }
+    }
+    best.map(|(_, fs)| fs)
+}
+
+fn unescape_octal(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let code = (bytes[i] == b'\\')
+            .then(|| s.get(i + 1..i + 4))
+            .flatten()
+            .and_then(|digits| u8::from_str_radix(digits, 8).ok());
+        match code {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// A free name in `dir`: `name`, `name 2`, `name 3`… (for a file the number
@@ -264,6 +332,26 @@ pub fn free_name(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launchers_on_a_stick_are_not_trusted() {
+        let mounts = "\
+22 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw\n\
+40 22 0:35 / /run/user/1000 rw,nosuid - tmpfs tmpfs rw\n\
+90 22 8:17 / /run/media/u/USB\\040DISK rw,nosuid,nodev - exfat /dev/sdb1 rw,uid=1000\n\
+95 40 0:60 / /run/user/1000/gvfs rw,nosuid,nodev - fuse.gvfsd-fuse gvfsd-fuse rw\n";
+        let fs = |p: &str| fs_type(mounts, Path::new(p));
+        assert_eq!(fs("/home/u/Desktop/a.desktop"), Some("ext4"));
+        assert_eq!(fs("/run/media/u/USB DISK/Photos.desktop"), Some("exfat"));
+        assert_eq!(
+            fs("/run/user/1000/gvfs/mtp/x.desktop"),
+            Some("fuse.gvfsd-fuse")
+        );
+        assert_eq!(fs("/run/user/1000/x"), Some("tmpfs"));
+        assert!(no_modes("exfat") && no_modes("ntfs3") && no_modes("fuse.gvfsd-fuse"));
+        assert!(no_modes("nfs4") && !no_modes("ext4") && !no_modes("btrfs") && !no_modes("tmpfs"));
+        assert_eq!(unescape_octal("a\\040b\\134"), "a b\\");
+    }
 
     fn db() -> MimeDb {
         let mut db = MimeDb::default();
