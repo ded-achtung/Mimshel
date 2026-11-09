@@ -88,6 +88,27 @@ impl<C: Copy> Menu<C> {
         }
     }
 
+    /// Keep the menu within `max_h` points: entries that do not fit are
+    /// dropped and the last row becomes a grey «…». A menu from another
+    /// program (a global menu with its submenus shown inside, a tray menu)
+    /// can be any length; one taller than the screen had rows nobody could
+    /// reach, and thousands of rows meant a picture of hundreds of megabytes
+    /// in the service. There is no scrolling yet.
+    pub fn fit(&mut self, max_h: f32) {
+        if self.height() <= max_h {
+            return;
+        }
+        while self.entries.len() > 1 && self.height() > max_h {
+            self.entries.pop();
+        }
+        if let Some(last) = self.entries.last_mut() {
+            last.label = "…".into();
+            last.enabled = false;
+            last.checked = false;
+        }
+        self.hover = None;
+    }
+
     /// Размер меню в пикселях (по самой длинной надписи).
     pub fn measure(&mut self, fonts: &mut Fonts) -> (u32, u32) {
         let text = self
@@ -289,6 +310,16 @@ mod tests {
             enabled: true,
             indent: false,
         };
+        let mut tall = Menu::new(
+            "tall".into(),
+            (0..500)
+                .map(|i| entry(&format!("пункт {i}"), MenuCommand::Launch, false))
+                .collect(),
+        );
+        tall.fit(400.0);
+        assert!(tall.height() <= 400.0 && tall.entries.len() > 10);
+        let last = tall.entries.last().unwrap();
+        assert!(last.label == "…" && !last.enabled);
         Menu::new(
             "firefox.desktop".into(),
             vec![

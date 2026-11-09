@@ -1129,6 +1129,9 @@ impl MenubarUi {
             return Ok(());
         }
         let mut menu = Menu::new(key, entries);
+        // No taller than the screen under the bar.
+        let (_, _, _, area_h) = d.primary_area();
+        menu.fit(area_h.saturating_sub(self.bar.height + 8) as f32);
         let size = menu.measure(fonts);
         self.menu = Some(menu);
         self.show_popup(d, part, x, size)
@@ -1747,15 +1750,23 @@ impl MenubarUi {
 /// таким id). Подменю показываем внутри: его название — серым
 /// заголовком, пункты — с отступом.
 fn flatten(items: &[MenuItem], indent: bool, cmd: fn(i32) -> Cmd, out: &mut Vec<MenuEntry<Cmd>>) {
+    /// More rows than any screen shows; the menu is cut to the screen later.
+    const ROWS_MAX: usize = 500;
+    /// A label is cut to the menu's width when drawn; this only bounds the
+    /// text that is measured.
+    const LABEL_MAX: usize = 200;
     let mut separator = false;
     for item in items.iter().filter(|i| i.visible) {
+        if out.len() >= ROWS_MAX {
+            return;
+        }
         if item.separator {
             separator = !out.is_empty();
             continue;
         }
         let submenu = !item.children.is_empty();
         out.push(MenuEntry {
-            label: item.label.clone(),
+            label: item.label.chars().take(LABEL_MAX).collect(),
             command: cmd(item.id),
             checked: item.toggle == Some(true),
             separator_before: separator,

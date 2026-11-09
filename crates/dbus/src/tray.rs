@@ -344,6 +344,10 @@ fn get_all(conn: &Connection, bus: &str, path: &str) -> Option<HashMap<String, O
     .ok()
 }
 
+/// The largest tray picture taken, in pixels a side (they are drawn at
+/// some 20 points).
+const ICON_MAX: i32 = 512;
+
 fn read_item(conn: &Connection, bus: &str, path: &str) -> Option<TrayItem> {
     let props = get_all(conn, bus, path)?;
     let text = |name: &str| {
@@ -366,8 +370,12 @@ fn read_item(conn: &Connection, bus: &str, path: &str) -> Option<TrayItem> {
             list.into_iter()
                 // i64: a hostile size like 65536×65536 overflowed the i32
                 // product (a panic in debug builds, a wrong match in release).
+                // No larger than ICON_MAX a side: a program may send any
+                // size, and the bytes are kept (and compared) on every update.
                 .filter(|(w, h, d)| {
-                    *w > 0 && *h > 0 && d.len() as i64 == i64::from(*w) * i64::from(*h) * 4
+                    (1..=ICON_MAX).contains(w)
+                        && (1..=ICON_MAX).contains(h)
+                        && d.len() as i64 == i64::from(*w) * i64::from(*h) * 4
                 })
                 .max_by_key(|(w, _, _)| *w)
                 .map(|(w, h, d)| (w as u32, h as u32, d))
