@@ -540,7 +540,8 @@ impl Plan<'_> {
         println!("▶ Экран блокировки");
         if crate::sys::which("xss-lock").is_none() {
             println!("✘ Нет xss-lock — запустите ./install.sh в папке проекта");
-            self.failed.push("нет xss-lock: блокировка не включена".into());
+            self.failed
+                .push("нет xss-lock: блокировка не включена".into());
             return;
         }
         // Without a PAM service every password is refused: a screen locked

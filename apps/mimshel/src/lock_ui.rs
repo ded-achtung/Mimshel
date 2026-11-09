@@ -37,6 +37,8 @@ const REGRAB: Duration = Duration::from_secs(2);
 const MAX_PASSWORD: usize = 512;
 /// Шаг ожидания событий: по нему же обновляем часы и следим за захватом.
 const TICK: Duration = Duration::from_millis(400);
+/// The same while PAM checks a password (in its own thread).
+const CHECK_TICK: Duration = Duration::from_millis(40);
 
 /// Запустить экран блокировки. 0 — разблокирован верным паролем.
 pub fn run() -> i32 {
@@ -94,7 +96,13 @@ fn locked_run() -> platform::Result<i32> {
     }
     log("экран блокировки показан");
     loop {
-        match rx.recv_timeout(TICK) {
+        // While a password is being checked, look for the answer often.
+        let wait = if ui.checking.is_some() {
+            CHECK_TICK
+        } else {
+            TICK
+        };
+        match rx.recv_timeout(wait) {
             Ok(ev) => {
                 if let Some(code) = ui.event(ev)? {
                     return Ok(code);
@@ -105,6 +113,9 @@ fn locked_run() -> platform::Result<i32> {
                 // X-соединение оборвалось (выход из сеанса) — блокировать нечего.
                 return Ok(1);
             }
+        }
+        if let Some(code) = ui.checked()? {
+            return Ok(code);
         }
         if let Some(code) = ui.tick()? {
             return Ok(code);
@@ -142,6 +153,8 @@ struct LockUi<'a> {
     /// that lost the race waits for it before letting the system sleep
     /// (`mimshel_setup::lock::announce_locked`).
     locked: Option<mimshel_setup::lock::Held>,
+    /// The answer of the thread checking a password, while one is checked.
+    checking: Option<mpsc::Receiver<Result<(), Failure>>>,
     /// Обои из настроек — нарисовать фон заново, если сменится размер экрана.
     wallpaper: String,
     user: String,
@@ -177,6 +190,7 @@ impl<'a> LockUi<'a> {
             last_regrab: Instant::now(),
             grabbed: true,
             locked: None,
+            checking: None,
             wallpaper: config.wallpaper.clone(),
             user,
         };
@@ -249,7 +263,8 @@ impl<'a> LockUi<'a> {
     }
 
     fn key(&mut self, k: KeyPress) -> platform::Result<Option<i32>> {
-        if k.logo {
+        // Nothing is typed into a check that is under way.
+        if k.logo || self.phase == Phase::Verifying {
             return Ok(None);
         }
         match k.key {
@@ -302,15 +317,50 @@ impl<'a> LockUi<'a> {
         Ok(None)
     }
 
-    /// Проверить пароль. `Some(0)` — верный, экран закрывается; `None` —
-    /// не прошёл: остаёмся и показываем почему («Неверный пароль» или
-    /// слова PAM).
+    /// Start checking the password. PAM answers in a thread of its own: a
+    /// wrong password takes it some two seconds (longer with a fingerprint
+    /// reader or a network login), and for that long the screen used to
+    /// stand still — it did not raise itself over a notification that
+    /// arrived, did not take the grab back, did not cover a monitor plugged
+    /// in. The answer is taken in [`LockUi::checked`].
     fn verify(&mut self) -> platform::Result<Option<i32>> {
         self.phase = Phase::Verifying;
         self.redraw()?;
         self.display.sync()?;
-        let checked = authenticate(&self.user, &self.password, self.language);
-        self.clear_password();
+        // The thread gets the buffer itself (wiped when it is dropped
+        // there); typing continues in a fresh one of the same size.
+        let password = std::mem::replace(
+            &mut self.password,
+            Zeroizing::new(String::with_capacity(MAX_PASSWORD * 4)),
+        );
+        let (user, language) = (self.user.clone(), self.language);
+        let (tx, rx) = mpsc::channel();
+        self.checking = Some(rx);
+        std::thread::spawn(move || {
+            let checked = authenticate(&user, &password, language);
+            drop(password);
+            let _ = tx.send(checked);
+        });
+        Ok(None)
+    }
+
+    /// The answer to the check, if it has come. `Some(0)` — the password is
+    /// right, the screen closes; otherwise we stay and show why («Wrong
+    /// password» or PAM's own words).
+    fn checked(&mut self) -> platform::Result<Option<i32>> {
+        let Some(rx) = &self.checking else {
+            return Ok(None);
+        };
+        let checked = match rx.try_recv() {
+            Ok(checked) => checked,
+            Err(mpsc::TryRecvError::Empty) => return Ok(None),
+            // The checking thread died without an answer: not unlocked.
+            Err(mpsc::TryRecvError::Disconnected) => Err(Failure {
+                text: t(self.language, "lock.check_failed").to_string(),
+                from_pam: true,
+            }),
+        };
+        self.checking = None;
         let failure = match checked {
             Ok(()) => {
                 log("пароль верный — разблокировано");
