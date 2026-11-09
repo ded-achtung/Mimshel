@@ -32,7 +32,8 @@ pgrep -u "$(id -u)" -x xfce4-session >/dev/null \
     || fail "Нужно войти в рабочий стол Xfce и запускать отсюда, из терминала Xfce."
 [ "${XDG_SESSION_TYPE:-x11}" = x11 ] || fail "Нужен сеанс X11 (сейчас: $XDG_SESSION_TYPE). Mimshel не работает в Wayland."
 # Папка данных до переименования проекта (~/.local/share/shell) — под новым именем.
-if [ ! -e "$DATA" ] && [ -d "$HOME/.local/share/shell" ]; then
+# Только нашу: в ней лежат копии настроек или главное меню.
+if [ ! -e "$DATA" ] && { [ -d "$HOME/.local/share/shell/backups" ] || [ -e "$HOME/.local/share/shell/apple.menu" ]; }; then
     mv "$HOME/.local/share/shell" "$DATA"
 fi
 mkdir -p "$SRC" "$HOME/.local/bin"
@@ -128,7 +129,10 @@ else
 fi
 install -m 755 "$ROOT/target/release/mimshel" "$BIN"
 # Прежняя команда shell — ссылкой на новую (старые сочетания клавиш, записки).
-ln -sfn mimshel "$HOME/.local/bin/shell"
+# Чужой файл с таким именем не трогаем.
+if [ -L "$HOME/.local/bin/shell" ] || [ ! -e "$HOME/.local/bin/shell" ]; then
+    ln -sfn mimshel "$HOME/.local/bin/shell"
+fi
 ok "Программа: $BIN"
 
 # --- Настройки и включение --------------------------------------------------

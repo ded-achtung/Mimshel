@@ -733,15 +733,28 @@ fn compat_link(bin: &Path) {
     if std::fs::read_link(&old).is_ok_and(|t| t == bin.file_name().unwrap_or_default()) {
         return;
     }
-    // Там прежняя программа (наша) или ничего — заменить ссылкой.
-    if old.exists() || old.is_symlink() {
+    // Replace only what is ours: a link (an older one of ours) or the old
+    // program itself. Somebody's own `~/.local/bin/shell` stays, and then
+    // there is no link.
+    if old.is_symlink() || old_program(&old) {
         let _ = std::fs::remove_file(&old);
+    } else if old.exists() {
+        return;
     }
     if let Some(name) = bin.file_name()
         && let Err(e) = std::os::unix::fs::symlink(name, &old)
     {
         println!("  ⚠ не создать {} → {}: {e}", old.display(), bin.display());
     }
+}
+
+/// Whether `path` is the program from before the rename: a binary (ELF)
+/// that carries the name of our menu file.
+fn old_program(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|data| {
+        let mark = b"apple.menu";
+        data.starts_with(b"\x7fELF") && data.windows(mark.len()).any(|w| w == mark)
+    })
 }
 
 /// Скопировать в надстройку `overlay` значки темы `src`, имена которых
