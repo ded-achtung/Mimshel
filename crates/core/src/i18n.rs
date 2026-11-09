@@ -73,7 +73,11 @@ impl Language {
     /// `ru_*` -> `Ru`; `en_*` -> `En`; anything else (including C/POSIX)
     /// -> `En`.
     pub fn from_env() -> Language {
-        for key in ["LANGUAGE", "LANG", "LC_ALL", "LC_MESSAGES"] {
+        // The order the C library uses: LANGUAGE, then LC_ALL over
+        // LC_MESSAGES over LANG. With LANG first a session with
+        // LANG=en_US and LC_MESSAGES=ru_RU had an English interface and
+        // Russian program names.
+        for key in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
             if let Ok(v) = env::var(key)
                 && !v.is_empty()
             {
@@ -121,13 +125,20 @@ impl Language {
 /// daemon (guard, `mimshel action`, sound watcher) and therefore do not
 /// already have a resolved language in hand.
 pub fn language_from_config() -> Language {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = format!("{home}/.config/mimshel/config.toml");
-    if let Ok(text) = std::fs::read_to_string(path) {
+    // The same file every other part reads (MIMSHEL_CONFIG,
+    // XDG_CONFIG_HOME), and only `language` of the `[look]` section: any
+    // line of any section starting with that word used to be taken.
+    let mut look = false;
+    if let Some(text) = crate::config::path().and_then(|p| std::fs::read_to_string(p).ok()) {
         for line in text.lines() {
             let line = line.trim();
-            if let Some(v) = line.strip_prefix("language") {
-                let v = v.trim().trim_start_matches('=').trim().trim_matches('"');
+            if line.starts_with('[') {
+                look = line == "[look]";
+            } else if look
+                && let Some((key, v)) = line.split_once('=')
+                && key.trim() == "language"
+            {
+                let v = v.split('#').next().unwrap_or("").trim().trim_matches('"');
                 if let Some(lang) = Language::parse(v) {
                     return lang;
                 }

@@ -161,6 +161,16 @@ fn id_matches(id: &str, name: &str) -> bool {
 
 /// Все `*.desktop` в папке и вложенных папках вместе с идентификаторами.
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+    // Links to folders are followed on purpose, so the depth is bounded: a
+    // link to `/` or to a parent folder inside `applications` sent the
+    // walk over the whole disk.
+    const DEPTH_MAX: usize = 6;
+    if dir
+        .strip_prefix(root)
+        .is_ok_and(|rel| rel.components().count() > DEPTH_MAX)
+    {
+        return;
+    }
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
