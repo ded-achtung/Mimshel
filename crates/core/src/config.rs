@@ -713,19 +713,39 @@ fn renames_to_toml(renames: &[(String, String)]) -> String {
 /// `None` (не затираем то, что человек, может быть, правит прямо сейчас).
 pub fn set_value(text: &str, section: &str, key: &str, value: Value) -> Option<String> {
     let mut doc = text.parse::<DocumentMut>().ok()?;
-    if !doc.contains_table(section) {
-        doc[section] = toml_edit::table();
+    let root = doc.as_table_mut();
+    // A section may also be written on one line: `dock = { zoom = 150 }`.
+    // Taking only `[dock]` for a section replaced such a one with an empty
+    // table and its other settings were gone.
+    if !root.get(section).is_some_and(|i| i.is_table_like()) {
+        root.insert(section, toml_edit::table());
     }
-    match doc[section].get_mut(key).and_then(|v| v.as_value_mut()) {
+    let table = root.get_mut(section)?.as_table_like_mut()?;
+    match table.get_mut(key).and_then(|v| v.as_value_mut()) {
         // Пробелы и пояснение после значения остаются прежними.
         Some(old) => {
             let decor = old.decor().clone();
             *old = value;
             *old.decor_mut() = decor;
         }
-        None => doc[section][key] = toml_edit::value(value),
+        None => {
+            table.insert(key, toml_edit::value(value));
+        }
     }
     Some(doc.to_string())
+}
+
+/// Like [`set_value`], but a value that is already there stays.
+fn add_value(text: &str, section: &str, key: &str, value: Value) -> Option<String> {
+    let doc = text.parse::<DocumentMut>().ok()?;
+    let there = doc
+        .get(section)
+        .and_then(|i| i.as_table_like())
+        .is_some_and(|t| t.contains_key(key));
+    if there {
+        return Some(text.to_string());
+    }
+    set_value(text, section, key, value)
 }
 
 /// Запись значка в `[dock] apps`: имя ярлыка без одного «.desktop». Только
@@ -911,37 +931,39 @@ fn migrate_value(section: &str, key: &str, line: &str) -> Option<String> {
 /// Есть ли в файле раздел `[lock]` (в файлах, созданных до него, нет).
 pub fn has_lock(text: &str) -> bool {
     text.parse::<DocumentMut>()
-        .is_ok_and(|d| d.contains_table("lock"))
+        .is_ok_and(|d| d.get("lock").is_some_and(|i| i.is_table_like()))
 }
 
-/// Дописать в старый файл настройки блокировки, скрытия и переименования
-/// программ (`base` — откуда взять значения: прежний конфиг или умолчания).
+/// Add the lock settings and the lists of hidden and renamed programs to a
+/// file written before they existed, with the values of `base`. Only what
+/// is missing: a file without `[lock]` may well have the user's own
+/// `[apps] hide` — it was replaced by the defaults.
 pub fn add_lock_settings(text: &str, base: &Config) -> Option<String> {
-    let mut out = set_value(
+    let mut out = add_value(
         text,
         "lock",
         "placeholder",
         Value::from(base.lock_placeholder.as_str()),
     )?;
-    out = set_value(
+    out = add_value(
         &out,
         "lock",
         "idle_minutes",
         Value::from(i64::from(base.lock_idle)),
     )?;
-    out = set_value(
+    out = add_value(
         &out,
         "lock",
         "screen_off_minutes",
         Value::from(i64::from(base.lock_screen_off)),
     )?;
     let hide: Array = base.hide_apps.iter().map(String::as_str).collect();
-    out = set_value(&out, "apps", "hide", Value::Array(hide))?;
+    out = add_value(&out, "apps", "hide", Value::Array(hide))?;
     let mut table = toml_edit::InlineTable::new();
     for (app, name) in &base.rename_apps {
         table.insert(app, Value::from(name.as_str()));
     }
-    set_value(&out, "apps", "rename", Value::InlineTable(table))
+    add_value(&out, "apps", "rename", Value::InlineTable(table))
 }
 
 /// Настройки, которые меняет `mimshel set`: (раздел.ключ, что это).
@@ -1204,6 +1226,26 @@ pub fn toml_error(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_settings_keep_what_is_there() {
+        // A section on one line keeps its other keys.
+        let text = "dock = { icon_size = 56, zoom = 120 }\n";
+        let out = set_value(text, "dock", "zoom", Value::from(150)).unwrap();
+        assert!(
+            out.contains("icon_size = 56") && out.contains("zoom = 150"),
+            "{out}"
+        );
+        assert!(toml_error(&out).is_none(), "{out}");
+        // Lock settings are added; the user's own hidden programs stay.
+        let text = "[apps]\nhide = [\"my-app\"]\n";
+        assert!(!has_lock(text));
+        let out = add_lock_settings(text, &Config::default()).unwrap();
+        assert!(has_lock(&out));
+        assert!(out.contains("hide = [\"my-app\"]"), "{out}");
+        assert!(out.contains("rename"), "{out}");
+        assert!(has_lock("lock = { idle_minutes = 3 }\n"));
+    }
 
     #[test]
     fn settings_path_precedence() {
