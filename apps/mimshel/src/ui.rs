@@ -378,9 +378,21 @@ pub fn run(once: Option<Panel>) -> Result<()> {
         let platform = platform.clone();
         let tx = tx.clone();
         std::thread::spawn(move || {
-            while let Ok(ev) = platform.next_event() {
-                if tx.send(Msg::X(ev)).is_err() {
-                    break;
+            loop {
+                match platform.next_event() {
+                    Ok(ev) => {
+                        if tx.send(Msg::X(ev)).is_err() {
+                            break;
+                        }
+                    }
+                    // The screen is gone (the session ended, the server
+                    // died): leave now. The main loop would only find out
+                    // at its next request — up to a minute later, with the
+                    // clock.
+                    Err(e) => {
+                        eprintln!("Связь с экраном потеряна: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
         });

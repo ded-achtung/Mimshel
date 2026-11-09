@@ -147,6 +147,15 @@ fn lock(path: &Path) -> io::Result<File> {
 
 fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
+    // A settings file kept as a link (a dotfiles folder) is written where
+    // the link points: renaming over the link itself replaced it with a
+    // plain file and the dotfiles copy silently went stale.
+    let target = if path.is_symlink() {
+        fs::canonicalize(path).ok()
+    } else {
+        None
+    };
+    let path = target.as_deref().unwrap_or(path);
     let (tmp, mut file) = loop {
         let mut name = path.as_os_str().to_owned();
         name.push(format!(
