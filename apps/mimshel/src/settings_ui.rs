@@ -128,7 +128,9 @@ fn window(
         });
     }
     // Display settings being tried: what to go back to, and by when.
-    let mut trying: Option<(Vec<Output>, Instant)> = None;
+    let mut trying = Trying(None);
+    // A display change is at the worker and has not answered yet.
+    let mut display_job = false;
 
     let mut dirty = true;
     // The last frame sent (pixel size and RGBA), and whether the window
@@ -202,6 +204,9 @@ fn window(
                     Action::Redraw
                 }
                 Msg::Applied(key, result) => {
+                    if key.starts_with("display") {
+                        display_job = false;
+                    }
                     let config = load_config();
                     if config.language != view.language() {
                         win.set_title(d, t(config.language, "settings.title"))?;
@@ -218,12 +223,17 @@ fn window(
                     Action::Redraw
                 }
                 Msg::Tried(before) => {
-                    trying = Some((before, Instant::now() + Duration::from_secs(KEEP_SECONDS)));
+                    display_job = false;
+                    // The first «before» is the one to go back to.
+                    if trying.0.is_none() {
+                        trying.0 =
+                            Some((before, Instant::now() + Duration::from_secs(KEEP_SECONDS)));
+                    }
                     view.set_status(None);
                     view.set_confirm(Some(KEEP_SECONDS as u32));
                     Action::Redraw
                 }
-                Msg::Tick => match &trying {
+                Msg::Tick => match &trying.0 {
                     Some((_, by)) => {
                         let left = by
                             .saturating_duration_since(Instant::now())
@@ -248,20 +258,28 @@ fn window(
             match action {
                 Action::Nothing => {}
                 Action::Redraw => dirty = true,
+                // One display change at a time, each confirmed before the
+                // next. A second click while the first was still being
+                // applied took the unconfirmed mode for «how it was», and
+                // the timed revert then went back to a mode the monitor
+                // may not show at all.
+                Action::Set(key, _)
+                    if key.starts_with("display.") && (display_job || trying.0.is_some()) => {}
                 Action::Set(key, value) => {
+                    display_job |= key.starts_with("display.");
                     applying(&mut view, &key);
                     let _ = jobs.send(Job::Set(key, value));
                     dirty = true;
                 }
                 Action::Keep => {
-                    if trying.take().is_some() {
+                    if trying.0.take().is_some() {
                         let _ = jobs.send(Job::SaveDisplays);
                     }
                     view.set_confirm(None);
                     dirty = true;
                 }
                 Action::Revert => {
-                    if let Some((before, _)) = trying.take() {
+                    if let Some((before, _)) = trying.0.take() {
                         let _ = jobs.send(Job::Restore(before));
                     }
                     view.set_confirm(None);
@@ -279,11 +297,7 @@ fn window(
                 }
                 Action::Close => {
                     // Closed while trying display settings: not kept.
-                    if let Some((before, _)) = trying.take()
-                        && let Err(e) = displays::apply(&before)
-                    {
-                        eprintln!("Не вернуть прежние настройки экранов: {e}");
-                    }
+                    drop(trying);
                     win.destroy(d)?;
                     return Ok(());
                 }
@@ -328,6 +342,36 @@ fn applying(view: &mut SettingsView, key: &str) {
     view.set_status(Some(text.to_string()));
 }
 
+/// Display settings being tried and not yet kept: the outputs to go back to
+/// and the moment to do it. Going back is tied to this value, not to one
+/// branch of the window's loop: however the window ends while a change is
+/// unconfirmed — closed, an error from the screen, a panic — the old
+/// settings return. A mode the monitor cannot show must not stay.
+struct Trying(Option<(Vec<Output>, Instant)>);
+
+impl Drop for Trying {
+    fn drop(&mut self) {
+        if let Some((before, _)) = self.0.take()
+            && let Err(e) = revert(&before)
+        {
+            eprintln!("Не вернуть прежние настройки экранов: {e}");
+        }
+    }
+}
+
+/// Put the outputs back as they were; asked twice, and if that fails too,
+/// let xrandr choose (`--auto`) so that at least a picture comes back.
+fn revert(before: &[Output]) -> Result<(), String> {
+    displays::apply(before)
+        .or_else(|_| {
+            std::thread::sleep(Duration::from_millis(500));
+            displays::apply(before)
+        })
+        .inspect_err(|_| {
+            let _ = Command::new("xrandr").arg("--auto").status();
+        })
+}
+
 /// The thread that writes and applies settings, one at a time, in order.
 fn worker(tx: Sender<Msg>) -> Sender<Job> {
     let (jobs, rx) = mpsc::channel::<Job>();
@@ -360,7 +404,7 @@ fn worker(tx: Sender<Msg>) -> Sender<Job> {
                 Job::SaveDisplays => {
                     Msg::Applied("display".into(), displays::save(&displays::outputs()))
                 }
-                Job::Restore(before) => Msg::Applied("display".into(), displays::apply(&before)),
+                Job::Restore(before) => Msg::Applied("display".into(), revert(&before)),
             };
             if tx.send(msg).is_err() {
                 break;
