@@ -42,7 +42,7 @@ working one; nothing on it changes in this phase. Branch `platform/boundary`
 | 2.3 | Protocols for the shell: `wlr-layer-shell`, `ext-foreign-toplevel-list` + `wlr-foreign-toplevel-management`, `xdg-activation`, `ext-session-lock-v1`, `ext-idle-notify-v1`. | Codex — **done** |
 | 2.4 | The door's Wayland backend (`platform.rs` gets the second variant): the menu bar, the dock and the desktop run inside the nested compositor. | Claude — **under way**: `crates/wayland`; our terminal and the menu bar run inside (2026-11-01) |
 | 2.5 | XWayland: Houdini, Blender, Chrome, Telegram, Steam inside (needs `xorg-xwayland` on the laptop). | Codex — **done** (started at launch for now, ~29 MB; to start on first use) |
-| 2.6 | Clipboard and drag and drop between programs and our windows; keyboard layout switching. | Codex — partial: selections, Wayland DnD, layouts; XDND bridge outstanding |
+| 2.6 | Clipboard and drag and drop between programs and our windows; keyboard layout switching. | Codex — **done**: selections, Wayland DnD, layouts, the XDND bridge (see the compositor's README, «Steps 2.6–2.7») |
 
 ## Trying it
 
@@ -104,8 +104,8 @@ existing config-path function to core; no client protocol behavior changes.
 - `xdg_activation_v1`: Smithay issues tokens; activation consumes the token,
   rejects tokens older than ten seconds, and restores/raises/focuses a mapped
   target. Tokens are bearer capabilities; this nested development compositor
-  does not require an input serial when issuing one. Activation is suppressed
-  while locked.
+  asks an ordinary client for a recent input serial when issuing one (the shell
+  needs none). Activation is suppressed while locked.
 - `ext_session_lock_manager_v1`: accepting a lock immediately switches both
   rendering and input to a lock-only scene, clears window grabs, and clears
   pointer/keyboard focus. The `locked` event follows presentation of that scene.
@@ -158,7 +158,7 @@ Clippy with `-D warnings`, the locked workspace tests under Xvfb, the ignored
 The audit used a temporary cargo-deny 0.20.2 installation (removed afterward).
 All builds used `CARGO_INCREMENTAL=0`; the existing target directory was reused.
 
-## XWayland startup (pinned Smithay f581531)
+## XWayland startup (checked at Smithay f581531; the pin is 2b285e2 now)
 
 Rechecked at f581531: eager startup is retained. The new `extra_args` and
 `spawn_with_inherited_env` APIs do not expose listening socket ownership.
@@ -186,6 +186,8 @@ Wayland selections already present at WM startup are advertised to it too.
 Wayland client DnD uses Smithay's implicit pointer grab and offer negotiation;
 `text/uri-list` is passed through like any other MIME type. Title/decorations and
 Super+drag consume the press without giving clients an implicit pointer grab.
+*(Written at step 2.6; since step 2.7 the pinned Smithay revision carries an
+XDND bridge and drag icons are drawn — see the compositor's README.)*
 **X11↔Wayland DnD remains unimplemented.** Smithay 0.7.0 X11Wm only bridges
 CLIPBOARD/PRIMARY, has no XDND state machine, and exposes neither its connection
 nor an arbitrary ClientMessage hook. This needs a separate XDND proxy connection

@@ -1,6 +1,8 @@
 # Mimshel compositor
 
-Phase 2.2: a separate nested Wayland compositor with server-side decorations. The X11 shell and the phase 0
+A separate nested Wayland compositor (phase 2 of `docs/wayland-plan.md`): server-side
+decorations, the shell protocols, XWayland, clipboard and drag and drop — the sections
+below follow the steps in the order they were done. The X11 shell and the phase 0
 probe are unchanged. Requires an X11 session, an absolute `XDG_RUNTIME_DIR`,
 xkbcommon, Wayland, EGL and GLES (Mesa llvmpipe works without a GPU).
 
@@ -38,9 +40,10 @@ and output scale. Client repaints reuse them without laying out text;
 changing only the title bar damages only that element. The one-pixel side
 and bottom borders have independent persistent render identities.
 
-The keyboard has US and Russian layouts, Alt + Shift switches groups;
-repeat is 25 keys/s after 600 ms. Shell protocols, XWayland, and clipboard
-remain subsequent steps.
+The keyboard takes its layouts from the session's settings (Xfce's
+`keyboard-layout` channel, then localectl, then setxkbmap; plain `us` when
+none of them gives a usable one); repeat is 25 keys/s after 600 ms. The shell
+protocols, XWayland and the clipboard came in later steps, described below.
 
 The model has no Smithay types. Protocol surfaces become model windows when
 they attach a buffer, and leave the stack on unmap or destruction. Rendering
