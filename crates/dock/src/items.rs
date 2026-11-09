@@ -83,12 +83,20 @@ pub fn match_window(w: &WindowInfo, hint: Option<&str>, apps: &[App]) -> Option<
             .unwrap_or_default()
     };
 
-    let tiers: [&dyn Fn(&App) -> bool; 4] = [
+    let tiers: [&dyn Fn(&App) -> bool; 5] = [
         &|a| {
             hint.is_some_and(|h| {
                 let file = h.rsplit('/').next().unwrap_or(h);
                 file == a.id
             })
+        },
+        // The instance name first: it is the more exact one. A Chrome web
+        // app's window (instance `crx_…`, class `Google-chrome`) matched
+        // both its own launcher and Chrome's, and the list order decided.
+        &|a| {
+            a.startup_wm_class
+                .as_deref()
+                .is_some_and(|c| same(&w.instance, c))
         },
         &|a| a.startup_wm_class.as_deref().is_some_and(names_match),
         &|a| {
@@ -238,6 +246,23 @@ mod tests {
             Some("org.gnome.Meld.desktop")
         );
         assert_eq!(found(&window(4, "xeyes", "XEyes"), None), None);
+    }
+
+    #[test]
+    fn instance_before_class() {
+        // A web app made by Chrome: the class is Chrome's, the instance its
+        // own. Chrome comes first in the list and must not take the window.
+        let mut chrome = app("google-chrome", "Chrome");
+        chrome.startup_wm_class = Some("Google-chrome".into());
+        let mut web_app = app("chrome-abc-Default", "Mail");
+        web_app.startup_wm_class = Some("crx_abc".into());
+        let apps = vec![chrome, web_app];
+        let w = window(6, "crx_abc", "Google-chrome");
+        assert_eq!(match_window(&w, None, &apps), Some(1));
+        assert_eq!(
+            match_window(&window(7, "google-chrome", "Google-chrome"), None, &apps),
+            Some(0)
+        );
     }
 
     #[test]

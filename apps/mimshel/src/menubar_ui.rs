@@ -1450,6 +1450,12 @@ impl MenubarUi {
             self.app_window = active;
             self.app_menus.clear();
             self.bar.menus.clear();
+            // A menu asked of the old window and not shown yet will never
+            // come (its answer is dropped): without this its title stayed
+            // lit and swallowed clicks until another popup was opened.
+            if self.app_menu_wait.take().is_some() && matches!(self.bar.open, Some(Part::Menu(_))) {
+                self.bar.open = None;
+            }
             self.dirty = true;
         }
         let (Some(appmenu), Some(w)) = (&self.appmenu, active) else {
@@ -1555,10 +1561,23 @@ impl MenubarUi {
         match update {
             TrayUpdate::Items(items) => {
                 // «Passive» — программа просит значок не показывать.
-                self.tray_items = items
+                let items: Vec<TrayItem> = items
                     .into_iter()
                     .filter(|i| i.status != "Passive")
                     .collect();
+                // The open Control Center lists hidden icons by their
+                // number in the tray: when icons come or go the numbers
+                // point at other programs, and a click acted on the wrong
+                // one. Close it; opened again it is right.
+                let same = items.len() == self.tray_items.len()
+                    && items
+                        .iter()
+                        .zip(&self.tray_items)
+                        .all(|(a, b)| a.key == b.key);
+                if !same && self.bar.open == Some(Part::Control) {
+                    self.close_popup(d)?;
+                }
+                self.tray_items = items;
                 self.bar.tray = self
                     .tray_items
                     .iter()
