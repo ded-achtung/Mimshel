@@ -34,6 +34,9 @@ pub struct Glyphs {
     full: Option<Receiver<Fonts>>,
 }
 
+/// Glyphs kept at most; past that the cache starts anew.
+const CACHE_MAX: usize = 4096;
+
 impl Glyphs {
     /// Monospace family `family`, `size` pixels. Only that family at first
     /// (fast); `on_full` is called (from a background thread) when all fonts
@@ -109,6 +112,11 @@ impl Glyphs {
     pub fn get(&mut self, c: char, bold: bool, wide: bool) -> Option<&Mask> {
         let key = (c, bold, wide);
         if !self.cache.contains_key(&key) {
+            // A bound: one mask per character ever shown, the missing ones
+            // too — a dump of all of Unicode held hundreds of megabytes.
+            if self.cache.len() >= CACHE_MAX {
+                self.cache.clear();
+            }
             let mask = self.draw(c, bold, wide);
             self.cache.insert(key, mask);
         }

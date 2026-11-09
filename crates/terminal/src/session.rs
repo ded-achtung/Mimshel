@@ -354,16 +354,28 @@ impl Session {
         self.mode().intersects(TermMode::MOUSE_MODE)
     }
 
+    /// The program asked to hear about movement with a button held.
+    pub fn drag_wanted(&self) -> bool {
+        self.mode()
+            .intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+    }
+
     /// Сообщить программе о мыши (SGR: `ESC [ < кнопка ; столбец ; строка M/m`).
     /// `button`: 0–2 — кнопки, 64/65 — колёсико; `drag` — движение с нажатой.
     pub fn mouse_report(&self, button: u8, (col, row): (usize, usize), pressed: bool, drag: bool) {
         let mode = self.mode();
         if !mode.contains(TermMode::SGR_MOUSE) {
-            // Старый способ — только нажатия в пределах 223 клеток.
-            if !pressed || col > 222 || row > 222 {
+            // The old way: only within 223 cells, and a release is «button
+            // 3» whatever was pressed. Without it a program that reads the
+            // old reports saw the button held for ever.
+            if col > 222 || row > 222 {
                 return;
             }
-            let b = button + if drag { 32 } else { 0 };
+            let b = if pressed {
+                button + if drag { 32 } else { 0 }
+            } else {
+                3
+            };
             self.write(vec![
                 0x1b,
                 b'[',

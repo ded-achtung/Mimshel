@@ -122,8 +122,9 @@ enum Press {
     None,
     /// Selecting text.
     Selecting,
-    /// Pressed over a program that wants the mouse itself.
-    Program(u8),
+    /// Pressed over a program that wants the mouse itself: the button and
+    /// the cell last told to the program.
+    Program(u8, (usize, usize)),
     /// Dragging the scrollbar thumb; the number — where in the thumb it was
     /// grabbed (pixels from its top).
     Scrollbar(f32),
@@ -963,9 +964,11 @@ impl Window {
                 match button {
                     4 | 5 if shift => session.scroll(if button == 4 { 3 } else { -3 }),
                     4 | 5 => session.wheel(button == 4, c),
-                    b if session.mouse_wanted() => {
+                    // The three real buttons only: the «back» and «forward»
+                    // buttons went out as buttons 7 and 8.
+                    b @ 1..=3 if session.mouse_wanted() => {
                         session.mouse_report(b - 1, c, true, false);
-                        self.press = Press::Program(b - 1);
+                        self.press = Press::Program(b - 1, c);
                     }
                     1 => {
                         let clicks = match self.last_click {
@@ -1013,7 +1016,16 @@ impl Window {
                         session.select_update(c, right);
                         self.dirty = true;
                     }
-                    Press::Program(b) => session.mouse_report(b, c, true, true),
+                    // Only to a program that asked for movement, and only
+                    // when the pointer has reached another cell: every
+                    // pixel of motion used to be sent, also to programs
+                    // that asked for clicks alone.
+                    Press::Program(b, last) => {
+                        if last != c && session.drag_wanted() {
+                            session.mouse_report(b, c, true, true);
+                            self.press = Press::Program(b, c);
+                        }
+                    }
                     Press::None | Press::Scrollbar(_) => {}
                 }
             }
@@ -1044,7 +1056,7 @@ impl Window {
                         }
                         self.dirty = true;
                     }
-                    Press::Program(b) => session.mouse_report(b, c, false, false),
+                    Press::Program(b, _) => session.mouse_report(b, c, false, false),
                     Press::Scrollbar(_) => self.dirty = true,
                     _ => {}
                 }

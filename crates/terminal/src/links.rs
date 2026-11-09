@@ -52,29 +52,36 @@ pub fn url_at(line: &[char], col: usize) -> Option<String> {
     ((at_col..url_end).contains(&col) && !scheme_only).then(|| url.into_iter().collect())
 }
 
-/// Whether Ctrl+click may hand `url` to `xdg-open`. Web addresses yes; a
-/// `file://` link only when it is not something that runs: on Xfce
-/// `xdg-open` goes to `exo-open`, which launches `.desktop` files, and a
-/// program printed by a remote host (`file:///home/u/Downloads/x.desktop`)
-/// must not start with one click.
+/// Whether Ctrl+click may hand `url` to `xdg-open`. Web addresses yes. A
+/// `file://` link is text printed by whatever runs in the terminal, maybe
+/// on another machine, and one click must not start a program: a folder
+/// opens, and so does a file that is plainly a document, a picture or text
+/// ([`OPENED`]) and has no execute bit. Everything else does not — the
+/// handler of a `.desktop`, `.jar` or `.exe` file runs it.
 pub fn safe_to_open(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("file://") else {
         return true;
     };
     // `file://host/path`: the path starts at the first slash.
     let path = std::path::PathBuf::from(percent_decode(&rest[rest.find('/').unwrap_or(0)..]));
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("desktop"))
-    {
-        return false;
-    }
     use std::os::unix::fs::PermissionsExt;
     match std::fs::metadata(&path) {
-        Ok(m) if m.is_file() => m.permissions().mode() & 0o111 == 0,
-        _ => true,
+        Ok(m) if m.is_dir() => true,
+        Ok(m) if m.is_file() && m.permissions().mode() & 0o111 != 0 => false,
+        // A plain file, or one that is not there (xdg-open will say so).
+        _ => path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| OPENED.iter().any(|o| o.eq_ignore_ascii_case(e))),
     }
 }
+
+/// File types a `file://` link may open.
+const OPENED: [&str; 28] = [
+    "txt", "md", "log", "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "html", "htm",
+    "csv", "json", "toml", "yaml", "yml", "xml", "diff", "patch", "rs", "c", "h", "cpp", "go",
+    "odt", "ods",
+];
 
 /// `%2E` -> `.`; a broken escape stays as it is.
 fn percent_decode(s: &str) -> String {
@@ -117,6 +124,10 @@ mod tests {
         assert!(!safe_to_open("file:///bin/sh"), "an executable file");
         assert!(safe_to_open("file:///etc/hostname-missing.txt"));
         assert!(safe_to_open("file:///tmp"), "a folder opens");
+        assert!(!safe_to_open("file:///home/u/Downloads/x.jar"));
+        assert!(!safe_to_open("file:///home/u/Downloads/setup.exe"));
+        assert!(!safe_to_open("file:///home/u/no-extension"));
+        assert!(safe_to_open("file:///home/u/report.PDF"));
     }
 
     #[test]
