@@ -33,6 +33,8 @@ use crate::platform::{AppWindow, Display, Event, Property, Result, clipboard_tex
 /// Window class — the dock and menu bar recognise the terminal by it.
 const WINDOW_CLASS: &str = "mimshel-terminal";
 const TITLE: &str = "Терминал";
+/// The longest title taken from a program, in characters.
+const TITLE_MAX: usize = 1024;
 /// Font size in points and the grid of a new window.
 const FONT_SIZE: f32 = 14.0;
 const START: (usize, usize) = (100, 30);
@@ -813,7 +815,13 @@ impl Window {
                 }
                 let _ = crate::ui::spawn_detached(c);
             }
-            Cmd::NewTab => self.new_tab()?,
+            // No new shell (the process or terminal limit): the tabs that
+            // are open stay.
+            Cmd::NewTab => {
+                if let Err(e) = self.new_tab() {
+                    eprintln!("Терминал: новая вкладка не открыта: {e}");
+                }
+            }
             Cmd::CloseTab => return Ok(self.close_tab(self.tabs.active)),
             Cmd::CloseWindow => return Ok(false),
             Cmd::Copy => {
@@ -905,7 +913,11 @@ impl Window {
                             return Ok(self.close_tab(i));
                         }
                         (Some(BarHit::Tab(i)), 1) => self.tabs.active = i,
-                        (Some(BarHit::Plus), 1) => self.new_tab()?,
+                        (Some(BarHit::Plus), 1) => {
+                            if let Err(e) = self.new_tab() {
+                                eprintln!("Терминал: новая вкладка не открыта: {e}");
+                            }
+                        }
                         _ => {}
                     }
                     return Ok(true);
@@ -1052,7 +1064,10 @@ impl Window {
             match e {
                 TermEvent::Redraw => self.dirty |= i == self.tabs.active,
                 TermEvent::Title(t) => {
-                    self.tabs.list[i].title = t;
+                    // A program may send a title of any length; megabytes
+                    // of it would be shaped on every frame and are more
+                    // than the X server takes in one request.
+                    self.tabs.list[i].title = t.chars().take(TITLE_MAX).collect();
                     self.tabs.title_dirty = true;
                 }
                 TermEvent::ResetTitle => {
@@ -1071,7 +1086,10 @@ impl Window {
     fn flush(&mut self) -> Result<()> {
         let title = self.tabs.active().title.clone();
         if title != self.shown_title {
-            self.win.set_title(&self.d, &title)?;
+            // A title the server refuses is no reason to close every tab.
+            if let Err(e) = self.win.set_title(&self.d, &title) {
+                eprintln!("Терминал: заголовок окна не поставлен: {e}");
+            }
             self.shown_title = title;
         }
         if !self.dirty {
