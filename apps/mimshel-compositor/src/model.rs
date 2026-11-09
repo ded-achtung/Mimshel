@@ -295,13 +295,22 @@ impl Model {
     }
 }
 
+/// The largest side a window may have. A client can ask for any size (a
+/// buffer over a sparse file, an X11 minimum-size hint of half a billion):
+/// the title bar is drawn in memory at the window's width, and an absurd
+/// one ended the compositor — and every program in the session — on an
+/// allocation of tens of gigabytes.
+pub const SIDE_MAX: i32 = 16384;
+
 fn constrain(window: &Window, rect: &mut Rect) {
     let limit = |value: i32, min: i32, max: i32| {
-        value.max(min.max(1)).min(if max > 0 {
-            max.max(min.max(1))
+        let min = min.clamp(1, SIDE_MAX);
+        let max = if max > 0 {
+            max.clamp(min, SIDE_MAX)
         } else {
-            i32::MAX
-        })
+            SIDE_MAX
+        };
+        value.clamp(min, max)
     };
     rect.width = limit(rect.width, window.min_size.0, window.max_size.0);
     rect.height = limit(rect.height, window.min_size.1, window.max_size.1);
@@ -310,6 +319,22 @@ fn constrain(window: &Window, rect: &mut Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_window_has_a_largest_size() {
+        let mut m = Model::new(800, 600);
+        let id = m.open(400, 300);
+        let mut rect = m.rect(id).unwrap();
+        rect.width = 500_000_000;
+        rect.height = i32::MAX;
+        m.geometry(id, rect);
+        let rect = m.rect(id).unwrap();
+        assert_eq!((rect.width, rect.height), (SIDE_MAX, SIDE_MAX));
+        // A hint asking for an absurd minimum does not lift the bound.
+        m.windows[0].min_size = (500_000_000, 10);
+        m.geometry(id, rect);
+        assert_eq!(m.rect(id).unwrap().width, SIDE_MAX);
+    }
+
     #[test]
     fn stack_and_focus() {
         let mut m = Model::new(800, 600);

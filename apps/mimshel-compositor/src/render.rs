@@ -156,7 +156,7 @@ pub fn frame(
     state: &mut State,
     tracker: &mut OutputDamageTracker,
     render: &mut RenderState,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let start = Instant::now();
     let age = backend.buffer_age().unwrap_or(0);
     let (renderer, mut fb) = backend.bind()?;
@@ -346,6 +346,9 @@ pub fn frame(
     }
     let elapsed = start.elapsed();
     drop(fb);
+    // Whether a picture went to the screen: the swap is what waits for the
+    // display's next refresh.
+    let shown = result.damage.is_some();
     if let Some(damage) = result.damage {
         if render.timing {
             eprintln!("frame render={:.3}ms", elapsed.as_secs_f64() * 1000.0);
@@ -353,7 +356,7 @@ pub fn frame(
         backend.submit(Some(damage))?;
     }
     state.lock_frame_presented();
-    Ok(())
+    Ok(shown)
 }
 
 /// Deliver frame callbacks to mapped windows.

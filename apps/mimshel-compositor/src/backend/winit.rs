@@ -219,6 +219,7 @@ pub fn run(shell: Vec<OsString>, command: Vec<OsString>) -> Result<(), Error> {
         })?;
     let mut tracker = OutputDamageTracker::from_output(&output);
     let start = Instant::now();
+    let mut last_frame = start;
     let mut reported_mode = None;
     let result = (|| -> Result<(), Error> {
         while running.get() {
@@ -253,12 +254,28 @@ pub fn run(shell: Vec<OsString>, command: Vec<OsString>) -> Result<(), Error> {
             let size = backend.window_size();
             if server.state.dirty && size.w > 0 && size.h > 0 {
                 server.state.dirty = false;
-                render::frame(
+                let shown = render::frame(
                     &mut backend,
                     &mut server.state,
                     &mut tracker,
                     &mut render_state,
                 )?;
+                // Frame callbacks at most once per refresh. A frame with
+                // nothing to show (a window drawing behind another one, a
+                // client that only asks for the next frame) is not held up
+                // by the screen, and its callback went out at once: client
+                // and compositor then ran each other flat out.
+                if !shown {
+                    let refresh = output
+                        .current_mode()
+                        .map_or(60_000, |m| m.refresh)
+                        .max(1000);
+                    let period = std::time::Duration::from_secs_f64(1000.0 / f64::from(refresh));
+                    if let Some(left) = period.checked_sub(last_frame.elapsed()) {
+                        std::thread::sleep(left);
+                    }
+                }
+                last_frame = std::time::Instant::now();
                 render::callbacks(&server.state, &output, start.elapsed());
                 server.state.dh.flush_clients()?;
             }

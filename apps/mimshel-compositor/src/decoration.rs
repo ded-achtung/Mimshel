@@ -72,6 +72,10 @@ pub fn render(
     if width <= 0 || !scale.is_finite() || scale <= 0.0 {
         return None;
     }
+    // Whatever the caller passes, the picture has a bound (`Model` keeps
+    // windows within it too).
+    let width = width.min(crate::model::SIDE_MAX);
+    let scale = scale.min(8.0);
     let mut pm = Pixmap::new(
         (width as f32 * scale).round() as u32,
         (HEIGHT as f32 * scale).round() as u32,

@@ -342,12 +342,32 @@ impl XwmHandler for State {
         for surface in surfaces {
             self.unmap_x11(&surface);
         }
-        self.xwms.clear();
+        // Not dropped: a selection transfer, a drag over an X11 window or a
+        // queued surface request may still call `xwm_state` with this id.
+        // Emptying the list made that call index an empty list, and an
+        // XWayland crash took the whole session with it.
+        let (gone, live): (Vec<_>, Vec<_>) = std::mem::take(&mut self.xwms)
+            .into_iter()
+            .partition(|wm| wm.id() == id);
+        self.xwms = live;
+        self.gone_xwms.extend(gone);
     }
 
-    fn xwm_state(&mut self, _: XwmId) -> &mut X11Wm {
-        // The event source is registered by start_wm, then stored before dispatch resumes.
-        &mut self.xwms[0]
+    fn xwm_state(&mut self, id: XwmId) -> &mut X11Wm {
+        // The event source is registered by start_wm, then stored before
+        // dispatch resumes; a manager is never dropped while the compositor
+        // runs, so the one asked for is in one of the two lists.
+        let live = self.xwms.iter().position(|wm| wm.id() == id);
+        let wm = match live {
+            Some(i) => self.xwms.get_mut(i),
+            None => self
+                .gone_xwms
+                .iter_mut()
+                .find(|wm| wm.id() == id)
+                .or(self.xwms.first_mut()),
+        };
+        #[allow(clippy::expect_used)]
+        wm.expect("an X11 window manager for a live XwmId")
     }
     fn new_window(&mut self, _: XwmId, _: X11Surface) {}
     fn new_override_redirect_window(&mut self, _: XwmId, _: X11Surface) {}

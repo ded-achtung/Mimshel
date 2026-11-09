@@ -53,6 +53,10 @@ pub struct State {
     pub xwayland_shell: smithay::wayland::xwayland_shell::XWaylandShellState,
     /// The single WM; installed before any XWM callbacks are dispatched.
     pub xwms: Vec<smithay::xwayland::X11Wm>,
+    /// Window managers of an XWayland that has gone. They are kept, not
+    /// dropped: transfers and drags that were under way still hold their
+    /// id and ask for them (`XwmHandler::xwm_state`).
+    pub gone_xwms: Vec<smithay::xwayland::X11Wm>,
     /// Unmanaged menus and tooltips, in stacking order.
     pub overrides: Vec<Window>,
     /// Whether an event requires a frame.
@@ -136,6 +140,7 @@ impl State {
             pending: Vec::new(),
             xwayland_shell: smithay::wayland::xwayland_shell::XWaylandShellState::new::<Self>(&dh),
             xwms: Vec::new(),
+            gone_xwms: Vec::new(),
             overrides: Vec::new(),
             protocols,
             dirty: true,
