@@ -98,6 +98,7 @@ x11rb::atom_manager! {
     /// Имена свойств EWMH/ICCCM, которые нужны оболочке.
     pub(crate) Atoms: AtomsCookie {
         UTF8_STRING,
+        INCR,
         WM_PROTOCOLS,
         WM_DELETE_WINDOW,
         WM_STATE,

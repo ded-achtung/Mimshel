@@ -44,7 +44,8 @@ pub fn clipboard_files() -> Option<(bool, Vec<PathBuf>)> {
         0,
         WindowClass::INPUT_ONLY,
         0,
-        &CreateWindowAux::new(),
+        // Property changes: a big selection arrives in pieces (INCR).
+        &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
     )
     .ok()?;
     let atom = |name: &str| -> Option<u32> {
@@ -66,12 +67,10 @@ pub fn clipboard_files() -> Option<(bool, Vec<PathBuf>)> {
         if !wait_notify(&conn) {
             continue;
         }
-        let reply = conn
-            .get_property(true, window, into, AtomEnum::ANY, 0, 1 << 20)
-            .ok()?
-            .reply()
-            .ok()?;
-        if let Some(found) = parse(&String::from_utf8_lossy(&reply.value)) {
+        let Some(data) = read_selection(&conn, window, into, atom("INCR")?) else {
+            continue;
+        };
+        if let Some(found) = parse(&String::from_utf8_lossy(&data)) {
             return Some(found);
         }
     }
@@ -91,6 +90,84 @@ fn wait_notify(conn: &RustConnection) -> bool {
         }
     }
     false
+}
+
+/// The most a selection may hold; more is refused, not cut short.
+const SELECTION_MAX: usize = 64 * 1024 * 1024;
+
+/// The whole value of the property `prop` and its type, read piece by
+/// piece; the property is deleted. `None` — it is larger than
+/// [`SELECTION_MAX`] or cannot be read. Never a part of it: a file list cut
+/// in the middle of a line names another file, or a parent folder.
+pub(crate) fn whole_property(
+    conn: &RustConnection,
+    window: u32,
+    prop: Atom,
+) -> Option<(Atom, Vec<u8>)> {
+    /// One request's worth, in 4-byte units.
+    const PIECE: u32 = 1 << 20;
+    let mut data = Vec::new();
+    loop {
+        let reply = conn
+            .get_property(
+                false,
+                window,
+                prop,
+                AtomEnum::ANY,
+                (data.len() / 4) as u32,
+                PIECE,
+            )
+            .ok()?
+            .reply()
+            .ok()?;
+        data.extend_from_slice(&reply.value);
+        if reply.bytes_after == 0 || reply.value.is_empty() {
+            let _ = conn.delete_property(window, prop);
+            let _ = conn.flush();
+            return (reply.bytes_after == 0).then_some((reply.type_, data));
+        }
+        if data.len() > SELECTION_MAX {
+            let _ = conn.delete_property(window, prop);
+            return None;
+        }
+    }
+}
+
+/// The data a selection owner put into `into` after a SelectionNotify.
+/// A large one (GTK programs: above some 256 KB) comes as `INCR`: the
+/// property holds only a size, and the data follows in pieces, each after
+/// we delete the one before; an empty piece ends it. Taking the `INCR`
+/// property itself for the data pasted four bytes of rubbish.
+fn read_selection(conn: &RustConnection, window: u32, into: Atom, incr: Atom) -> Option<Vec<u8>> {
+    use x11rb::protocol::xproto::Property;
+    let (kind, first) = whole_property(conn, window, into)?;
+    if kind != incr {
+        return Some(first);
+    }
+    let mut data = Vec::new();
+    let mut last = Instant::now();
+    // The owner has this long for each next piece.
+    while last.elapsed() < Duration::from_secs(3) {
+        match conn.poll_for_event() {
+            Ok(Some(XEvent::PropertyNotify(e)))
+                if e.window == window && e.atom == into && e.state == Property::NEW_VALUE =>
+            {
+                let (_, piece) = whole_property(conn, window, into)?;
+                if piece.is_empty() {
+                    return Some(data);
+                }
+                data.extend_from_slice(&piece);
+                if data.len() > SELECTION_MAX {
+                    return None;
+                }
+                last = Instant::now();
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// Положить файлы в буфер обмена (`cut` — вырезаны: вставка переместит их).
@@ -252,7 +329,8 @@ pub fn clipboard_text(primary: bool) -> Option<String> {
         0,
         WindowClass::INPUT_ONLY,
         0,
-        &CreateWindowAux::new(),
+        // Property changes: a big selection arrives in pieces (INCR).
+        &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
     )
     .ok()?;
     let atom = |name: &str| -> Option<u32> {
@@ -277,12 +355,8 @@ pub fn clipboard_text(primary: bool) -> Option<String> {
         if !wait_notify(&conn) {
             continue;
         }
-        let reply = conn
-            .get_property(true, window, into, AtomEnum::ANY, 0, 1 << 22)
-            .ok()?
-            .reply()
-            .ok()?;
-        return Some(String::from_utf8_lossy(&reply.value).into_owned());
+        let data = read_selection(&conn, window, into, atom("INCR")?)?;
+        return Some(String::from_utf8_lossy(&data).into_owned());
     }
     None
 }
@@ -346,7 +420,14 @@ pub(crate) fn parse(text: &str) -> Option<(bool, Vec<PathBuf>)> {
             "copy" => {}
             l if l.starts_with('#') => {}
             l => {
-                if let Some(p) = l.strip_prefix("file://") {
+                // `file:///path` or `file://localhost/path`. Another host's
+                // file is not ours to take, and without this check
+                // `file://host/home/a` became the relative path `host/home/a`.
+                let path = l
+                    .strip_prefix("file://")
+                    .map(|p| p.strip_prefix("localhost").unwrap_or(p))
+                    .filter(|p| p.starts_with('/'));
+                if let Some(p) = path {
                     paths.push(PathBuf::from(percent_decode(p)));
                 }
             }

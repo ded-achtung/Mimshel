@@ -450,16 +450,14 @@ impl Display {
             self.send_client(offer.source, a.XdndFinished, [offer.target, 0, 0, 0, 0]);
             return Event::Other;
         }
+        // The whole list or nothing. A list sent in pieces (INCR, some
+        // thousands of files from a GTK program) is not taken yet: the drop
+        // is refused rather than done by half.
         let paths = (property != x11rb::NONE)
-            .then(|| {
-                self.conn
-                    .get_property(true, requestor, property, AtomEnum::ANY, 0, 1 << 20)
-                    .ok()?
-                    .reply()
-                    .ok()
-            })
+            .then(|| crate::clipboard::whole_property(&self.conn, requestor, property))
             .flatten()
-            .and_then(|r| crate::clipboard::parse(&String::from_utf8_lossy(&r.value)))
+            .filter(|(kind, _)| *kind != a.INCR)
+            .and_then(|(_, data)| crate::clipboard::parse(&String::from_utf8_lossy(&data)))
             .map(|(_, p)| p)
             .unwrap_or_default();
         if paths.is_empty() || st.pending.len() >= MAX_PENDING_DROPS {

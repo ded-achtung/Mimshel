@@ -831,3 +831,110 @@ fn isolated_x11_desktop_over_foreign_wallpaper() -> Result<()> {
     )?;
     Ok(())
 }
+
+/// A selection owner that hands its text over in pieces (INCR), as GTK
+/// programs do above some 256 KB: the paste must be the whole text, not the
+/// four bytes of the size.
+#[test]
+#[ignore = "нужен Xvfb; CI запускает отдельно"]
+fn isolated_x11_big_clipboard_arrives_whole() -> Result<()> {
+    use x11rb::protocol::Event as X;
+    use x11rb::protocol::xproto::{
+        ChangeWindowAttributesAux, CreateWindowAux, EventMask, Property, SelectionNotifyEvent,
+        WindowClass,
+    };
+    if outer_run("isolated_x11_big_clipboard_arrives_whole", "800x600x24")? {
+        return Ok(());
+    }
+    let text: String = (0..60_000).map(|i| format!("строка {i}\n")).collect();
+    let owned = text.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let owner = std::thread::spawn(move || -> Result<()> {
+        let (conn, screen) = RustConnection::connect(None)?;
+        let root = conn.setup().roots[screen].root;
+        let window = conn.generate_id()?;
+        conn.create_window(
+            0,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &CreateWindowAux::new(),
+        )?;
+        let atom = |name: &str| -> Result<u32> {
+            Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
+        };
+        let (clipboard, utf8, incr) = (atom("CLIPBOARD")?, atom("UTF8_STRING")?, atom("INCR")?);
+        conn.set_selection_owner(window, clipboard, x11rb::CURRENT_TIME)?;
+        conn.flush()?;
+        conn.get_input_focus()?.reply()?;
+        ready_tx.send(())?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut left: Option<(u32, u32, &[u8])> = None;
+        while std::time::Instant::now() < deadline {
+            match conn.poll_for_event()? {
+                Some(X::SelectionRequest(req)) => {
+                    let ok = req.target == utf8;
+                    if ok {
+                        conn.change_window_attributes(
+                            req.requestor,
+                            &ChangeWindowAttributesAux::new()
+                                .event_mask(EventMask::PROPERTY_CHANGE),
+                        )?;
+                        conn.change_property32(
+                            PropMode::REPLACE,
+                            req.requestor,
+                            req.property,
+                            incr,
+                            &[owned.len() as u32],
+                        )?;
+                        left = Some((req.requestor, req.property, owned.as_bytes()));
+                    }
+                    let notify = SelectionNotifyEvent {
+                        response_type: x11rb::protocol::xproto::SELECTION_NOTIFY_EVENT,
+                        sequence: 0,
+                        time: req.time,
+                        requestor: req.requestor,
+                        selection: req.selection,
+                        target: req.target,
+                        property: if ok { req.property } else { x11rb::NONE },
+                    };
+                    conn.send_event(false, req.requestor, EventMask::NO_EVENT, notify)?;
+                    conn.flush()?;
+                }
+                // The reader took a piece: the next one, an empty one last.
+                Some(X::PropertyNotify(e)) if e.state == Property::DELETE => {
+                    if let Some((requestor, property, rest)) = left
+                        && e.window == requestor
+                        && e.atom == property
+                    {
+                        let (piece, rest_after) = rest.split_at(rest.len().min(100_000));
+
+                        conn.change_property8(PropMode::REPLACE, requestor, property, utf8, piece)?;
+                        // A round trip: the server has taken the piece
+                        // before this client may leave.
+                        conn.get_input_focus()?.reply()?;
+                        if piece.is_empty() {
+                            return Ok(());
+                        }
+                        left = Some((requestor, property, rest_after));
+                    }
+                }
+                Some(_) => {}
+                None => std::thread::sleep(Duration::from_millis(2)),
+            }
+        }
+        Err("nobody took the whole selection".into())
+    });
+    ready_rx.recv_timeout(Duration::from_secs(5))?;
+    let pasted = mimshel_x11::clipboard_text(false).ok_or("no text from the clipboard")?;
+    assert_eq!(pasted.len(), text.len());
+    assert!(pasted == text, "the pasted text differs");
+    owner.join().map_err(|_| "the owner thread panicked")??;
+    Ok(())
+}
