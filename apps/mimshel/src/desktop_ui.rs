@@ -442,8 +442,8 @@ impl DesktopUi {
             } => {
                 let changed = self.grid.set_drop_target(None);
                 self.cells_dirty.extend(changed);
-                // Выполняем именно подтверждённое источнику действие.
                 self.dropped(
+                    d,
                     d.take_drop(ticket),
                     f32::from(x),
                     f32::from(y),
@@ -679,7 +679,15 @@ impl DesktopUi {
 
     /// Бросили файлы из другой программы: на папку — в неё, иначе — на стол,
     /// значками там, где отпустили (несколько — рядом друг с другом).
-    fn dropped(&mut self, paths: Vec<PathBuf>, x: f32, y: f32, moving: bool, ticket: u64) {
+    fn dropped(
+        &mut self,
+        d: &Display,
+        paths: Vec<PathBuf>,
+        x: f32,
+        y: f32,
+        moving: bool,
+        ticket: u64,
+    ) {
         if paths.is_empty() {
             let _ = self.tx.send(Msg::DropFinished {
                 ticket,
@@ -694,6 +702,11 @@ impl DesktopUi {
             .filter(|t| t.kind == Kind::Folder)
             .map(|t| t.path.clone());
         let into = folder.clone().unwrap_or_else(|| self.dir.clone());
+        // From another disk a drop copies; the source hears which it was.
+        let moving = moving && desktop_files::drop_moves(&paths, &into);
+        if !moving {
+            d.drop_copied(ticket);
+        }
         let mut pairs = Vec::new();
         // Имена всех файлов должны быть разными ещё до начала копирования.
         let mut reserved = HashSet::new();

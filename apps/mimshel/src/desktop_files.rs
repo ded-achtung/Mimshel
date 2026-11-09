@@ -163,6 +163,14 @@ pub fn same_device(path: &Path, into: &Path) -> bool {
     }
 }
 
+/// Whether files dropped into `into` may be moved there: only when every
+/// one of them is on the same disk. From another disk (a USB stick, a
+/// phone, a camera) a drop copies, as in Finder — a move would delete the
+/// originals from the device.
+pub fn drop_moves(paths: &[PathBuf], into: &Path) -> bool {
+    paths.iter().all(|p| same_device(p, into))
+}
+
 /// В корзину (её видит и корзина в доке). One `gio trash` per batch of
 /// files, not one process per file: deleting 2000 files started 2000
 /// processes at once.

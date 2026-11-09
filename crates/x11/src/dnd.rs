@@ -113,6 +113,16 @@ impl Display {
             .unwrap_or_default()
     }
 
+    /// The drop `ticket` is done as a copy although a move was agreed (the
+    /// files come from another disk): the source is told so when the drop
+    /// is finished and must not think its files were taken away.
+    pub fn drop_copied(&self, ticket: u64) {
+        let mut st = self.drop.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(p) = st.pending.iter_mut().find(|p| p.ticket == ticket) {
+            p.offer.action = self.atoms.XdndActionCopy;
+        }
+    }
+
     /// Сообщить источнику XDND результат только после файловой операции.
     pub fn finish_drop(&self, ticket: u64, success: bool) {
         let mut st = self.drop.lock().unwrap_or_else(|p| p.into_inner());

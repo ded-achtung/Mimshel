@@ -135,6 +135,12 @@ impl Display {
         x11_or!(self, Vec::new(), |xd| xd.take_drop(ticket))
     }
 
+    /// A drop agreed as a move is carried out as a copy (another disk).
+    /// Wayland: the same, `wl_data_offer.set_actions` before `finish`.
+    pub fn drop_copied(&self, ticket: u64) {
+        x11_or!(self, (), |xd| xd.drop_copied(ticket));
+    }
+
     /// Report completion after the file operation. Wayland: finish the
     /// `wl_data_offer` with the accepted result.
     pub fn finish_drop(&self, ticket: u64, success: bool) {

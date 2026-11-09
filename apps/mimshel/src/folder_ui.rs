@@ -592,6 +592,10 @@ impl FolderUi {
             d.finish_drop(ticket, false);
             return;
         }
+        let moving = moving && desktop_files::drop_moves(&paths, &into);
+        if !moving {
+            d.drop_copied(ticket);
+        }
         let pairs = pairs_into(paths.into_iter(), &into, moving);
         desktop_files::bring(pairs, moving, ticket, self.tx.clone());
     }
