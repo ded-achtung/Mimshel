@@ -102,24 +102,30 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     for p in &all {
         add("install", &format!("пакет {p}"), have(p), hint);
     }
-    let theme_dir = paths.themes.join(&cfg.gtk_theme);
+    // Wherever GTK finds a theme, not only in the home folder: a theme
+    // from /usr/share chosen in the settings window is installed all right,
+    // and looking only at ~/.themes reported it as a fault nothing could fix.
+    let theme_dir = crate::themes::gtk_theme_dir(&cfg.gtk_theme);
     add(
         "install",
         &format!("тема {}", cfg.gtk_theme),
-        theme_dir.join("gtk-3.0").is_dir(),
-        "поставьте тему в ~/.themes",
+        theme_dir.is_some(),
+        "поставьте тему в ~/.themes или выберите другую в настройках",
     );
-    add(
-        "install",
-        &format!("оформление окон {}", cfg.gtk_theme),
-        theme_dir.join("xfwm4").is_dir(),
-        "поставьте тему в ~/.themes",
-    );
+    // Not every GTK theme draws window frames: xfwm4 then keeps its own.
+    if let Some(dir) = theme_dir.filter(|d| d.starts_with(crate::sys::home())) {
+        add(
+            "install",
+            &format!("оформление окон {}", cfg.gtk_theme),
+            dir.join("xfwm4").is_dir(),
+            "в теме нет оформления окон (папка xfwm4)",
+        );
+    }
     add(
         "install",
         &format!("курсор {}", cfg.cursor_theme),
-        paths.icons.join(&cfg.cursor_theme).is_dir(),
-        "поставьте курсор в ~/.local/share/icons",
+        crate::themes::cursor_themes().contains(&cfg.cursor_theme),
+        "поставьте курсор в ~/.local/share/icons или выберите другой в настройках",
     );
     let (sw, sh) = crate::lock::screen_size();
     let wallpaper = mimshel_wallpaper::Style::parse(&cfg.wallpaper).map_or_else(
