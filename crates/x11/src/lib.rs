@@ -916,6 +916,20 @@ struct Keymap {
     min_code: u8,
     per_code: usize,
     syms: Vec<u32>,
+    /// The modifier bit Num Lock sets (0 — the keyboard has none).
+    num_lock: u16,
+    /// The modifier bit of the third level (AltGr), 0 — none.
+    level3: u16,
+}
+
+/// Keysyms looked for in the modifier table.
+const NUM_LOCK: u32 = 0xff7f;
+const LEVEL3_SHIFT: u32 = 0xfe03;
+const MODE_SWITCH: u32 = 0xff7e;
+
+/// Keypad keysyms (`KP_Space`…`KP_9`): chosen by Num Lock, not by Shift.
+fn is_keypad(sym: u32) -> bool {
+    (0xff80..=0xffbd).contains(&sym)
 }
 
 impl Keymap {
@@ -923,31 +937,85 @@ impl Keymap {
         let setup = conn.setup();
         let (min, max) = (setup.min_keycode, setup.max_keycode);
         let reply = conn.get_keyboard_mapping(min, max - min + 1)?.reply()?;
-        Ok(Keymap {
+        let mut map = Keymap {
             min_code: min,
             per_code: usize::from(reply.keysyms_per_keycode),
             syms: reply.keysyms,
-        })
+            num_lock: 0,
+            level3: 0,
+        };
+        // Which modifier bits Num Lock and AltGr are differs between
+        // keyboards (usually Mod2 and Mod5): the server's table says.
+        if let Ok(mods) = conn.get_modifier_mapping()?.reply() {
+            let per_mod = usize::from(mods.keycodes_per_modifier()).max(1);
+            map.set_modifiers(mods.keycodes.chunks(per_mod));
+        }
+        Ok(map)
     }
 
-    /// Символ клавиши с учётом раскладки, Shift и Caps Lock.
-    fn keysym(&self, code: u8, state: u16) -> (u32, bool) {
-        let Some(start) = usize::from(code)
+    /// All keysyms of one key.
+    fn row(&self, code: u8) -> &[u32] {
+        usize::from(code)
             .checked_sub(usize::from(self.min_code))
             .map(|i| i * self.per_code)
-        else {
-            return (0, false);
-        };
-        let syms = self.syms.get(start..start + self.per_code).unwrap_or(&[]);
+            .and_then(|start| self.syms.get(start..start + self.per_code))
+            .unwrap_or(&[])
+    }
+
+    /// Find Num Lock and the third-level key among the eight modifiers'
+    /// keys (`codes`: one list of key codes per modifier, Shift first).
+    fn set_modifiers<'a>(&mut self, codes: impl Iterator<Item = &'a [u8]>) {
+        for (bit, codes) in codes.take(8).enumerate() {
+            let has = |sym: u32| {
+                codes
+                    .iter()
+                    .any(|&code| code != 0 && self.row(code).contains(&sym))
+            };
+            let (num, third, mode) = (has(NUM_LOCK), has(LEVEL3_SHIFT), has(MODE_SWITCH));
+            if num {
+                self.num_lock = 1 << bit;
+            }
+            if third || (mode && self.level3 == 0) {
+                self.level3 = 1 << bit;
+            }
+        }
+    }
+
+    /// The key's symbol for the layout, Shift, Num Lock and AltGr; `true` —
+    /// the letter still has to be made capital (no separate symbol for
+    /// Shift).
+    ///
+    /// The server's table has, for every key: layout 1 plain and with Shift,
+    /// layout 2 plain and with Shift, then the third and fourth levels
+    /// (AltGr, AltGr+Shift) of layout 1 and of layout 2. A third and fourth
+    /// layout are not in this table: they type as the second.
+    fn keysym(&self, code: u8, state: u16) -> (u32, bool) {
+        let syms = self.row(code);
         let at = |i: usize| syms.get(i).copied().unwrap_or(0);
-        // Раскладка — в битах 13–14; в общей таблице X на каждую из первых
-        // двух приходится по две колонки: без Shift и с Shift.
         let group = usize::from((state >> 13) & 0x3).min(1);
         let shift = state & 0x1 != 0;
+        // AltGr: `@`, `{`, `€` on German, French, Spanish… layouts. Without
+        // it they could not be typed — not in a password on the lock screen
+        // either.
+        if self.level3 != 0 && state & self.level3 != 0 {
+            let (third, fourth) = (at(4 + group * 2), at(5 + group * 2));
+            if shift && fourth != 0 {
+                return (fourth, false);
+            }
+            if third != 0 {
+                return (third, false);
+            }
+        }
         let (base, shifted) = match (at(group * 2), at(group * 2 + 1)) {
             (0, 0) => (at(0), at(1)),
             pair => pair,
         };
+        // The number pad: with Num Lock on it types digits and Shift brings
+        // the arrows back. Reading it by Shift alone turned «1» into End.
+        if is_keypad(shifted) {
+            let digits = (self.num_lock != 0 && state & self.num_lock != 0) != shift;
+            return (if digits { shifted } else { base }, false);
+        }
         if shift && shifted != 0 {
             (shifted, false)
         } else {
@@ -992,6 +1060,8 @@ mod tests {
     /// Две клавиши: «q/Q | й/Й» и «1/! | 1/!», плюс Enter.
     fn keymap() -> Keymap {
         Keymap {
+            num_lock: 0,
+            level3: 0,
             min_code: 8,
             per_code: 4,
             syms: vec![
@@ -1029,6 +1099,59 @@ mod tests {
         assert_eq!(k.key(9, SHIFT), Key::Char('!'));
         assert_eq!(k.key(10, RU), Key::Return);
         assert_eq!(k.key(200, 0), Key::Other);
+    }
+
+    /// A number pad key, «q» with `@` on AltGr (as on a German keyboard),
+    /// then the Num Lock and AltGr keys themselves.
+    #[test]
+    fn num_lock_and_alt_gr() {
+        let mut k = Keymap {
+            min_code: 8,
+            per_code: 6,
+            num_lock: 0,
+            level3: 0,
+            syms: vec![
+                key::KP_End,
+                key::KP_1,
+                key::KP_End,
+                key::KP_1,
+                0,
+                0,
+                key::q,
+                key::Q,
+                key::q,
+                key::Q,
+                key::at,
+                key::Greek_OMEGA,
+                key::Num_Lock,
+                0,
+                key::Num_Lock,
+                0,
+                0,
+                0,
+                key::ISO_Level3_Shift,
+                0,
+                key::ISO_Level3_Shift,
+                0,
+                0,
+                0,
+            ],
+        };
+        // Shift, Lock, Control, Mod1, Mod2 (Num Lock), Mod3, Mod4, Mod5 (AltGr).
+        let table: [&[u8]; 8] = [&[0], &[0], &[0], &[0], &[10], &[0], &[0], &[11]];
+        k.set_modifiers(table.into_iter());
+        assert_eq!((k.num_lock, k.level3), (0x10, 0x80));
+        let (num, alt_gr) = (k.num_lock, k.level3);
+        assert_eq!(k.key(8, 0), Key::End);
+        assert_eq!(k.key(8, num), Key::Char('1'));
+        assert_eq!(k.key(8, num | SHIFT), Key::End);
+        assert_eq!(k.key(8, SHIFT), Key::Char('1'));
+        assert_eq!(k.key(9, alt_gr), Key::Char('@'));
+        assert_eq!(k.key(9, alt_gr | SHIFT), Key::Char('Ω'));
+        // No third level on the key: AltGr changes nothing.
+        assert_eq!(k.key(8, alt_gr | num), Key::Char('1'));
+        // Caps Lock does not touch what AltGr gives.
+        assert_eq!(k.key(9, 0), Key::Char('q'));
     }
 }
 
