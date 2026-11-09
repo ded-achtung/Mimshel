@@ -219,13 +219,14 @@ fn spawn(exe: &PathBuf) -> std::io::Result<(ExitStatus, u32)> {
     // буфера (снимок экрана, фон «Программ») поднимает порог и дальше держит
     // такие куски у себя. Твёрдый порог — большие буферы берутся у системы
     // и сразу возвращаются; две «арены» вместо одной на каждый поток.
-    for (key, value) in [
-        ("MALLOC_MMAP_THRESHOLD_", "131072"),
-        ("MALLOC_ARENA_MAX", "2"),
-    ] {
-        if std::env::var_os(key).is_none() {
-            cmd.env(key, value);
-        }
+    // Only when the user set neither: then the mark lets the service take
+    // them out of the programs it starts (`without_service_env`).
+    use mimshel_apps::launch::{SERVICE_ENV, SERVICE_ENV_MARK};
+    if SERVICE_ENV
+        .iter()
+        .all(|(key, _)| std::env::var_os(key).is_none())
+    {
+        cmd.envs(SERVICE_ENV).env(SERVICE_ENV_MARK, "1");
     }
     // Всё, что служба пишет (и сообщение о панике), — в журнал.
     if let Some(file) = log_file() {

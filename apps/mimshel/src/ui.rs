@@ -193,6 +193,7 @@ pub fn spawn_detached(mut cmd: Command) -> std::io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
+    mimshel_apps::launch::without_service_env(&mut cmd);
     let mut child = cmd.spawn()?;
     std::thread::spawn(move || child.wait());
     Ok(())

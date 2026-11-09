@@ -8,6 +8,28 @@ use std::process::{Command, Stdio};
 
 use crate::App;
 
+/// Allocator settings the guard gives the service (they keep its memory
+/// small after big pictures) and the mark that it was the guard who set
+/// them. They are meant for the service alone: a browser or Houdini started
+/// from the dock must not run with two malloc arenas because of us.
+pub const SERVICE_ENV: [(&str, &str); 2] = [
+    ("MALLOC_MMAP_THRESHOLD_", "131072"),
+    ("MALLOC_ARENA_MAX", "2"),
+];
+pub const SERVICE_ENV_MARK: &str = "MIMSHEL_SERVICE_ENV";
+
+/// Take the service's own allocator settings out of a program's
+/// environment. Values the user set themselves (no mark) are left alone.
+pub fn without_service_env(cmd: &mut Command) {
+    if std::env::var_os(SERVICE_ENV_MARK).is_none() {
+        return;
+    }
+    for (key, _) in SERVICE_ENV {
+        cmd.env_remove(key);
+    }
+    cmd.env_remove(SERVICE_ENV_MARK);
+}
+
 impl App {
     /// Запускает программу и возвращает номер её процесса. `terminal` — команда
     /// терминала, после которой идёт запускаемая программа (`xfce4-terminal -x`);
@@ -35,6 +57,7 @@ impl App {
         if let Some(dir) = self.working_dir.as_ref().filter(|d| d.is_dir()) {
             cmd.current_dir(dir);
         }
+        without_service_env(&mut cmd);
         if dgpu && crate::gpu::offload_available() {
             cmd.envs(crate::gpu::OFFLOAD_ENV);
         }
