@@ -6,10 +6,10 @@ targets = ["x86_64-unknown-linux-gnu"]
 [advisories]
 # Every ignore needs a reason; remove it as soon as the dependency is gone.
 ignore = [
-    # Smithay 0.7.0 (the phase 0 baseline) uses cgmath for GLES matrices.
+    # Smithay (pinned by git rev in apps/mimshel-compositor) uses cgmath for GLES matrices.
     # This is an unmaintained notice, with no safe upgrade; remove when Smithay
     # replaces cgmath. No vulnerability is reported by this advisory.
-    { id = "RUSTSEC-2026-0196", reason = "cgmath unmaintained; required by pinned Smithay 0.7.0" },
+    { id = "RUSTSEC-2026-0196", reason = "cgmath unmaintained; required by the pinned Smithay" },
     # `users`, via pam 0.8. Its code runs from pam's open_session /
     # initialize_environment; the lock screen only authenticates and never
     # opens a PAM session. Replace the pam binding (security audit, 2026-10-25).

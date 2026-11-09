@@ -5,7 +5,9 @@ macOS-Sonoma-style desktop shell for Linux on **X11**, written in Rust as **one 
 with one config file**. It draws the menu bar, the dock, the desktop, the file manager,
 the Search and Apps windows, notifications, the Control Center, the lock screen and its
 own terminal. Windows are managed by **xfwm4** (Xfce). Repository:
-`github.com/ded-achtung/Mimshel`, working branch `master`.
+`github.com/ded-achtung/Mimshel`, working branch `master`; the Wayland work
+(the platform boundary and the compositor) lives on `platform/boundary` until
+the maintainer asks to merge it.
 
 The detailed step-by-step history up to 2026-10-28 (in Russian) is in git:
 `git show cc6794d:CLAUDE.md`. This file keeps what is still true and needed.

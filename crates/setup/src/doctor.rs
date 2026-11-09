@@ -562,7 +562,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             "mimshel",
             "программа mimshel установлена",
             paths.shell_bin.exists(),
-            "cd ~/shell && cargo build --release && install -m 755 target/release/mimshel ~/.local/bin/",
+            "в папке проекта: cargo build --release && install -m 755 target/release/mimshel ~/.local/bin/",
         );
         add(
             "mimshel",

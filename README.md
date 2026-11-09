@@ -14,7 +14,7 @@
 single program with a single config file. It draws the menu bar, the dock, the
 desktop, the file manager, the Search and Apps windows, notifications, the
 Control Center, the lock screen and its own terminal. Windows are managed by
-xfwm4 from Xfce. Wayland is not supported.
+xfwm4 from Xfce. Wayland is not supported yet (see Status).
 
 The name comes from Saturn's moon Mimas, its Herschel crater, and the word *shell*.
 
@@ -62,8 +62,9 @@ CPU when idle.
 ## Status
 
 Alpha. It is used daily on a real laptop (EndeavourOS, Xfce, X11), but expect
-rough edges. Wayland is not planned: the target programs (Houdini and others) run
-on X11.
+rough edges. It runs on X11, where the target programs (Houdini and others) run.
+Wayland is being worked on — an own compositor with XWayland, not usable yet:
+the plan and its state are in `docs/wayland-plan.md` and `docs/compositor.md`.
 
 **Security notes.**
 - The lock screen protects an unattended session from people at the keyboard. It
