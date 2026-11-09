@@ -212,30 +212,49 @@ pub fn trusted_launcher(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Свободное имя в папке `dir`: `имя`, `имя 2`, `имя 3`… (у файла — перед
-/// расширением: `фото 2.jpg`).
-/// Свободное имя с учётом уже назначенных имён в пакетной операции.
-/// Проверяем и битые символьные ссылки: Path::exists их пропускает.
+/// A free name in `dir`: `name`, `name 2`, `name 3`… (for a file the number
+/// goes before the extension: `photo 2.jpg`). `reserved` holds names already
+/// given out in the same batch. Broken symlinks count as taken
+/// (`Path::exists` would miss them).
+///
+/// When the folder cannot be asked at all (not a directory, no permission,
+/// a dead mount, a name too long) no name can be called free or taken: the
+/// candidate is returned as it is and the file operation itself reports the
+/// real error. Looking further would never end — on the main thread that
+/// froze the whole shell.
 pub fn free_name_reserved(dir: &Path, name: &str, reserved: &HashSet<PathBuf>) -> PathBuf {
-    let available = |p: &Path| {
-        !reserved.contains(p)
-            && matches!(
-                std::fs::symlink_metadata(p),
-                Err(ref e) if e.kind() == std::io::ErrorKind::NotFound
-            )
+    /// More copies of one name than anyone makes; only a bound for the loop.
+    const TRIES: u32 = 10_000;
+    enum Name {
+        Free,
+        Taken,
+        Unknown,
+    }
+    let look = |p: &Path| {
+        if reserved.contains(p) {
+            return Name::Taken;
+        }
+        match std::fs::symlink_metadata(p) {
+            Ok(_) => Name::Taken,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Name::Free,
+            Err(_) => Name::Unknown,
+        }
     };
     let first = dir.join(name);
-    if available(&first) {
+    if !matches!(look(&first), Name::Taken) {
         return first;
     }
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
         _ => (name, String::new()),
     };
-    (2..)
-        .map(|n| dir.join(format!("{stem} {n}{ext}")))
-        .find(|p| available(p))
-        .expect("свободное имя найдётся")
+    for n in 2..TRIES {
+        let next = dir.join(format!("{stem} {n}{ext}"));
+        if !matches!(look(&next), Name::Taken) {
+            return next;
+        }
+    }
+    first
 }
 
 pub fn free_name(dir: &Path, name: &str) -> PathBuf {
@@ -351,6 +370,14 @@ mod tests {
 
         symlink(dir.join("нет-файла"), dir.join("битая ссылка")).unwrap();
         assert_eq!(free_name(&dir, "битая ссылка"), dir.join("битая ссылка 2"));
+        // A place that cannot be asked (a file where a folder is expected,
+        // a name too long for the disk): the search ends at once and the
+        // operation itself will report the error.
+        let not_a_folder = dir.join("заметка.txt");
+        assert_eq!(free_name(&not_a_folder, "a"), not_a_folder.join("a"));
+        let long = "я".repeat(127);
+        std::fs::write(dir.join(&long), "").unwrap();
+        assert_eq!(free_name(&dir, &long), dir.join(format!("{long} 2")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

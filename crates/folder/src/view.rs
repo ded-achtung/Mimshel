@@ -633,7 +633,13 @@ impl FolderView {
     /// Место в боковой панели под точкой (бросить файлы туда).
     pub fn place_at(&self, x: f32, y: f32) -> Option<&Path> {
         match self.hit(x, y) {
-            Hit::Place(n) => self.places.get(n).map(|p| p.path.as_path()),
+            // A place that is not mounted yet has a device, not a folder,
+            // for its path: nothing can be dropped there.
+            Hit::Place(n) => self
+                .places
+                .get(n)
+                .filter(|p| p.removable || p.remote.is_none())
+                .map(|p| p.path.as_path()),
             _ => None,
         }
     }
