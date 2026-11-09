@@ -369,7 +369,15 @@ impl FolderView {
 
     /// Видны файлы, в имени которых есть текст поиска (без учёта регистра).
     fn apply_search(&mut self) {
-        let keep = self.selected_paths();
+        // By path, in a set: with a plain list this was files × selected
+        // comparisons on every refresh — a stall in a big folder after Ctrl+A.
+        let keep: std::collections::HashSet<PathBuf> = self.selected_paths().into_iter().collect();
+        // The Shift anchor follows its file; a number kept from the old
+        // list pointed at another file or past the end of the new one.
+        let anchor = self
+            .anchor
+            .and_then(|i| self.items.get(i))
+            .map(|i| i.path.clone());
         let needle = self.search.to_lowercase();
         self.items = self
             .all
@@ -380,6 +388,7 @@ impl FolderView {
         self.selected = (0..self.items.len())
             .filter(|&i| keep.contains(&self.items[i].path))
             .collect();
+        self.anchor = anchor.and_then(|a| self.items.iter().position(|i| i.path == a));
         self.scroll = self.scroll.min(self.max_scroll());
     }
 
@@ -872,7 +881,7 @@ impl FolderView {
                 Action::Redraw
             }
             Hit::Item(i) if shift => {
-                let from = self.anchor.unwrap_or(i);
+                let from = self.anchor.filter(|&a| a < self.items.len()).unwrap_or(i);
                 self.set_selection((from.min(i)..=from.max(i)).collect());
                 self.last_click = None;
                 Action::Redraw
@@ -1057,7 +1066,10 @@ impl FolderView {
             Key::Return => self.open_selected(),
             Key::BackSpace => self.go_back(),
             Key::F2 => match self.selected[..] {
-                [i] => Action::Rename(self.items[i].path.clone()),
+                [i] => match self.items.get(i) {
+                    Some(item) => Action::Rename(item.path.clone()),
+                    None => Action::Nothing,
+                },
                 _ => Action::Nothing,
             },
             Key::Delete if !self.selected.is_empty() => Action::Trash(self.selected_paths()),
@@ -1770,6 +1782,30 @@ mod tests {
         items.extend((1..n).map(|k| item(&format!("файл{k}.txt"), Kind::File)));
         v.set_items(items);
         v
+    }
+
+    /// The reviewer's steps: an anchor on the 3rd file, a search that
+    /// leaves two, Shift-click, Ctrl-click, F2 — an index past the end.
+    #[test]
+    fn a_shorter_list_keeps_selection_and_anchor_in_range() {
+        let mut v = view(5);
+        let (x, y) = center(&v, 3);
+        v.press(x, y, 1, false, false);
+        assert_eq!(v.anchor, Some(3));
+        // The anchor's file stays in the list: it moves with it.
+        v.search = "файл3".into();
+        v.apply_search();
+        assert_eq!((v.items.len(), v.anchor), (1, Some(0)));
+        // The anchor's file is filtered out: no anchor, nothing past the end.
+        v.search = "файл1".into();
+        v.apply_search();
+        assert_eq!(v.anchor, None);
+        let (x, y) = center(&v, 0);
+        v.press(x, y, 1, false, true);
+        assert!(v.selected.iter().all(|&i| i < v.items.len()));
+        // A selection number that is stale all the same must not panic.
+        v.selected = vec![7];
+        assert_eq!(v.key(KeyPress::plain(Key::F2)), Action::Nothing);
     }
 
     #[test]

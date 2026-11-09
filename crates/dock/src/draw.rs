@@ -126,7 +126,9 @@ impl Dock {
             let name = &self.items[s.item].name;
             let (bw, bh) = tip_size(fonts, name);
             let bx = (s.center() - bw / 2.0)
-                .clamp(4.0, self.screen_w - bw - 4.0)
+                // A label wider than a narrow screen: `clamp` panics on
+                // min > max, and a panic here ends the service.
+                .clamp(4.0, (self.screen_w - bw - 4.0).max(4.0))
                 .round();
             let by = (icon_top - bh - 10.0).max(0.0).round();
             tip(&mut pm, fonts, name, bx, by);
