@@ -17,9 +17,23 @@ pub fn socket_path() -> io::Result<std::path::PathBuf> {
     runtime_socket(
         runtime.as_deref(),
         &std::path::PathBuf::from(format!("/run/user/{uid}")),
-        &std::path::PathBuf::from(format!("/tmp/mimshel-runtime-{uid}")),
+        // The last resort is in the home folder, not in /tmp: there another
+        // user could make a folder of that name first, and the service
+        // would refuse to start five times and give up.
+        &fallback_dir(),
         uid,
     )
+}
+
+fn fallback_dir() -> std::path::PathBuf {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"));
+    mimshel_core::names::dir_in(&state).join("runtime")
 }
 
 fn runtime_socket(
@@ -34,7 +48,11 @@ fn runtime_socket(
     } else if standard.try_exists()? {
         standard
     } else {
-        match std::fs::DirBuilder::new().mode(0o700).create(fallback) {
+        match std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(fallback)
+        {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e),

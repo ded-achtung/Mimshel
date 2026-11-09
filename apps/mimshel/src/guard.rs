@@ -258,7 +258,15 @@ pub fn log_path() -> Option<PathBuf> {
 
 fn log_file() -> Option<File> {
     let path = log_path()?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
+    let dir = path.parent()?;
+    std::fs::create_dir_all(dir).ok()?;
+    // Logs and crash reports hold window titles, file names and PAM's
+    // messages: the folder is the user's alone (a home folder open to
+    // others, as on Debian, would let them read it).
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     rotate_if_big(&path);
     // Always append: the running service writes through its own copy of
     // this handle, and with O_APPEND its writes land at the end even after
@@ -269,6 +277,11 @@ fn log_file() -> Option<File> {
 /// Keep the log under [`LOG_LIMIT`]: the old text goes to `daemon.log.1`
 /// and the file is emptied in place (the service keeps writing to it).
 fn rotate_if_big(path: &Path) {
+    // One at a time: the minute timer and every guard message come here
+    // from two threads, and the second one copied the file the first had
+    // just emptied over the kept log.
+    static ROTATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ROTATING.lock().unwrap_or_else(|p| p.into_inner());
     if std::fs::metadata(path).is_ok_and(|m| m.len() > LOG_LIMIT) {
         let _ = std::fs::copy(path, path.with_extension("log.1"));
         if let Ok(f) = OpenOptions::new().write(true).open(path) {
