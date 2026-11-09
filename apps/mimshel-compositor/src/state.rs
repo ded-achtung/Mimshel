@@ -132,7 +132,18 @@ impl State {
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(&dh, "mimshel");
         let settings = crate::keyboard::Settings::read();
-        let keyboard = seat.add_keyboard(settings.config(), 600, 25)?;
+        // Layout names come from the user's settings; one xkbcommon cannot
+        // compile must not keep the session from starting: plain `us` then.
+        let keyboard = match seat.add_keyboard(settings.config(), 600, 25) {
+            Ok(keyboard) => keyboard,
+            Err(error) => {
+                eprintln!(
+                    "keyboard layout «{}» not usable ({error}); falling back to us",
+                    settings.layout
+                );
+                seat.add_keyboard(Default::default(), 600, 25)?
+            }
+        };
         let pointer_handle = seat.add_pointer();
         Ok(Self {
             model: crate::model::Model::new(1280, 800),

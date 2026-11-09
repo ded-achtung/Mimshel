@@ -179,6 +179,10 @@ impl State {
         if let Some(id) = self.x11_id(x11) {
             if let Some(record) = self.model.windows.iter_mut().find(|w| w.id == id) {
                 record.x11_title = x11.title();
+                // A program that draws its own frame (Steam, Chrome,
+                // Telegram say so through the Motif hints) gets no second
+                // title bar from us.
+                record.decorated = !x11.is_decorated();
                 record.min_size = x11.min_size().map_or((1, 1), |s| (s.w, s.h));
                 record.max_size = x11.max_size().map_or((0, 0), |s| (s.w, s.h));
                 if record.mode != Mode::Fullscreen {

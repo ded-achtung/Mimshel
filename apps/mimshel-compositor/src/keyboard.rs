@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 #[derive(Default)]
 pub(crate) struct Settings {
-    layout: String,
+    pub(crate) layout: String,
     variant: String,
     options: String,
 }

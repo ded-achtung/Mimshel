@@ -92,8 +92,25 @@ impl Server {
         let listener_token = events.handle().insert_source(
             Generic::new(socket, Interest::READ, PollMode::Level),
             move |_, socket, _| {
-                while let Some(stream) = socket.accept()? {
-                    dh.insert_client(stream, Arc::new(ClientState::default()))?;
+                // An error here must not leave the event loop, which would
+                // end the session for every client: a program leaking
+                // connections until the file descriptors run out is its own
+                // problem, not everybody's.
+                loop {
+                    match socket.accept() {
+                        Ok(Some(stream)) => {
+                            if let Err(error) =
+                                dh.insert_client(stream, Arc::new(ClientState::default()))
+                            {
+                                eprintln!("client not accepted: {error}");
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(error) => {
+                            eprintln!("accepting a client: {error}");
+                            break;
+                        }
+                    }
                 }
                 Ok(PostAction::Continue)
             },
