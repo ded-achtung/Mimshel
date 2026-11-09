@@ -251,7 +251,9 @@ pub fn sys_battery(bats: &[SysBattery], on_ac: Option<bool>) -> Option<Battery> 
         let caps: Vec<u64> = present.iter().filter_map(|b| b.capacity).collect();
         (caps.iter().sum::<u64>() / (caps.len() as u64).max(1)).min(100)
     });
-    let percent = u32::try_from(percent).unwrap_or(100);
+    // A battery may report a little more than «full»: never above 100
+    // (there is no icon for it either).
+    let percent = u32::try_from(percent).unwrap_or(100).min(100);
     let any = |s: &str| present.iter().any(|b| b.status == s);
     let full_now = present.iter().all(|b| b.status == "Full");
     // Питание отключили — разряд, даже если аккумулятор ещё с полсекунды

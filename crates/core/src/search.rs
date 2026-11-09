@@ -155,9 +155,12 @@ fn score_one(q: &str, p: &Prepared) -> Option<u32> {
             .chain(&p.others)
             .map(String::as_str)
     };
-    if q_words
-        .iter()
-        .all(|qw| everywhere().any(|f| words(f).any(|w| w.starts_with(qw))))
+    // `all` of nothing is true: a query of punctuation alone («.», «-»)
+    // has no words and would match every program.
+    if !q_words.is_empty()
+        && q_words
+            .iter()
+            .all(|qw| everywhere().any(|f| words(f).any(|w| w.starts_with(qw))))
     {
         return Some(300);
     }
@@ -180,9 +183,10 @@ fn score_name(q: &str, q_words: &[&str], name: &str, ini: &str) -> Option<u32> {
     if words(name).any(|w| w.starts_with(q)) {
         return Some(800);
     }
-    if q_words
-        .iter()
-        .all(|qw| words(name).any(|w| w.starts_with(qw)))
+    if !q_words.is_empty()
+        && q_words
+            .iter()
+            .all(|qw| words(name).any(|w| w.starts_with(qw)))
     {
         return Some(700);
     }
@@ -258,6 +262,10 @@ mod tests {
         assert_eq!(s("fox", "Firefox"), Some(500));
         assert_eq!(s("x", "Firefox"), None);
         assert_eq!(s("chrome", "Firefox"), None);
+        // Punctuation alone has no words: it matches nothing, not everything.
+        assert_eq!(s(".", "Firefox"), None);
+        assert_eq!(s("-", "Firefox"), None);
+        assert_eq!(Query::new("+").score(&firefox()), None);
     }
 
     #[test]
