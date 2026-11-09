@@ -200,7 +200,14 @@ impl Display {
     /// primary one changed leave the root size as it was, so without them
     /// nothing would move. They arrive as `Event::Configure` of the root.
     pub fn watch_root(&self) -> Result<()> {
-        let mask = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
+        // Added to what we already listen for (lessons 11 and 16): setting
+        // the mask anew would drop the new-window events asked for earlier.
+        let mine = self
+            .conn
+            .get_window_attributes(self.root)?
+            .reply()?
+            .your_event_mask;
+        let mask = mine | EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
         self.conn.change_window_attributes(
             self.root,
             &ChangeWindowAttributesAux::new().event_mask(mask),

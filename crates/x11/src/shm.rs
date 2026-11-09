@@ -8,7 +8,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -178,6 +178,9 @@ fn temp_file() -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create_new(true)
+        // Window pictures and screenshots pass through it: nobody else may
+        // open it in the instant before the name is removed.
+        .mode(0o600)
         .open(&path)?;
     std::fs::remove_file(&path)?;
     Ok(file)

@@ -315,7 +315,9 @@ impl Display {
 
     /// Снимок всего экрана (как он виден сейчас, с окнами).
     pub fn capture_screen(&self) -> Result<Pixmap> {
-        let (w, h) = self.screen_size();
+        // In pixels: `screen_size` is in points, and at a scale above 1 the
+        // shot was only the top-left part of the screen, then stretched.
+        let (w, h) = self.screen_pixels();
         let mut data = match self.shm_get(self.root, w, h) {
             Some(Some(data)) => data,
             Some(None) => return Err("снимок экрана не получился".into()),
