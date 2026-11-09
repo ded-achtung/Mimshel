@@ -408,6 +408,14 @@ pub fn announce_locked() -> Option<Held> {
     None
 }
 
+/// Wait until a lock screen covers this display, at most `limit`; whether
+/// it does. For `mimshel lock`, which answers only then.
+pub fn wait_locked(limit: Duration) -> bool {
+    // Without a folder for the lock files nothing can be asked: the guard
+    // locks all the same, so do not call it a failure.
+    lock_dir().is_none_or(|dir| wait_held_in(&dir, &locked_name(), limit))
+}
+
 /// Wait until a lock screen has announced itself, at most `limit`.
 fn wait_until_locked(limit: Duration) -> bool {
     let shown = lock_dir().is_some_and(|dir| wait_held_in(&dir, &locked_name(), limit));

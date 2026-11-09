@@ -182,12 +182,21 @@ fn main() {
             // Меню и xflock4 ждут, пока команда вернётся: сторож уходит в фон.
             let exe = guard::own_exe();
             let exe = exe.to_string_lossy();
-            let _ = std::process::Command::new("setsid")
+            let started = std::process::Command::new("setsid")
                 .args(["-f", &exe, "lock", "--nofork"])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status();
+                .status()
+                .is_ok_and(|s| s.success());
+            // «Locked» is said only when it is true: the command used to
+            // end with success whatever happened, also when no guard could
+            // be started. Whoever asked (xflock4, the menu) learns from the
+            // exit code that the screen is not covered.
+            if !started || !mimshel_setup::lock::wait_locked(std::time::Duration::from_secs(4)) {
+                eprintln!("Экран не заблокирован: экран блокировки не показался");
+                std::process::exit(1);
+            }
         }
         Some("lock") if args.len() == 2 && args[1] == "--nofork" => {
             std::process::exit(mimshel_setup::lock::supervise(&guard::own_exe()))
