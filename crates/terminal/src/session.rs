@@ -80,6 +80,20 @@ pub struct Session {
     shell_pid: u32,
 }
 
+/// Closing a tab ends its shell. The terminal library hangs up the shell
+/// only when its reading thread ends, and that thread ends on `Shutdown`,
+/// not when the last sender is dropped: without this a closed tab's shell
+/// (and the `ssh` or `rsync` in it) kept running unseen until the window
+/// was closed.
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self
+            .notifier
+            .0
+            .send(alacritty_terminal::event_loop::Msg::Shutdown);
+    }
+}
+
 impl Session {
     /// Start the user's shell (or `command` — program and arguments) in a
     /// `cols`×`rows` grid of `cell`-pixel cells, in folder `dir`.
@@ -524,6 +538,32 @@ mod tests {
     }
 
     /// Setting off: the OSC 52 request reaches the session but never
+    #[test]
+    fn dropping_a_session_ends_its_shell() {
+        let s = Session::spawn(
+            (40, 5),
+            (8, 18),
+            None,
+            Some(vec!["sleep".into(), "600".into()]),
+            Palette::default(),
+            Osc52::Off,
+            || {},
+        )
+        .unwrap();
+        let proc = format!("/proc/{}", s.shell_pid);
+        assert!(std::path::Path::new(&proc).exists());
+        // Let the reading thread go quiet first, as behind an idle prompt:
+        // only then does it depend on being told to stop.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(s);
+        let gone = (0..300).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            // Gone, or a zombie waiting for the library's reaper.
+            std::fs::read_to_string(format!("{proc}/stat")).map_or(true, |t| t.contains(") Z "))
+        });
+        assert!(gone, "the shell outlived its tab");
+    }
+
     /// becomes a clipboard copy.
     #[test]
     fn osc52_off_ignores_clipboard_store() {
