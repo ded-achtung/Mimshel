@@ -58,11 +58,23 @@ pub fn make(label: &str) -> std::io::Result<PathBuf> {
     let plank = output_any(&["dconf", "dump", "/net/launchpad/plank/"]);
     std::fs::write(dest.join("plank.dconf"), plank)?;
     copy_tree(&home().join(".config/plank"), &dest.join("plank-config"))?;
-    let shell_config = mimshel_core::names::dir_in(&home().join(".config")).join("config.toml");
+    let shell_config = mimshel_core::config::path().unwrap_or_else(|| {
+        mimshel_core::names::dir_in(&home().join(".config")).join("config.toml")
+    });
     if shell_config.exists() {
         std::fs::copy(&shell_config, dest.join("shell-config.toml"))?;
     }
     std::fs::create_dir_all(dest.join("had"))?;
+    // Single files `apply` rewrites: the default programs (it makes our
+    // file manager the one for folders) and the default cursor theme.
+    std::fs::create_dir_all(dest.join("files"))?;
+    for (name, path) in kept_files() {
+        let had = path.is_file();
+        if had {
+            std::fs::copy(&path, dest.join("files").join(name))?;
+        }
+        std::fs::write(dest.join("had").join(name), if had { "yes" } else { "no" })?;
+    }
     for f in [
         Paths::new().autostart.join("plank.desktop"),
         home().join(".config/gtk-4.0"),
@@ -72,6 +84,18 @@ pub fn make(label: &str) -> std::io::Result<PathBuf> {
         std::fs::write(dest.join("had").join(name), if had { "yes" } else { "no" })?;
     }
     Ok(dest)
+}
+
+/// Single files kept in a copy besides the settings trees: (name in the
+/// copy, where the file lives).
+fn kept_files() -> [(&'static str, PathBuf); 2] {
+    [
+        ("mimeapps.list", home().join(".config/mimeapps.list")),
+        (
+            "cursor-index.theme",
+            home().join(".local/share/icons/default/index.theme"),
+        ),
+    ]
 }
 
 /// Копия по началу имени (`None` — самая первая).
@@ -123,6 +147,28 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
             remove_tree(&plank)?;
         }
     }
+    // Copies made before these files were kept have no mark for them: then
+    // they are left as they are.
+    for (name, path) in kept_files() {
+        match read(&src.join("had").join(name)).trim() {
+            "yes" => {
+                step(&format!("вернуть {}", path.display()));
+                if !dry {
+                    if let Some(dir) = path.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    std::fs::copy(src.join("files").join(name), &path)?;
+                }
+            }
+            "no" if path.is_file() => {
+                step(&format!("убрать {} (его не было)", path.display()));
+                if !dry {
+                    remove_file(&path)?;
+                }
+            }
+            _ => {}
+        }
+    }
     let had = |name: &str| read(&src.join("had").join(name)).trim() != "no";
     let paths = Paths::new();
     if !had("plank.desktop") {
@@ -154,7 +200,10 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
     if let Ok(text) = std::fs::read_to_string(src.join("shell-config.toml")) {
         step("вернуть файл настроек Mimshel");
         if !dry {
-            let path = mimshel_core::names::dir_in(&home().join(".config")).join("config.toml");
+            // The file every command reads (MIMSHEL_CONFIG, XDG_CONFIG_HOME).
+            let path = mimshel_core::config::path().unwrap_or_else(|| {
+                mimshel_core::names::dir_in(&home().join(".config")).join("config.toml")
+            });
             crate::sys::write_if_changed(&path, &text)?;
         }
     }
