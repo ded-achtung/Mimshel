@@ -1238,6 +1238,13 @@ pub fn automount(tx: Sender<Msg>) {
             if new.is_empty() {
                 continue;
             }
+            // Nothing is mounted behind a locked screen: a stick put into
+            // an unattended laptop must not be read by the file system
+            // drivers. It shows up under Devices, and a click connects it.
+            if mimshel_setup::lock::screen_locked() {
+                let _ = tx.send(Msg::Folder(Box::new(FolderMsg::Places)));
+                continue;
+            }
             // udisks and gvfs need a moment to see the new partitions.
             for _ in 0..3 {
                 std::thread::sleep(Duration::from_secs(1));

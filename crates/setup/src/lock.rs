@@ -385,6 +385,12 @@ fn held_in(dir: &Path, name: &str) -> bool {
     })
 }
 
+/// Whether a lock screen covers this display right now (it has announced
+/// itself and still holds its file).
+pub fn screen_locked() -> bool {
+    lock_dir().is_some_and(|dir| held_in(&dir, &locked_name()))
+}
+
 /// Called by the lock screen once its window is shown and the keyboard
 /// and pointer are ours: other guards waiting in [`supervise`] may now
 /// let the system sleep. Keep the value for as long as the screen is
