@@ -169,35 +169,50 @@ pub fn start(notify: impl Fn(TrayUpdate) + Send + 'static) -> zbus::Result<Tray>
     Ok(Tray(wake_tx))
 }
 
-/// Сигналы: значок поменялся — перечитать; программа ушла — убрать её значки.
-fn listen(conn: &Connection, items: &Mutex<Vec<(String, String)>>, changed: &Sender<Wake>) {
-    let rule = MatchRule::builder().msg_type(MessageType::Signal).build();
-    let Ok(iter) = MessageIterator::for_match_rule(rule, conn, Some(256)) else {
+/// Signals, each kind on its own narrow subscription: an item changed —
+/// read again; a program left the bus — drop its items. (One rule for
+/// «every signal» made the bus send us all the session's traffic.)
+fn listen(conn: &Connection, items: &Arc<Mutex<Vec<(String, String)>>>, changed: &Sender<Wake>) {
+    let subscribe = |rule: zbus::Result<MatchRule<'static>>| {
+        rule.and_then(|rule| MessageIterator::for_match_rule(rule, conn, Some(256)))
+    };
+    let item_signals = subscribe(
+        MatchRule::builder()
+            .msg_type(MessageType::Signal)
+            .interface(ITEM)
+            .map(|b| b.build()),
+    );
+    let name_changes = subscribe(
+        MatchRule::builder()
+            .msg_type(MessageType::Signal)
+            .sender("org.freedesktop.DBus")
+            .and_then(|b| b.interface("org.freedesktop.DBus"))
+            .and_then(|b| b.member("NameOwnerChanged"))
+            .map(|b| b.build()),
+    );
+    if let Ok(iter) = item_signals {
+        let changed = changed.clone();
+        std::thread::spawn(move || {
+            for _ in iter.flatten() {
+                if changed.send(Wake::Changed).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    let Ok(iter) = name_changes else {
         return;
     };
     for msg in iter.flatten() {
-        let header = msg.header();
-        let iface = header
-            .interface()
-            .map(|i| i.as_str().to_string())
-            .unwrap_or_default();
-        let member = header
-            .member()
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default();
-        if iface == ITEM {
-            let _ = changed.send(Wake::Changed);
-        } else if iface == "org.freedesktop.DBus" && member == "NameOwnerChanged" {
-            let Ok((name, _old, new)) = msg.body().deserialize::<(String, String, String)>() else {
-                continue;
-            };
-            if new.is_empty() {
-                let mut list = items.lock().unwrap_or_else(|p| p.into_inner());
-                let before = list.len();
-                list.retain(|(bus, _)| *bus != name);
-                if list.len() != before && changed.send(Wake::Changed).is_err() {
-                    return;
-                }
+        let Ok((name, _old, new)) = msg.body().deserialize::<(String, String, String)>() else {
+            continue;
+        };
+        if new.is_empty() {
+            let mut list = items.lock().unwrap_or_else(|p| p.into_inner());
+            let before = list.len();
+            list.retain(|(bus, _)| *bus != name);
+            if list.len() != before && changed.send(Wake::Changed).is_err() {
+                return;
             }
         }
     }
@@ -228,10 +243,25 @@ fn run(
         }
         if dirty {
             let list = items.lock().unwrap_or_else(|p| p.into_inner()).clone();
-            let now: Vec<TrayItem> = list
-                .iter()
-                .filter_map(|(bus, path)| read_item(&conn, bus, path))
-                .collect();
+            let mut now: Vec<TrayItem> = Vec::new();
+            let mut gone = Vec::new();
+            for entry in &list {
+                match read_item(&conn, &entry.0, &entry.1) {
+                    Some(item) => now.push(item),
+                    // An item that does not answer and whose name nobody
+                    // owns was never there (or left unnoticed): forget it.
+                    // Otherwise a program could fill all the places with
+                    // made-up names and no real icon could register.
+                    None if !has_owner(&conn, &entry.0) => gone.push(entry.clone()),
+                    None => {}
+                }
+            }
+            if !gone.is_empty() {
+                items
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .retain(|entry| !gone.contains(entry));
+            }
             if now != last {
                 last = now.clone();
                 notify(TrayUpdate::Items(now));
@@ -342,6 +372,22 @@ fn get_all(conn: &Connection, bus: &str, path: &str) -> Option<HashMap<String, O
     .body()
     .deserialize()
     .ok()
+}
+
+/// Whether somebody owns the bus name `name` (a unique name `:1.42` of a
+/// program that is still connected counts).
+fn has_owner(conn: &Connection, name: &str) -> bool {
+    conn.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "NameHasOwner",
+        &(name,),
+    )
+    .ok()
+    .and_then(|reply| reply.body().deserialize::<bool>().ok())
+    // No answer from the bus itself: keep the item.
+    .unwrap_or(true)
 }
 
 /// The largest tray picture taken, in pixels a side (they are drawn at
