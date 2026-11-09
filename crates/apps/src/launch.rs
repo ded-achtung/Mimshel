@@ -30,6 +30,20 @@ pub fn without_service_env(cmd: &mut Command) {
     cmd.env_remove(SERVICE_ENV_MARK);
 }
 
+/// Whether `program` can be run: a path that is an executable file, or a
+/// name found in one of the `PATH` folders.
+fn on_path(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let runs = |p: &std::path::Path| {
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return runs(std::path::Path::new(program));
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| runs(&dir.join(program))))
+}
+
 impl App {
     /// Запускает программу и возвращает номер её процесса. `terminal` — команда
     /// терминала, после которой идёт запускаемая программа (`xfce4-terminal -x`);
@@ -44,6 +58,15 @@ impl App {
         // его подставляет sh ($$) и тут же заменяет себя программой (exec):
         // номер у программы остаётся тем же. Дочерние процессы (например,
         // запущенные из Терминала) переменные наследуют, но номер не совпадёт.
+        // The program is started through `sh`, which itself always starts:
+        // a program that is not installed must be an error here, not a
+        // click after which nothing happens.
+        if !on_path(program) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("программа «{program}» не найдена"),
+            ));
+        }
         let mut cmd = Command::new("/bin/sh");
         cmd.arg("-c")
             .arg(r#"GIO_LAUNCHED_DESKTOP_FILE_PID=$$; export GIO_LAUNCHED_DESKTOP_FILE_PID; exec "$0" "$@""#)
