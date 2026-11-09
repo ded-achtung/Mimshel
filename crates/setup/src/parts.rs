@@ -540,6 +540,16 @@ impl Plan<'_> {
             println!("✘ Нет xss-lock — запустите ./install.sh в папке проекта");
             return;
         }
+        // Without a PAM service every password is refused: a screen locked
+        // by us could not be unlocked. Leave the system's own lock in place.
+        if crate::lock::pam_service().is_none() {
+            println!(
+                "✘ В системе нет службы PAM для проверки пароля (login) — блокировка Mimshel не включена"
+            );
+            self.failed
+                .push("нет службы PAM для экрана блокировки".into());
+            return;
+        }
         // Фон рисуем заранее: при блокировке он будет готов сразу.
         let (w, h) = crate::lock::screen_size();
         match crate::lock::background(&self.config.wallpaper, w, h) {

@@ -25,8 +25,6 @@ use mimshel_setup::lock::log;
 
 use crate::platform::{self, Display, Event, Key, KeyPress, Popup};
 
-/// Цепочка PAM: как у `i3lock` на Arch (его файл включает эту же).
-const PAM_SERVICE: &str = "system-local-login";
 /// Шаг громкости клавишами, как в строке меню.
 const VOLUME_STEP: &str = "5%";
 /// Сколько показывать «Неверный пароль».
@@ -490,7 +488,10 @@ fn authenticate(user: &str, password: &str, lang: Language) -> Result<(), Failur
         password,
         messages: Vec::new(),
     };
-    let mut client = match pam::Client::with_conversation(PAM_SERVICE, conv) {
+    // The service this system has (`mimshel apply lock` refuses to set the
+    // lock up without one); the Arch name as the last resort.
+    let service = mimshel_setup::lock::pam_service().unwrap_or("system-local-login");
+    let mut client = match pam::Client::with_conversation(service, conv) {
         Ok(client) => client,
         Err(e) => {
             // Не «неверный пароль», а сломалась сама проверка — в журнал.

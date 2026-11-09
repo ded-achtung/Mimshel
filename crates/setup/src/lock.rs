@@ -21,6 +21,30 @@ use crate::sys::{command, home, output, succeeds};
 pub const LOCK_SHORTCUT: &str = "<Super>l";
 pub const LOCK_SHORTCUT_COMMAND: &str = "xflock4";
 
+/// PAM services the lock screen may check the password with, best first:
+/// the local login of Arch (the one `i3lock` includes there), then `login`,
+/// which every system has. Both are whole services: they have the account
+/// step too.
+const PAM_SERVICES: [&str; 2] = ["system-local-login", "login"];
+/// Where PAM looks for a service file.
+const PAM_DIRS: [&str; 3] = ["/etc/pam.d", "/usr/lib/pam.d", "/usr/share/pam.d"];
+
+/// The PAM service for the lock screen: the first of [`PAM_SERVICES`] this
+/// system has. `None` — it has none.
+///
+/// The name used to be fixed to Arch's. Where that file does not exist
+/// (Debian, Ubuntu, Fedora) PAM falls back to `other`, which refuses
+/// everybody: the screen locked and no password could ever unlock it.
+pub fn pam_service() -> Option<&'static str> {
+    pam_service_in(&PAM_DIRS.map(Path::new))
+}
+
+fn pam_service_in(dirs: &[&Path]) -> Option<&'static str> {
+    PAM_SERVICES
+        .into_iter()
+        .find(|name| dirs.iter().any(|dir| dir.join(name).is_file()))
+}
+
 /// Размер экрана из xrandr.
 pub fn screen_size() -> (i64, i64) {
     crate::sys::output_any(&["xrandr", "--current"])
@@ -577,6 +601,20 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_millis(100));
         screen.join().unwrap();
         assert!(!held_in(&dir, name), "free again once the screen is gone");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pam_service_is_one_the_system_has() {
+        let dir = lock_folder("pam");
+        assert_eq!(pam_service_in(&[&dir]), None);
+        std::fs::write(dir.join("login"), "").unwrap();
+        assert_eq!(
+            pam_service_in(&[Path::new("/nonexistent"), &dir]),
+            Some("login")
+        );
+        std::fs::write(dir.join("system-local-login"), "").unwrap();
+        assert_eq!(pam_service_in(&[&dir]), Some("system-local-login"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

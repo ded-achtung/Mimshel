@@ -473,6 +473,12 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
             == Some(crate::lock::LOCK_SHORTCUT_COMMAND),
         "mimshel apply lock",
     );
+    add(
+        "lock",
+        "служба PAM для проверки пароля на экране блокировки",
+        crate::lock::pam_service().is_some(),
+        "нет /etc/pam.d/login — поставьте пакет входа в систему (util-linux, login)",
+    );
     let xss = pgrep("^xss-lock(\\s|$)");
     add(
         "lock",
