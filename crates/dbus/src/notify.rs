@@ -302,7 +302,11 @@ impl Server {
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
     ) -> u32 {
-        let id = if replaces_id != 0 {
+        // A number we have handed out replaces that notification — from any
+        // sender: `notify-send -r` runs as a new program each time. A number
+        // never handed out gets a fresh one, or a later, unrelated
+        // notification would arrive under it and replace this one.
+        let id = if replaces_id != 0 && replaces_id < self.next_id.load(Ordering::Relaxed) {
             replaces_id
         } else {
             self.next_id.fetch_add(1, Ordering::Relaxed)
