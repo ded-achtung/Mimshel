@@ -42,6 +42,18 @@ pub struct NotifyUi {
     top: u32,
     tx: Sender<Msg>,
     language: mimshel_core::i18n::Language,
+    /// The moment a sleeping waker thread will send `Msg::Tick`, if one is
+    /// on its way.
+    waker: std::cell::Cell<Option<Instant>>,
+}
+
+/// Whether a new waker thread is needed to wake the service at `at`: not
+/// while one already sleeping wakes it no later. Every arrival, every pointer
+/// leave and every tick used to start its own thread, each asleep until the
+/// nearest expiry — a program updating one long-lived notification piled
+/// them up by the thousand until no thread could be made (a panic).
+fn needs_waker(sleeping: Option<Instant>, at: Instant, now: Instant) -> bool {
+    !sleeping.is_some_and(|wakes| wakes > now && wakes <= at)
 }
 
 impl NotifyUi {
@@ -72,6 +84,7 @@ impl NotifyUi {
             top,
             tx,
             language: mimshel_core::i18n::Language::Auto,
+            waker: std::cell::Cell::new(None),
         })
     }
 
@@ -228,7 +241,11 @@ impl NotifyUi {
 
     /// Время вышло — убрать баннеры.
     pub fn tick(&mut self) {
-        let gone = self.banners.expire(Instant::now());
+        let now = Instant::now();
+        if self.waker.get().is_some_and(|wakes| wakes <= now) {
+            self.waker.set(None);
+        }
+        let gone = self.banners.expire(now);
         if gone.is_empty() {
             return;
         }
@@ -246,11 +263,15 @@ impl NotifyUi {
         let Some(at) = self.banners.next_expiry() else {
             return;
         };
+        let now = Instant::now();
+        let wakes = at.max(now) + Duration::from_millis(20);
+        if !needs_waker(self.waker.get(), wakes, now) {
+            return;
+        }
+        self.waker.set(Some(wakes));
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(
-                at.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
-            );
+            std::thread::sleep(wakes.saturating_duration_since(Instant::now()));
             let _ = tx.send(Msg::Tick);
         });
     }
@@ -399,5 +420,25 @@ impl NotifyUi {
         self.shown = true;
         self.popup.present(d, &self.banners.render(fonts))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_waker_for_many_events() {
+        let now = Instant::now();
+        let s = Duration::from_secs;
+        // Nobody sleeping: start one.
+        assert!(needs_waker(None, now + s(5), now));
+        // One wakes at that moment or earlier (it re-arms on its tick).
+        assert!(!needs_waker(Some(now + s(5)), now + s(5), now));
+        assert!(!needs_waker(Some(now + s(2)), now + s(5), now));
+        // A banner that leaves sooner than the sleeper wakes: another one.
+        assert!(needs_waker(Some(now + s(60)), now + s(5), now));
+        // The sleeper has already fired.
+        assert!(needs_waker(Some(now - s(1)), now + s(5), now));
     }
 }
