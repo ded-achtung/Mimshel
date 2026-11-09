@@ -34,7 +34,7 @@ const PAM_SHOW: Duration = Duration::from_secs(8);
 /// Как часто проверять, что захват клавиатуры ещё наш.
 const REGRAB: Duration = Duration::from_secs(2);
 /// Предел длины пароля (точки всё равно влезают не все).
-const MAX_PASSWORD: usize = 128;
+const MAX_PASSWORD: usize = 512;
 /// Шаг ожидания событий: по нему же обновляем часы и следим за захватом.
 const TICK: Duration = Duration::from_millis(400);
 

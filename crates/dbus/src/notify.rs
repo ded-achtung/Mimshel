@@ -370,19 +370,39 @@ fn image_from(v: OwnedValue) -> Option<Image> {
     })
 }
 
-/// Текст без разметки: `<b>`, `<i>`, `<a href…>` убираются, `&amp;` и
-/// прочие — заменяются знаками.
+/// Whether `inside` (the text between `<` and `>`) is one of the tags
+/// notifications use, opening or closing, with or without attributes.
+fn is_tag(inside: &str) -> bool {
+    const TAGS: [&str; 12] = [
+        "b", "i", "u", "a", "img", "br", "tt", "s", "span", "big", "small", "sub",
+    ];
+    let name = inside
+        .trim_start_matches('/')
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .next()
+        .unwrap_or("");
+    TAGS.iter().any(|t| t.eq_ignore_ascii_case(name))
+}
+
+/// Text without markup: `<b>`, `<i>`, `<a href…>` are removed, `&amp;` and
+/// the like become their characters. Only a known tag is removed
+/// ([`is_tag`]). A bare `<` is text: «disk
+/// usage < 5 % left» used to lose everything after the sign.
 pub fn strip_markup(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for c in s.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            _ if !in_tag => out.push(c),
-            _ => {}
+    let mut rest = s;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        match after.find('>').filter(|&end| is_tag(&after[..end])) {
+            Some(end) => rest = &after[end + 1..],
+            None => {
+                out.push('<');
+                rest = after;
+            }
         }
     }
+    out.push_str(rest);
     out.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
@@ -416,6 +436,10 @@ mod tests {
 
     #[test]
     fn markup_is_stripped() {
+        assert_eq!(
+            strip_markup("disk usage < 5% left, x<y and 1 > 0"),
+            "disk usage < 5% left, x<y and 1 > 0"
+        );
         assert_eq!(
             strip_markup("<b>Готово</b>: файл &lt;a&gt; &amp; <a href=\"x\">ссылка</a>"),
             "Готово: файл <a> & ссылка"

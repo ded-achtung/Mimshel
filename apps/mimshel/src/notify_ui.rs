@@ -340,7 +340,10 @@ impl NotifyUi {
         let (_, _, _, area_h) = d.primary_area();
         let max_h = area_h.saturating_sub(self.top + 2 * MARGIN + DOCK_ROOM) as f32;
         let mut center = Center::new(fonts, self.history.clone(), max_h);
+        // Both: the list inside draws the «5 min ago» labels, and it kept
+        // its Russian default whatever the interface language was.
         center.language = self.language;
+        center.list.language = self.language;
         self.center = Some(center);
         self.center_dirty = true;
     }

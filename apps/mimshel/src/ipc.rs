@@ -126,10 +126,17 @@ fn poll(listener: &UnixListener, clients: &mut Vec<Client>, tx: &Sender<Msg>) ->
     // Ограничиваем и число соединений, и работу за один проход.
     for _ in clients.len()..MAX_CLIENTS {
         match listener.accept() {
-            Ok((stream, _)) => clients.push(Client::new(stream)?),
+            Ok((stream, _)) => {
+                if let Ok(client) = Client::new(stream) {
+                    clients.push(client);
+                }
+            }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
+            // Out of file descriptors and the like passes; leaving here
+            // ended the socket for good while the service ran on, and
+            // commands then started a second service next to it.
+            Err(_) => break,
         }
     }
     clients.retain_mut(|client| client.poll(tx));
@@ -142,12 +149,22 @@ fn serve(listener: UnixListener, tx: Sender<Msg>) -> io::Result<()> {
         // В простое спим на accept, не будим службу сто раз в секунду.
         if clients.is_empty() {
             listener.set_nonblocking(false)?;
-            let (stream, _) = match listener.accept() {
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                result => result?,
-            };
-            clients.push(Client::new(stream)?);
+            let accepted = listener.accept();
             listener.set_nonblocking(true)?;
+            match accepted {
+                Ok((stream, _)) => {
+                    // A client we cannot set up is dropped, not the socket.
+                    if let Ok(client) = Client::new(stream) {
+                        clients.push(client);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                // A passing shortage (file descriptors): wait and go on.
+                Err(_) => {
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            }
         }
         poll(&listener, &mut clients, &tx)?;
         if !clients.is_empty() {
@@ -160,7 +177,10 @@ pub fn start(listener: UnixListener, tx: Sender<Msg>) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     std::thread::spawn(move || {
         if let Err(e) = serve(listener, tx) {
-            eprintln!("Ошибка сокета команд: {e}");
+            // Without the socket no command reaches the service and a
+            // second one would start beside it: end, the guard restarts us.
+            eprintln!("Ошибка сокета команд: {e} — перезапуск службы");
+            std::process::exit(1);
         }
     });
     Ok(())
