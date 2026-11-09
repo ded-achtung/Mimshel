@@ -361,7 +361,10 @@ fn watch<T: Send + 'static>(
             return;
         }
         while ping_rx.recv().is_ok() {
-            while ping_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
+            let burst = std::time::Instant::now();
+            while burst.elapsed() < mimshel_dbus::QUIET_LIMIT * 2
+                && ping_rx.recv_timeout(Duration::from_millis(100)).is_ok()
+            {}
             if tx.send(msg(read())).is_err() {
                 return;
             }

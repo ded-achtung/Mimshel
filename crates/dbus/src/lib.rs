@@ -17,6 +17,21 @@ pub mod tray;
 /// the global menu or the whole tray.
 pub const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// The longest a «wait until it is quiet» pause may last in all. Each of
+/// our watchers gathers a burst of signals before re-reading, waiting for a
+/// short silence; a program that never falls silent (an animated tray icon,
+/// Bluetooth scanning among many devices) must not hold the re-read and the
+/// user's commands back for ever.
+pub const QUIET_LIMIT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// A system bus connection whose method calls give up after `timeout`
+/// (pairing a Bluetooth device takes much longer than a property read).
+pub fn system(timeout: std::time::Duration) -> zbus::Result<zbus::blocking::Connection> {
+    zbus::blocking::connection::Builder::system()?
+        .method_timeout(timeout)
+        .build()
+}
+
 /// A session bus connection whose method calls give up after
 /// [`CALL_TIMEOUT`].
 pub fn session() -> zbus::Result<zbus::blocking::Connection> {

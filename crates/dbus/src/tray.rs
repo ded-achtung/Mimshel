@@ -220,7 +220,10 @@ fn run(
             Wake::Cmd(c) => cmds.push(c),
         };
         take(first);
-        while let Ok(w) = wake.recv_timeout(Duration::from_millis(30)) {
+        let burst = std::time::Instant::now();
+        while burst.elapsed() < crate::QUIET_LIMIT
+            && let Ok(w) = wake.recv_timeout(Duration::from_millis(30))
+        {
             take(w);
         }
         if dirty {

@@ -75,7 +75,9 @@ impl Bluetooth {
 /// Запустить. `notify` получает состояние (из потока Bluetooth) сразу и при
 /// каждом изменении.
 pub fn start(notify: impl Fn(Option<BtState>) + Send + 'static) -> zbus::Result<Bluetooth> {
-    let conn = Connection::system()?;
+    // Half a minute: connecting and pairing are slow, but a hung bluetoothd
+    // must not leave the tile dead until a restart.
+    let conn = crate::system(Duration::from_secs(30))?;
     let (tx, rx) = mpsc::channel();
     {
         let conn = conn.clone();
@@ -127,7 +129,10 @@ fn run(conn: Connection, rx: Receiver<Wake>, tx: Sender<Wake>, notify: impl Fn(O
             }
         };
         take(first, &mut busy, &mut error);
-        while let Ok(w) = rx.recv_timeout(Duration::from_millis(50)) {
+        let burst = std::time::Instant::now();
+        while burst.elapsed() < crate::QUIET_LIMIT
+            && let Ok(w) = rx.recv_timeout(Duration::from_millis(50))
+        {
             take(w, &mut busy, &mut error);
         }
         for cmd in cmds {

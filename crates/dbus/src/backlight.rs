@@ -33,7 +33,7 @@ fn worker(rx: &Receiver<(String, u32)>) {
             next = newer;
         }
         if conn.is_none() {
-            conn = Connection::system().ok();
+            conn = crate::system(crate::CALL_TIMEOUT).ok();
         }
         let Some(c) = &conn else {
             eprintln!("Яркость: нет системной шины D-Bus");
