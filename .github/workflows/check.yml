@@ -28,6 +28,16 @@ jobs:
         run: cargo test --workspace --locked
       - name: Окна на отдельном X-сервере
         run: cargo test -p mimshel-x11 --test windows --locked -- --ignored
+      # What install.sh builds and ships: the release profile (thin LTO, no
+      # overflow checks) is otherwise never compiled here.
+      - name: Сборка как у установщика
+        run: cargo build --release --locked -p mimshel
+      # The scripts run on users' machines with their settings at stake.
+      - name: Сценарии установки
+        run: |
+          bash -n install.sh tools/make-offline.sh tools/measure-service.sh packaging/third-party.sh
+          sh -n tools/nested-session.sh
+          shellcheck -S error install.sh tools/*.sh packaging/third-party.sh
 
   # Known vulnerabilities (RustSec), unmaintained crates, licenses and
   # crate sources — rules in deny.toml.
