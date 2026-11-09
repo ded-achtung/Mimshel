@@ -52,7 +52,18 @@ pub const ROOT_SCRIPT: &str = concat!(
     "MARK=$2\n",
     "CONF_SRC=$3\n",
     "shift 3\n",
-    "install -m 644 \"$WALL_SRC\" \"$WALL\"\n",
+    // The sources live in folders any program of the user can write, and
+    // they were checked before the password prompt. As root: never follow a
+    // link (it could point at /etc/shadow and end up world-readable) and
+    // never keep a mode from there (a set-uid file would become a set-uid
+    // root program).
+    "put() {\n",
+    "    [ -f \"$1\" ] && [ ! -L \"$1\" ] || { echo \"mimshel greeter: not a plain file: $1\" >&2; exit 1; }\n",
+    "    cp -P --remove-destination \"$1\" \"$2\"\n",
+    "    if [ -L \"$2\" ] || [ ! -f \"$2\" ]; then rm -f \"$2\"; echo \"mimshel greeter: not a plain file: $1\" >&2; exit 1; fi\n",
+    "    chmod 644 \"$2\"\n",
+    "}\n",
+    "put \"$WALL_SRC\" \"$WALL\"\n",
     "printf '%s\\n' \"$WALL\" >> \"$MANIFEST\"\n",
     "while [ \"$#\" -ge 2 ]; do\n",
     "    case \"$2\" in\n",
@@ -77,11 +88,19 @@ pub const ROOT_SCRIPT: &str = concat!(
     "        shift 2\n",
     "        continue\n",
     "    fi\n",
+    "    if [ -L \"$1\" ] || [ ! -d \"$1\" ]; then\n",
+    "        echo \"mimshel greeter: not a folder: $1\" >&2\n",
+    "        exit 1\n",
+    "    fi\n",
     "    rm -rf \"$2\"\n",
     // Not `cp -a`: that keeps the user as owner, and the greeter would run
-    // with files the user can change. Symlinks and modes are kept.
-    "    cp -dR --preserve=mode,timestamps \"$1\" \"$2\"\n",
-    "    chmod -R a+rX \"$2\"\n",
+    // with files the user can change. Symlinks inside are kept as links;
+    // modes are not kept (see `put`): plain 755/644, no set-uid or set-gid.
+    "    cp -dR --preserve=timestamps \"$1\" \"$2\"\n",
+    // The source was swapped for a link after the check: `chmod -R` would
+    // follow it.
+    "    if [ -L \"$2\" ] || [ ! -d \"$2\" ]; then rm -rf \"$2\"; echo \"mimshel greeter: not a folder: $1\" >&2; exit 1; fi\n",
+    "    chmod -R ug-s,o-t,u=rwX,go=rX \"$2\"\n",
     "    printf '%s\\n' \"$2\" >> \"$MANIFEST\"\n",
     "    shift 2\n",
     "done\n",
@@ -90,7 +109,7 @@ pub const ROOT_SCRIPT: &str = concat!(
     "if [ ! -f \"$ORIG\" ] && [ -f \"$CONF\" ] && ! grep -qxF \"$MARK\" \"$CONF\"; then\n",
     "    cp \"$CONF\" \"$ORIG\"\n",
     "fi\n",
-    "install -m 644 \"$CONF_SRC\" \"$CONF\"\n",
+    "put \"$CONF_SRC\" \"$CONF\"\n",
 );
 
 /// Undo step for `mimshel restore`: a constant, no arguments. Restores the
@@ -252,7 +271,8 @@ pub fn is_ours(text: &str) -> bool {
 pub fn safe_name(s: &str) -> bool {
     !s.is_empty()
         && s.chars().count() <= 128
-        && !s.contains(['/', '\0'])
+        && !s.contains('/')
+        && !s.chars().any(char::is_control)
         && s != "."
         && s != ".."
         && !s.starts_with('-')
@@ -805,7 +825,17 @@ mod tests {
 
     #[test]
     fn safe_name_accepts_and_rejects() {
-        for bad in ["", ".", "..", "-x", "--", "a/b", "a\0b", &"x".repeat(129)] {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "-x",
+            "--",
+            "a/b",
+            "a\0b",
+            "a\nb",
+            &"x".repeat(129),
+        ] {
             assert!(!safe_name(bad), "{bad:?}");
         }
         for ok in ["Colloid-Dark", "Colloid-cursors", "a b.c", &"x".repeat(128)] {
@@ -1050,6 +1080,58 @@ mod script_tests {
         let mut lines: Vec<String> = text.lines().map(String::from).collect();
         lines.sort();
         lines
+    }
+
+    /// What root copies comes from the user's folders: no link is followed
+    /// and no set-uid bit survives.
+    #[test]
+    fn script_follows_no_link_and_keeps_no_setuid() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = Root::new("hostile");
+        std::fs::create_dir_all(r.p("etc/lightdm")).unwrap();
+        let secret = r.p("secret");
+        std::fs::write(&secret, "root only").unwrap();
+        let conf_text = format!("{MARKER}\n[Greeter]\n");
+
+        // A set-uid program inside the theme: copied as a plain file.
+        let (_, mut args) = stage_files(&r, &conf_text);
+        let src = theme_src(&r, "home/.themes/Colloid-Dark");
+        std::fs::write(src.join("tool"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(src.join("tool"), std::fs::Permissions::from_mode(0o4755))
+            .unwrap();
+        let dst = r.p("usr/local/share/themes/Colloid-Dark");
+        args.push(src.display().to_string());
+        args.push(dst.display().to_string());
+        assert_ok(&r.run(&r.script(ROOT_SCRIPT), &args));
+        let mode = std::fs::metadata(dst.join("tool"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o755, "no set-uid bit: {mode:o}");
+
+        // The theme folder swapped for a link: refused, nothing made.
+        let (_, mut args) = stage_files(&r, &conf_text);
+        let link = r.p("home/.themes/Linked");
+        std::os::unix::fs::symlink(r.p("etc"), &link).unwrap();
+        let dst = r.p("usr/local/share/themes/Linked");
+        args.push(link.display().to_string());
+        args.push(dst.display().to_string());
+        let out = r.run(&r.script(ROOT_SCRIPT), &args);
+        assert!(!out.status.success());
+        assert!(std::fs::symlink_metadata(&dst).is_err());
+
+        // The staged wallpaper swapped for a link to a secret: refused.
+        let (_, args) = stage_files(&r, &conf_text);
+        let wall = PathBuf::from(&args[0]);
+        std::fs::remove_file(&wall).unwrap();
+        std::os::unix::fs::symlink(&secret, &wall).unwrap();
+        let out = r.run(&r.script(ROOT_SCRIPT), &args);
+        assert!(!out.status.success());
+        let installed = r.p("usr/local/share/backgrounds/mimshel/login.png");
+        assert_ne!(
+            std::fs::read_to_string(&installed).unwrap_or_default(),
+            "root only"
+        );
     }
 
     #[test]
