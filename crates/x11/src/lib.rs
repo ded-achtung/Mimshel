@@ -506,7 +506,12 @@ impl Display {
                 }
             }
             // Окно уничтожили снаружи (не через «закрыть») — забыть его.
-            XEvent::DestroyNotify(e) => Event::Close { window: e.window },
+            XEvent::DestroyNotify(e) => {
+                // A window destroyed before it drew (reported on the window
+                // itself once the window manager has reparented it).
+                self.forget_new_window(e.window);
+                Event::Close { window: e.window }
+            }
             XEvent::MapNotify(e) => Event::Mapped { window: e.window },
             XEvent::ClientMessage(e)
                 if e.type_ == self.atoms.WM_PROTOCOLS

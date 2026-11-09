@@ -78,7 +78,10 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
     let d = Display::connect()?;
     let (observer, _) = RustConnection::connect(None)?;
     let popup = d.create_popup("integration-popup")?;
-    for (w, h) in [(320, 200), (160, 90)] {
+    // The last size is past the 2 MB from which a picture goes through
+    // MIT-SHM: with small frames only, both runs took the plain PutImage
+    // path and the shared-memory code was never run by any test.
+    for (w, h) in [(320, 200), (160, 90), (780, 700)] {
         popup.show(&d, 10, 20, w, h)?;
         let mut frame =
             tiny_skia::Pixmap::new(u32::from(w), u32::from(h)).ok_or("пустая картинка")?;
@@ -107,6 +110,11 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
             u32::from_be_bytes(bytes)
         };
         assert_eq!(pixel & 0xffffff, 0x112233);
+        // Reading back takes the shared-memory path too (when it is on).
+        let shot = d.capture_screen()?;
+        assert_eq!((shot.width(), shot.height()), (800, 600));
+        let at = shot.pixel(15, 25).ok_or("no pixel in the screen shot")?;
+        assert_eq!((at.red(), at.green(), at.blue()), (0x11, 0x22, 0x33));
         popup.hide(&d)?;
         d.sync()?;
         assert_eq!(
@@ -119,9 +127,9 @@ fn isolated_x11_popup_and_dock() -> Result<()> {
     }
     // Виртуальный X-сервер сообщает мониторы через RandR. Если расширение
     // доступно, все возвращённые прямоугольники должны иметь размер.
-    for (_, _, w, h) in d.monitors() {
-        assert!(w > 0 && h > 0);
-    }
+    let monitors = d.monitors();
+    assert!(!monitors.is_empty(), "the screen is at least one monitor");
+    assert!(monitors.iter().all(|&(_, _, w, h)| w > 0 && h > 0));
     let dock = d.create_dock("integration-dock")?;
     dock.set_geometry(&d, 0, 0, 800, 28)?;
     dock.set_strut_top(&d, 28, 0, 799)?;

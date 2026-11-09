@@ -410,12 +410,28 @@ impl Display {
     /// from its empty start, it drew — forget it, return it.
     pub(crate) fn damaged(&self, damage: u32) -> Option<Window> {
         use x11rb::protocol::damage::ConnectionExt as _;
-        let (window, samples) = {
+        let (window, samples, since) = {
             let undrawn = self.undrawn.lock().unwrap_or_else(|p| p.into_inner());
             undrawn
                 .iter()
-                .find_map(|(w, u)| (u.damage == damage).then(|| (*w, u.samples.clone())))?
+                .find_map(|(w, u)| (u.damage == damage).then(|| (*w, u.samples.clone(), u.since)))?
         };
+        // Waited long enough: stop watching. The time limit used to be
+        // looked at only for windows over the dock; one elsewhere that
+        // stays transparent at the sample points (an overlay, a HUD) was
+        // read back from the server on every change it made, for as long
+        // as it lived.
+        if since.elapsed() > NEW_WINDOW_DRAW_WAIT {
+            if let Some(u) = self
+                .undrawn
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&window)
+            {
+                self.destroy_damage(u.damage);
+            }
+            return None;
+        }
         // Report the next change too.
         let _ = self.conn.damage_subtract(damage, 0u32, 0u32);
         if samples.is_empty() {

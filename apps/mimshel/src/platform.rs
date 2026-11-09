@@ -817,8 +817,8 @@ impl ServerWatch {
 
 #[cfg(test)]
 mod tests {
-    /// Only this file reaches the X11 backend; every other file of the
-    /// program goes through the door.
+    /// Only this file reaches a backend, X11 or Wayland; every other file of
+    /// the program goes through the door.
     #[test]
     fn only_the_door_names_the_backend() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -827,16 +827,19 @@ mod tests {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "rs")
                 && path.file_name().is_some_and(|n| n != "platform.rs")
-                && std::fs::read_to_string(&path)
-                    .unwrap()
-                    .contains("mimshel_x11")
             {
-                offenders.push(path);
+                let text = std::fs::read_to_string(&path).unwrap();
+                if ["mimshel_x11", "mimshel_wayland"]
+                    .iter()
+                    .any(|backend| text.contains(backend))
+                {
+                    offenders.push(path);
+                }
             }
         }
         assert!(
             offenders.is_empty(),
-            "X11 used past the door: {offenders:?}"
+            "a backend used past the door: {offenders:?}"
         );
     }
 }

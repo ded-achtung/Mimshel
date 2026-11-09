@@ -58,9 +58,9 @@ impl TransferUi {
             }
             return Ok(());
         }
-        self.capacity = (((f32::from(d.screen_size().1) / d.scale()).floor() as u32)
-            .saturating_sub(140)
-            / transfer::ROW_HEIGHT)
+        // `screen_size` is in points already; dividing by the scale again
+        // showed half the rows at scale 2.
+        self.capacity = (u32::from(d.screen_size().1).saturating_sub(140) / transfer::ROW_HEIGHT)
             .max(1) as usize;
         self.offset = self
             .offset
