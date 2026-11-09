@@ -6,9 +6,12 @@
 //! В копии: настройки Xfce (xfconf), настройки и значки Plank, свой файл
 //! настроек Mimshel и отметки, были ли автозапуск Plank и тема GTK4. Откат
 //! возвращает их, убирает только свои ссылки GTK4, ярлыки и автозапуски со своей пометкой и
-//! перезапускает части Xfce.
+//! перезапускает части Xfce. A copy made with Mimshel's parts on is finished
+//! by applying its own settings again (`parts::apply`).
 
 use std::path::{Path, PathBuf};
+
+use mimshel_core::config::Config;
 
 use crate::paths::{Paths, SHORTCUTS};
 use crate::sys::{
@@ -221,17 +224,46 @@ pub fn restore(src: &Path, dry: bool) -> std::io::Result<()> {
             println!("⚠ Экран входа в систему не откачен: {e}");
         }
     }
-    step("перезапустить настройки, окна, рабочий стол и панель Xfce");
+    // A copy made while Mimshel's parts were on (every `before-restore`
+    // copy, a `mimshel backup` taken last week) holds Xfce settings that say
+    // «no Xfce panel, no xfdesktop at login» and a config with the parts on.
+    // Everything of ours was just removed, so such a copy is finished by
+    // applying its own settings again: the autostart, the launchers and the
+    // lock come back. Left as it was, the next login showed bare windows.
+    let with_shell = restored_config(src).filter(Config::shell_needed);
+    match &with_shell {
+        Some(_) => step(
+            "перезапустить настройки и окна Xfce; копия снята с включённым Mimshel — \
+             применить её настройки заново (mimshel apply)",
+        ),
+        None => step("перезапустить настройки, окна, рабочий стол и панель Xfce"),
+    }
     if !dry {
         spawn(&["xfsettingsd", "--replace"]);
         spawn(&["xfwm4", "--replace"]);
-        spawn(&["xfdesktop", "--reload"]);
-        spawn(&["xfce4-panel"]);
-        if paths.autostart.join("plank.desktop").exists() && !running("plank") {
-            spawn(&["plank"]);
+        match &with_shell {
+            Some(config) => {
+                if let Err(e) = crate::parts::apply(config, &[]) {
+                    println!("⚠ Настройки из копии применены не полностью: {e}");
+                    println!("  Повторить: mimshel apply");
+                }
+            }
+            None => {
+                spawn(&["xfdesktop", "--reload"]);
+                spawn(&["xfce4-panel"]);
+                if paths.autostart.join("plank.desktop").exists() && !running("plank") {
+                    spawn(&["plank"]);
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// The Mimshel settings saved in the copy `src`, if it has any.
+fn restored_config(src: &Path) -> Option<Config> {
+    let text = std::fs::read_to_string(src.join("shell-config.toml")).ok()?;
+    Some(Config::from_toml(&text))
 }
 
 /// Свои ярлыки (с пометкой Mimshel или прежней macos-look) в этих папках.
@@ -346,6 +378,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_copy_tells_whether_the_shell_was_on() {
+        let t = Temp(std::env::temp_dir().join(format!("shell-backup-cfg-{}", std::process::id())));
+        std::fs::create_dir_all(&t.0).unwrap();
+        // No settings in the copy (the first one, plain Xfce).
+        assert!(restored_config(&t.0).is_none());
+        std::fs::write(t.0.join("shell-config.toml"), "[parts]\ndock = \"plank\"\n").unwrap();
+        assert!(!restored_config(&t.0).unwrap().shell_needed());
+        std::fs::write(
+            t.0.join("shell-config.toml"),
+            "[parts]\ndock = \"mimshel\"\n",
+        )
+        .unwrap();
+        assert!(restored_config(&t.0).unwrap().shell_needed());
     }
 
     #[test]
