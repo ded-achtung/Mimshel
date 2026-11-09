@@ -40,6 +40,13 @@ pub fn watch(dir: PathBuf, tx: Sender<Msg>) {
         let mime = MimeDb::load();
         let locale = mimshel_apps::Locale::from_env();
         let send = |tx: &Sender<Msg>| {
+            // The folder cannot be read just now (its disk is not mounted
+            // yet, it is being renamed): keep what is shown. An empty list
+            // made the desktop forget where every icon was placed, and the
+            // next save made that permanent.
+            if std::fs::read_dir(&dir).is_err() {
+                return true;
+            }
             let items = scan(&dir, &mime, locale.as_ref());
             tx.send(Msg::Desktop(Box::new(DesktopMsg::Files(items))))
                 .is_ok()
@@ -171,32 +178,48 @@ pub fn drop_moves(paths: &[PathBuf], into: &Path) -> bool {
     paths.iter().all(|p| same_device(p, into))
 }
 
-/// В корзину (её видит и корзина в доке). One `gio trash` per batch of
-/// files, not one process per file: deleting 2000 files started 2000
-/// processes at once.
+/// To the trash (the one the dock's Trash shows). One `gio trash` per batch
+/// of files, not one process per file: deleting 2000 files started 2000
+/// processes at once. In a thread that waits for the answer: where there is
+/// no trash (a phone, some network shares) or no permission, Delete used to
+/// do nothing and say nothing. The names go as they are on disk, also those
+/// that are not valid UTF-8.
 pub fn trash<'a>(paths: impl IntoIterator<Item = &'a Path>) {
-    for args in trash_commands(paths) {
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        spawn(&args, None);
+    let batches = trash_batches(paths);
+    if batches.is_empty() {
+        return;
     }
+    std::thread::spawn(move || {
+        let mut failed = Vec::new();
+        for batch in batches {
+            let done = Command::new("gio")
+                .args(["trash", "--"])
+                .args(&batch)
+                .stdin(std::process::Stdio::null())
+                .output();
+            match done {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => failed.extend(
+                    String::from_utf8_lossy(&out.stderr)
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(String::from),
+                ),
+                Err(e) => failed.push(format!("gio trash: {e}")),
+            }
+        }
+        errors_of(failed);
+    });
 }
 
 /// Files per `gio trash` call: keeps the command line far below the
 /// kernel's limit even with long paths.
 const TRASH_BATCH: usize = 200;
 
-fn trash_commands<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<Vec<String>> {
-    let paths: Vec<String> = paths.into_iter().map(|p| p.display().to_string()).collect();
-    paths
-        .chunks(TRASH_BATCH)
-        .map(|chunk| {
-            ["gio", "trash", "--"]
-                .into_iter()
-                .map(String::from)
-                .chain(chunk.iter().cloned())
-                .collect()
-        })
-        .collect()
+fn trash_batches<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<Vec<PathBuf>> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(Path::to_path_buf).collect();
+    paths.chunks(TRASH_BATCH).map(<[PathBuf]>::to_vec).collect()
 }
 
 /// Новая папка «Новая папка» (или «Новая папка 2»…). Возвращает путь.
@@ -635,11 +658,13 @@ mod transfer_tests {
         let paths: Vec<PathBuf> = (0..450)
             .map(|i| PathBuf::from(format!("/t/f{i}")))
             .collect();
-        let calls = trash_commands(paths.iter().map(PathBuf::as_path));
-        assert_eq!(calls.len(), 3);
-        assert_eq!(calls[0][..4], ["gio", "trash", "--", "/t/f0"]);
-        assert_eq!(calls[2].len(), 3 + 50);
-        assert!(trash_commands(std::iter::empty()).is_empty());
+        let calls = trash_batches(paths.iter().map(PathBuf::as_path));
+        assert_eq!(
+            calls.iter().map(Vec::len).collect::<Vec<_>>(),
+            [200, 200, 50]
+        );
+        assert_eq!(calls[0][0], Path::new("/t/f0"));
+        assert_eq!(calls[2][49], Path::new("/t/f449"));
     }
 
     #[test]
