@@ -304,11 +304,13 @@ impl Plan<'_> {
         println!("▶ Док — Plank");
         if crate::sys::which("plank").is_none() {
             println!("✘ Plank не установлен — поставьте: sudo pacman -S plank");
+            self.failed.push("Plank не установлен".into());
             return;
         }
         let launchers = home().join(".config/plank/dock1/launchers");
         if let Err(e) = std::fs::create_dir_all(&launchers) {
             println!("✘ Не создать {}: {e}", launchers.display());
+            self.failed.push("не записать значки Plank".into());
             return;
         }
         // Значки Plank — его файлы *.dockitem: старые убираем, пишем заново.
@@ -538,6 +540,7 @@ impl Plan<'_> {
         println!("▶ Экран блокировки");
         if crate::sys::which("xss-lock").is_none() {
             println!("✘ Нет xss-lock — запустите ./install.sh в папке проекта");
+            self.failed.push("нет xss-lock: блокировка не включена".into());
             return;
         }
         // Without a PAM service every password is refused: a screen locked

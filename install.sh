@@ -179,7 +179,8 @@ if [ "$FIRST_INSTALL" = yes ]; then
 else
     step "Настройки уже есть — части и оформление остаются как выбраны"
 fi
-"$BIN" apply
+# apply now says so when a step failed; the check below shows what is left.
+"$BIN" apply || warn "Не всё применилось — смотрите строки с ✘ выше и проверку ниже"
 
 step "Проверка"
 "$BIN" doctor || true
