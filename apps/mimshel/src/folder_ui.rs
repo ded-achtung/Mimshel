@@ -190,6 +190,7 @@ impl FolderUi {
         view.set_language(self.language);
         view.set_special(self.special.clone());
         let win = d.create_app_window(WINDOW_CLASS, &view.title(), DEFAULT_SIZE, MIN_SIZE)?;
+        win.accept_drops(d)?;
         win.show(d)?;
         if mimshel_core::names::flag("TIMING") {
             eprintln!("Окно папки: создано за {:?}", opened.elapsed());

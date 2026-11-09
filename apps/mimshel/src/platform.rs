@@ -540,6 +540,18 @@ impl AppWindow {
         on_window!(self, d, Err(NOT_ON_WAYLAND.into()), |w, x| w.show(x))
     }
 
+    /// Let files be dropped on this window. Only a window whose part
+    /// answers `Event::Dropped` asks for it: a drop nobody finishes leaves
+    /// the source waiting and uses up one of the few pending-drop places.
+    /// Wayland: nothing to switch on — a `wl_data_device` offer comes to
+    /// any surface.
+    pub fn accept_drops(&self, d: &Display) -> Result<()> {
+        match (self, &d.backend) {
+            (AppWindow::X11(w), Backend::X11(x)) => x.enable_drop(w.id()),
+            _ => Ok(()),
+        }
+    }
+
     pub fn set_title(&self, d: &Display, title: &str) -> Result<()> {
         on_window!(self, d, Err(NOT_ON_WAYLAND.into()), |w, x| w
             .set_title(x, title))

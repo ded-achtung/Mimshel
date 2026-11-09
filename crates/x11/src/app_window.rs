@@ -105,8 +105,6 @@ impl Display {
             AtomEnum::WM_SIZE_HINTS,
             &hints,
         )?;
-        // Принимает файлы, перетащенные из других окон.
-        self.enable_drop(window)?;
         let gc = self.conn.generate_id()?;
         self.conn.create_gc(gc, window, &CreateGCAux::new())?;
         let w = AppWindow { window, gc };
