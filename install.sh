@@ -39,8 +39,14 @@ fi
 mkdir -p "$SRC" "$HOME/.local/bin"
 
 # --- Пакеты -----------------------------------------------------------------
+# With rustup's toolchain already here the `rust` package conflicts with it:
+# pacman would ask to remove rustup, and «no» ends the script.
+RUST_PKG=(rust)
+if command -v rustup >/dev/null && command -v cargo >/dev/null; then
+    RUST_PKG=()
+fi
 PKGS=(
-    git base-devel rust clang    # сборка (clang — для привязки к PAM)
+    git base-devel "${RUST_PKG[@]}" clang  # сборка (clang — для привязки к PAM)
     pam                          # проверка пароля на экране блокировки
     sassc                        # сборка темы окон Colloid
     inter-font                   # шрифт
@@ -86,21 +92,24 @@ fetch() { # fetch NAME URL REV — put exactly commit REV of NAME into $SRC/NAME
     fi
     [ "$(rev_of "$dir")" = "$3" ] || fail "$1: скачалась не та версия (ждали $3)."
 }
-if [ -d "$HOME/.local/share/icons/Colloid-Dark" ]; then
+# By a file inside, not by the folder: an interrupted install leaves the
+# folder behind. Colloid-Dark links into Colloid-Light (lesson 28), so both.
+if [ -f "$HOME/.local/share/icons/Colloid-Dark/index.theme" ] \
+    && [ -f "$HOME/.local/share/icons/Colloid-Light/index.theme" ]; then
     ok "Значки Colloid уже стоят"
 else
     step "Значки Colloid"
     fetch Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
     (cd "$SRC/Colloid-icon-theme" && ./install.sh)
 fi
-if [ -d "$HOME/.local/share/icons/Colloid-cursors" ]; then
+if [ -f "$HOME/.local/share/icons/Colloid-cursors/index.theme" ]; then
     ok "Курсор Colloid уже стоит"
 else
     step "Курсор Colloid"
     fetch Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
     (cd "$SRC/Colloid-icon-theme/cursors" && ./install.sh)
 fi
-if [ -d "$HOME/.themes/Colloid-Dark" ]; then
+if [ -f "$HOME/.themes/Colloid-Dark/index.theme" ]; then
     ok "Тема окон Colloid уже стоит"
 else
     step "Тема окон Colloid (тёмная, обычные кнопки окна)"
@@ -119,13 +128,23 @@ vendor_ok() {
 if [ -d "$ROOT/offline/vendor" ] && ! vendor_ok; then
     warn "offline/vendor собран для другой версии — собираю с crates.io"
 fi
-if vendor_ok; then
-    # Библиотеки Rust из архива — без обращения к crates.io.
-    (cd "$ROOT" && cargo build --release --locked --offline \
+# Only the program this script installs: the compositor (another member of
+# the workspace) is not installed and would only add build time.
+if vendor_ok && [ -f "$ROOT/offline/cargo-config.toml" ]; then
+    # Библиотеки Rust из архива — без обращения к crates.io и GitHub: the
+    # settings made by tools/make-offline.sh redirect every source, the git
+    # one (Smithay) too.
+    VENDOR_CONFIG="$(mktemp --suffix=.toml)"
+    sed "s|@VENDOR@|$ROOT/offline/vendor|" "$ROOT/offline/cargo-config.toml" >"$VENDOR_CONFIG"
+    (cd "$ROOT" && cargo build --release --locked --offline -p mimshel --config "$VENDOR_CONFIG")
+    rm -f "$VENDOR_CONFIG"
+elif vendor_ok; then
+    # An archive made before cargo-config.toml existed: crates.io only.
+    (cd "$ROOT" && cargo build --release --locked --offline -p mimshel \
         --config 'source.crates-io.replace-with="vendored"' \
         --config 'source.vendored.directory="offline/vendor"')
 else
-    (cd "$ROOT" && cargo build --release --locked)
+    (cd "$ROOT" && cargo build --release --locked -p mimshel)
 fi
 install -m 755 "$ROOT/target/release/mimshel" "$BIN"
 # Прежняя команда shell — ссылкой на новую (старые сочетания клавиш, записки).
@@ -136,17 +155,30 @@ fi
 ok "Программа: $BIN"
 
 # --- Настройки и включение --------------------------------------------------
+# Before any mimshel command: the first one writes the settings file.
+if [ -f "${MIMSHEL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/mimshel/config.toml}" ]; then
+    FIRST_INSTALL=no
+else
+    FIRST_INSTALL=yes
+fi
 step "Копия нынешних настроек (вернуть как было: $BIN restore)"
 "$BIN" backup pered-mimshel
 
-step "Включаю части Mimshel"
-for part in dock menubar notify desktop folders search_panel apps_panel; do
-    "$BIN" set --no-apply "parts.$part" mimshel
-done
-"$BIN" set --no-apply look.icon_theme Colloid-mimshel
-"$BIN" set --no-apply look.gtk_theme Colloid-Dark
-"$BIN" set --no-apply look.cursor_theme Colloid-cursors
-"$BIN" set --no-apply look.wallpaper space
+# Parts and look are chosen for the user only on a first install. Run again
+# (an update, a missing package) the script keeps what they have chosen
+# since: it used to put all eleven settings back.
+if [ "$FIRST_INSTALL" = yes ]; then
+    step "Включаю части Mimshel"
+    for part in dock menubar notify desktop folders search_panel apps_panel; do
+        "$BIN" set --no-apply "parts.$part" mimshel
+    done
+    "$BIN" set --no-apply look.icon_theme Colloid-mimshel
+    "$BIN" set --no-apply look.gtk_theme Colloid-Dark
+    "$BIN" set --no-apply look.cursor_theme Colloid-cursors
+    "$BIN" set --no-apply look.wallpaper space
+else
+    step "Настройки уже есть — части и оформление остаются как выбраны"
+fi
 "$BIN" apply
 
 step "Проверка"

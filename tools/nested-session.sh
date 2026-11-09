@@ -15,8 +15,9 @@
 set -eu
 R=${1:-$(dirname "$0")/../target/release}
 R=$(cd "$R" && pwd)
-N=${TMPDIR:-/tmp}/mimshel-nested
-rm -rf "$N"
+# A fresh private folder each time: a fixed name in /tmp could be prepared
+# by another user, and a second run deleted the first one's runtime folder.
+N=$(mktemp -d "${TMPDIR:-/tmp}/mimshel-nested.XXXXXX")
 mkdir -p "$N/rt" "$N/state" "$N/cache"
 chmod 700 "$N/rt"
 CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/mimshel/config.toml

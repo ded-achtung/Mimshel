@@ -38,7 +38,16 @@ pack Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
 pack Colloid-gtk-theme "$COLLOID_GTK_URL" "$COLLOID_GTK_REV"
 
 echo "▶ Библиотеки Rust"
-cargo vendor --quiet --locked --offline "$WORK/Mimshel/offline/vendor" >/dev/null
+# cargo prints the settings that send every source — crates.io and the git
+# dependency (Smithay) — to the vendored folder. They go into the archive
+# with a placeholder for the folder: install.sh puts the real path in.
+# Redirecting crates.io alone left the git source to be fetched, and an
+# offline build on a machine without cargo's git cache stopped there.
+# (Not --quiet: it drops these settings too. The progress goes to a log.)
+cargo vendor --locked --offline "$WORK/Mimshel/offline/vendor" 2>"$WORK/vendor.log" \
+    | sed "s|^directory = .*|directory = \"@VENDOR@\"|" >"$WORK/Mimshel/offline/cargo-config.toml"
+grep -q '@VENDOR@' "$WORK/Mimshel/offline/cargo-config.toml" \
+    || { cat "$WORK/vendor.log" >&2; echo "✘ cargo vendor не выдал настройки источников" >&2; exit 1; }
 # install.sh uses the vendored crates only for this exact Cargo.lock.
 sha256sum <Cargo.lock | cut -d' ' -f1 >"$WORK/Mimshel/offline/vendor.lock-sha256"
 
