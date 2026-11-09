@@ -304,9 +304,7 @@ pub fn move_into(path: PathBuf, folder: PathBuf) {
             return;
         };
         let dest = free_name(&folder, &name);
-        for message in transfer(&[(path, dest)], true) {
-            error(&message);
-        }
+        errors_of(transfer(&[(path, dest)], true));
     });
 }
 
@@ -439,9 +437,7 @@ pub fn bring(pairs: Vec<(PathBuf, PathBuf)>, moving: bool, ticket: u64, tx: Send
     std::thread::spawn(move || {
         let (errors, stopped) = transfer_tracked(&pairs, moving);
         let success = errors.is_empty() && !stopped;
-        for message in errors {
-            error(&message);
-        }
+        errors_of(errors);
         let _ = tx.send(Msg::DropFinished { ticket, success });
     });
 }
@@ -452,9 +448,7 @@ pub fn transfer_async(pairs: Vec<(PathBuf, PathBuf)>, moving: bool) {
         return;
     }
     std::thread::spawn(move || {
-        for message in transfer(&pairs, moving) {
-            error(&message);
-        }
+        errors_of(transfer(&pairs, moving));
     });
 }
 
@@ -521,9 +515,7 @@ pub fn paste(dir: PathBuf) {
             }
             pairs.push((src, dest));
         }
-        for message in transfer(&pairs, cut) {
-            error(&message);
-        }
+        errors_of(transfer(&pairs, cut));
     });
 }
 
@@ -555,7 +547,31 @@ pub fn terminal(terminal: &[String], dir: &Path) {
 }
 
 /// Сообщение об ошибке (окно zenity).
+/// One window for everything that failed in one operation. A window per
+/// file meant thousands of them at once when the disk filled up or the
+/// stick was pulled out in the middle of a big copy.
+pub fn errors_of(messages: Vec<String>) {
+    /// Messages shown in full; the rest are only counted.
+    const SHOWN: usize = 5;
+    if messages.is_empty() {
+        return;
+    }
+    let mut text = messages[..messages.len().min(SHOWN)].join("\n\n");
+    if messages.len() > SHOWN {
+        let lang = mimshel_core::i18n::language_from_config();
+        text.push_str("\n\n");
+        text.push_str(
+            &mimshel_core::i18n::t(lang, "desktop.errors_more")
+                .replace("{n}", &(messages.len() - SHOWN).to_string()),
+        );
+    }
+    error(&text);
+}
+
+/// An error window. The text is plain: file names in it may hold `&` or
+/// `<`, which zenity would read as markup and show an empty window.
 pub fn error(text: &str) {
+    let text = &pango_escape(text);
     spawn(
         &[
             "zenity",

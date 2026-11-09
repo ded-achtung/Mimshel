@@ -566,6 +566,10 @@ impl FolderUi {
             .into_iter()
             .map(|i| i.path)
             .collect();
+        if is_trash(&folder) {
+            trash(&items);
+            return Ok(());
+        }
         let copy = d.modifiers().0 || !items.iter().all(|p| desktop_files::same_device(p, &folder));
         let pairs = pairs_into(items.into_iter(), &folder, !copy);
         desktop_files::transfer_async(pairs, !copy);
@@ -590,6 +594,11 @@ impl FolderUi {
             .unwrap_or_else(|| w.view.dir().to_path_buf());
         if paths.is_empty() {
             d.finish_drop(ticket, false);
+            return;
+        }
+        if is_trash(&into) {
+            trash(&paths);
+            d.finish_drop(ticket, true);
             return;
         }
         let moving = moving && desktop_files::drop_moves(&paths, &into);
@@ -999,6 +1008,15 @@ fn rename_pos(d: &Display, w: &FolderWindow, i: usize, width: u32) -> (i16, i16)
         ox + (lx + (lw - width as f32) / 2.0).round() as i16,
         oy + (ly - 3.0).round() as i16,
     )
+}
+
+/// Whether `folder` is the Trash place of the side bar. Files dropped on
+/// it go to the trash the proper way (`gio trash` records where they came
+/// from); a plain move into `Trash/files` left files nothing could put back,
+/// and from another disk it only copied them.
+fn is_trash(folder: &Path) -> bool {
+    std::env::var_os("HOME")
+        .is_some_and(|home| folder == mimshel_folder::places::trash_dir(Path::new(&home)))
 }
 
 fn trash(paths: &[PathBuf]) {

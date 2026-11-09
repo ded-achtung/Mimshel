@@ -580,6 +580,12 @@ pub fn t(lang: Language, key: &str) -> &str {
             "«{name}»是程式捷徑，不是文件。\n它將執行指令：\n\n<tt>{exec}</tt>\n\n只有在信任其來源時才執行。",
         ),
         "desktop.error_title" => ("Desktop", "Рабочий стол", "桌面", "桌面"),
+        "desktop.errors_more" => (
+            "…and {n} more.",
+            "…и ещё {n}.",
+            "…以及另外 {n} 项。",
+            "…以及另外 {n} 項。",
+        ),
         "desktop.launcher_not_executable" => (
             "Launcher not marked executable: {e}",
             "Ярлык не помечен выполняемым: {e}",
@@ -1148,6 +1154,7 @@ pub const KEYS: &[&str] = &[
     "desktop.launch_ok",
     "desktop.launch_text",
     "desktop.error_title",
+    "desktop.errors_more",
     "desktop.launcher_not_executable",
     "desktop.rename_invalid",
     "desktop.rename_no_dir",
