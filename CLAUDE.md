@@ -183,7 +183,7 @@ every 0.4 s, re-grabs if the grab is lost (never leaves), redraws on a screen si
 Password: PAM `system-local-login`, in a `Zeroizing` buffer allocated up front; PAM's own
 messages (locked account, expired password) are shown. Guard `mimshel lock`
 (`crates/setup/src/lock.rs`): restarts the screen on any non-zero exit, one guard per
-user and display (abstract socket, lesson 27); a guard that loses waits until the screen
+user and display (a locked file in `$XDG_RUNTIME_DIR`, lesson 27); a guard that loses waits until the screen
 announces it is covered before letting the system sleep. Super+L and Ctrl+Alt+L →
 xflock4 → `LockCommand` → `mimshel lock`; xss-lock (`--transfer-sleep-lock`) locks on idle
 and before sleep. Not done: closing xss-lock's sleep fd early (needs `unsafe`), so sleep
@@ -340,8 +340,10 @@ The numbers are referenced from code comments; keep them.
     sends `-KILL` after 3 s.
 27. **Before sleep two programs ask to lock at once** — xss-lock and the Xfce power
     manager (via xflock4). A process-list check let both through: two lock screens, the
-    password asked twice. One guard per user and display through an abstract socket
-    (`lock::single_guard`); the kernel frees it when the process ends. The display is
+    password asked twice. One guard per user and display through a locked file in the
+    user's runtime folder (`lock::take`); the kernel frees it when the process ends. It
+    was an abstract socket until 2026-11-09: such a name has no owner, so any other
+    process could take it first and the screen was never locked. The display is
     named by its number only: xss-lock has `DISPLAY=:0.0`, Xfce `:0` — named by the raw
     string, both guards won (2026-10-29).
 28. **Colloid-Dark and Colloid contain relative symlinks into Colloid-Light** (mimetypes,

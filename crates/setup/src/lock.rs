@@ -14,11 +14,7 @@ use std::time::Duration;
 
 use mimshel_lock::Layout;
 
-use crate::sys::{command, home, output, running, succeeds};
-
-/// Экран блокировки в списке процессов (команда `mimshel lock-screen`;
-/// до переименования — `shell lock-screen`).
-const LOCK_SCREEN: [&str; 2] = ["mimshel lock-screen", "shell lock-screen"];
+use crate::sys::{command, home, output, succeeds};
 
 /// Сочетание блокировки, которое ставит `mimshel apply lock` (у Xfce есть
 /// только Ctrl+Alt+L), и его команда: xflock4 вызывает `LockCommand`.
@@ -171,22 +167,33 @@ pub fn user_name() -> String {
 pub fn supervise(exe: &Path) -> i32 {
     // Only one guard at a time. Before sleep both xss-lock and the Xfce power
     // manager ask to lock at the same moment; checking the process list let
-    // both through (two lock screens, the password asked twice). The kernel
-    // gives an abstract socket name to one process only and frees it when the
-    // process ends, even by a crash.
+    // both through (two lock screens, the password asked twice). The guard
+    // holds a lock on a file in the user's private folder ([`take`]); the
+    // kernel frees it when the process ends, even by a crash.
     //
     // The guard that loses must not return at once, though: xss-lock holds
     // the system's sleep until its locker exits, and when its guard is the
     // loser the laptop would fall asleep before the winner's screen is up —
     // on resume the desktop shows (and takes keys) until the window maps.
     // So it waits for the lock screen to say it covers the screen.
-    let Some(_guard) = single_guard(&guard_name()) else {
-        wait_until_locked(LOSER_WAIT);
-        return 0;
+    let _guard = match take(&guard_name()) {
+        Take::Held(held) => Some(held),
+        Take::Busy => {
+            wait_until_locked(LOSER_WAIT);
+            return 0;
+        }
+        // No private folder to keep the lock in: lock the screen all the
+        // same. Two lock screens are a nuisance, none is a hole.
+        Take::Unavailable => {
+            log("блокировка: нет своей папки для замка сторожа — блокирую без него");
+            None
+        }
     };
-    // A lock screen already shown without a guard (started by hand) — no second one.
-    if LOCK_SCREEN.iter().any(|name| running(name)) {
-        wait_until_locked(LOSER_WAIT);
+    // A lock screen started by hand (without a guard) already covers this
+    // display — no second one. Asked of this display only: a lock screen on
+    // another display, or a stray process with that name, must not stop this
+    // one from locking.
+    if lock_dir().is_some_and(|dir| held_in(&dir, &locked_name())) {
         return 0;
     }
     supervise_with(
@@ -238,13 +245,10 @@ pub fn supervise(exe: &Path) -> i32 {
     )
 }
 
-/// Name of the guard's «lock»: one per user and display.
+/// Name of the guard's lock file: one per display (the folder is the
+/// user's own).
 fn guard_name() -> String {
-    format!(
-        "mimshel-lock-guard-{}-{}",
-        crate::sys::uid(),
-        display_number()
-    )
+    format!("mimshel-lock-guard-{}.lock", display_number())
 }
 
 /// The X display number of `DISPLAY`, the same for every way to write it:
@@ -257,53 +261,136 @@ fn display_number() -> String {
 
 fn display_key(display: &str) -> String {
     let after_host = display.rsplit_once(':').map_or(display, |(_, d)| d);
+    // Digits only: the number becomes part of a file name.
     after_host
         .split('.')
         .next()
         .unwrap_or("")
-        .trim()
-        .to_string()
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect()
 }
 
 /// How long a guard that lost waits for the winner's lock screen: under
 /// logind's usual 5 s limit for holding the sleep.
 const LOSER_WAIT: Duration = Duration::from_secs(4);
 
-/// Name the lock screen holds while it covers the screen with the
-/// keyboard grabbed: one per user and display.
+/// Name of the file the lock screen keeps locked while it covers the screen
+/// with the keyboard grabbed: one per display.
 fn locked_name() -> String {
-    format!(
-        "mimshel-lock-ready-{}-{}",
-        crate::sys::uid(),
-        display_number()
-    )
+    format!("mimshel-lock-ready-{}.lock", display_number())
+}
+
+/// A lock file held by this process; released when dropped and when the
+/// process ends, however it ends.
+pub struct Held(#[allow(dead_code)] std::fs::File);
+
+enum Take {
+    Held(Held),
+    /// Another process holds it.
+    Busy,
+    /// There is no private folder, or the file cannot be opened.
+    Unavailable,
+}
+
+/// The folder for the lock files: the user's runtime folder, else the state
+/// folder in the home. It must be a real folder of this user that nobody
+/// else can enter.
+///
+/// These locks were abstract socket names before. Such a name has no owner:
+/// any process on the machine — another user, a sandboxed program — could
+/// take `mimshel-lock-guard-UID-DISPLAY` first, and the real guard then
+/// believed it had lost the race and left without locking the screen.
+fn lock_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let private = |dir: &Path| {
+        std::fs::symlink_metadata(dir)
+            .is_ok_and(|m| m.is_dir() && m.uid() == crate::sys::uid() && m.mode() & 0o077 == 0)
+    };
+    let uid = crate::sys::uid();
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([PathBuf::from(format!("/run/user/{uid}"))])
+        .find(|dir| private(dir))
+        .or_else(|| {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            let dir = log_path().parent()?.join("locks");
+            let _ = std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&dir);
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            private(&dir).then_some(dir)
+        })
+}
+
+fn take(name: &str) -> Take {
+    match lock_dir() {
+        Some(dir) => take_in(&dir, name),
+        None => Take::Unavailable,
+    }
+}
+
+fn take_in(dir: &Path, name: &str) -> Take {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(dir.join(name));
+    let Ok(file) = file else {
+        return Take::Unavailable;
+    };
+    match file.try_lock() {
+        Ok(()) => Take::Held(Held(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Take::Busy,
+        Err(std::fs::TryLockError::Error(_)) => Take::Unavailable,
+    }
+}
+
+/// Whether some process holds the lock file `name`. Asked with a shared
+/// lock, so two askers do not see each other.
+fn held_in(dir: &Path, name: &str) -> bool {
+    std::fs::File::open(dir.join(name)).is_ok_and(|file| {
+        matches!(
+            file.try_lock_shared(),
+            Err(std::fs::TryLockError::WouldBlock)
+        )
+    })
 }
 
 /// Called by the lock screen once its window is shown and the keyboard
 /// and pointer are ours: other guards waiting in [`supervise`] may now
-/// let the system sleep. Keep the listener for as long as the screen is
+/// let the system sleep. Keep the value for as long as the screen is
 /// locked.
-pub fn announce_locked() -> Option<std::os::unix::net::UnixListener> {
-    single_guard(&locked_name())
+pub fn announce_locked() -> Option<Held> {
+    let dir = lock_dir()?;
+    // A waiting guard's question holds the file for an instant: ask again.
+    for _ in 0..20 {
+        match take_in(&dir, &locked_name()) {
+            Take::Held(held) => return Some(held),
+            Take::Busy => std::thread::sleep(Duration::from_millis(5)),
+            Take::Unavailable => return None,
+        }
+    }
+    None
 }
 
 /// Wait until a lock screen has announced itself, at most `limit`.
 fn wait_until_locked(limit: Duration) -> bool {
-    let shown = wait_for_name(&locked_name(), limit);
+    let shown = lock_dir().is_some_and(|dir| wait_held_in(&dir, &locked_name(), limit));
     if !shown {
         log("блокировка: экран блокировки не показался вовремя — не жду дальше");
     }
     shown
 }
 
-fn wait_for_name(name: &str, limit: Duration) -> bool {
-    use std::os::linux::net::SocketAddrExt;
-    let Ok(addr) = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()) else {
-        return false;
-    };
+fn wait_held_in(dir: &Path, name: &str, limit: Duration) -> bool {
     let start = std::time::Instant::now();
     loop {
-        if std::os::unix::net::UnixStream::connect_addr(&addr).is_ok() {
+        if held_in(dir, name) {
             return true;
         }
         if start.elapsed() >= limit {
@@ -311,14 +398,6 @@ fn wait_for_name(name: &str, limit: Duration) -> bool {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-}
-
-/// Take the guard «lock» (an abstract Unix socket name); `None` — another
-/// guard holds it. Released when the returned listener is dropped.
-fn single_guard(name: &str) -> Option<std::os::unix::net::UnixListener> {
-    use std::os::linux::net::SocketAddrExt;
-    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).ok()?;
-    std::os::unix::net::UnixListener::bind_addr(&addr).ok()
 }
 
 fn supervise_with(
@@ -473,36 +552,58 @@ mod tests {
         assert_eq!(reasons, ["упала (паника)"]);
     }
 
+    fn lock_folder(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mimshel-test-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn losing_guard_waits_for_the_lock_screen() {
-        let name = format!("mimshel-test-ready-{}", std::process::id());
-        assert!(!wait_for_name(&name, Duration::from_millis(120)));
-        let announce = name.clone();
+        let dir = lock_folder("ready");
+        let name = "ready.lock";
+        assert!(!wait_held_in(&dir, name, Duration::from_millis(120)));
+        let folder = dir.clone();
         let screen = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
-            let held = single_guard(&announce).expect("the screen takes the name");
+            let Take::Held(held) = take_in(&folder, name) else {
+                panic!("the screen takes the lock");
+            };
             std::thread::sleep(Duration::from_millis(500));
             drop(held);
         });
         let start = std::time::Instant::now();
-        assert!(wait_for_name(&name, Duration::from_secs(3)));
+        assert!(wait_held_in(&dir, name, Duration::from_secs(3)));
         assert!(start.elapsed() >= Duration::from_millis(100));
         screen.join().unwrap();
+        assert!(!held_in(&dir, name), "free again once the screen is gone");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn only_one_guard_at_a_time() {
-        let name = format!("mimshel-test-guard-{}", std::process::id());
-        let first = single_guard(&name).expect("the first guard takes the lock");
+        let dir = lock_folder("guard");
+        let Take::Held(first) = take_in(&dir, "guard.lock") else {
+            panic!("the first guard takes the lock");
+        };
         assert!(
-            single_guard(&name).is_none(),
+            matches!(take_in(&dir, "guard.lock"), Take::Busy),
             "the second one finds it taken"
         );
+        // Asking whether it is held does not disturb the holder.
+        assert!(held_in(&dir, "guard.lock"));
+        assert!(matches!(take_in(&dir, "guard.lock"), Take::Busy));
         drop(first);
         assert!(
-            single_guard(&name).is_some(),
+            matches!(take_in(&dir, "guard.lock"), Take::Held(_)),
             "released when the first ends"
         );
+        // A folder that is not there: no lock, and the caller locks anyway.
+        assert!(matches!(
+            take_in(&dir.join("missing"), "guard.lock"),
+            Take::Unavailable
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

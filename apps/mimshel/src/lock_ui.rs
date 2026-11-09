@@ -143,7 +143,7 @@ struct LockUi<'a> {
     /// Held once the screen is covered and the input is ours: a guard
     /// that lost the race waits for it before letting the system sleep
     /// (`mimshel_setup::lock::announce_locked`).
-    locked: Option<std::os::unix::net::UnixListener>,
+    locked: Option<mimshel_setup::lock::Held>,
     /// Обои из настроек — нарисовать фон заново, если сменится размер экрана.
     wallpaper: String,
     user: String,
