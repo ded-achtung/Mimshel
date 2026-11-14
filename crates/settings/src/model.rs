@@ -74,6 +74,18 @@ pub struct Monitor {
     pub preferred: Option<String>,
 }
 
+/// The result of `mimshel doctor` as the Status page shows it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Health {
+    /// How many checks were made.
+    pub checks: usize,
+    /// The parts with failed checks and how many failed in each
+    /// (`doctor`'s part names: `look`, `lock`, `install`…).
+    pub failed: Vec<(String, usize)>,
+    /// Mimshel can mend some of it by applying those parts again.
+    pub fixable: bool,
+}
+
 /// What the pages offer that depends on the machine.
 #[derive(Debug, Clone, Default)]
 pub struct Env {
@@ -91,6 +103,9 @@ pub struct Env {
     pub layouts: Vec<(String, String)>,
     /// Layout switch options: `(XKB option, label)`.
     pub switches: Vec<(String, String)>,
+    /// The checks of the setup; `None` — not made yet (they take a second
+    /// or two and run when the Status page is first shown).
+    pub health: Option<Health>,
 }
 
 /// The ids of the Xfce dialogs our own pages replace (when `Env::system`).
@@ -436,6 +451,12 @@ pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec
             "settings.parts",
             PageKind::Rows(parts),
         ),
+        page(
+            "health",
+            "dialog-information",
+            "settings.health",
+            PageKind::Rows(health(lang, env.health.as_ref())),
+        ),
     ];
     if env.system {
         let system = |id, icon, title: &str, groups| Page {
@@ -464,6 +485,107 @@ pub fn pages(lang: Language, values: &HashMap<String, String>, env: &Env) -> Vec
         }
     }
     out
+}
+
+/// The Status page: what `mimshel doctor` found, by part, with a button to
+/// check again and one to mend what `mimshel apply` can mend. The rows are
+/// actions (`health.check`, `health.fix`) or plain text; none is a setting.
+fn health(lang: Language, health: Option<&Health>) -> Vec<Group> {
+    let tr = |key: &str| t(lang, key).to_string();
+    let count = |key: &str, n: usize| tr(key).replace("{n}", &n.to_string());
+    let Some(health) = health else {
+        return vec![Group {
+            title: None,
+            rows: vec![Row {
+                key: "health.checking".to_string(),
+                label: tr("settings.health_checking"),
+                hint: None,
+                control: Control::None,
+            }],
+        }];
+    };
+    let failed: usize = health.failed.iter().map(|(_, n)| n).sum();
+    let summary = Row {
+        key: "health.check".to_string(),
+        label: if failed == 0 {
+            tr("settings.health_ok")
+        } else {
+            count("settings.health_failed", failed).replace("{total}", &health.checks.to_string())
+        },
+        hint: Some(if failed == 0 {
+            count("settings.health_passed", health.checks)
+        } else {
+            tr("settings.health_details")
+        }),
+        control: Control::Button(tr("settings.health_check")),
+    };
+    let mut groups = vec![Group {
+        title: None,
+        rows: vec![summary],
+    }];
+    if failed == 0 {
+        return groups;
+    }
+    groups.push(Group {
+        title: Some(tr("settings.health_attention")),
+        rows: health
+            .failed
+            .iter()
+            .map(|(part, n)| {
+                let (label, advice) = health_part(part);
+                Row {
+                    key: format!("health.part.{part}"),
+                    label: label.map_or_else(|| part.clone(), tr),
+                    hint: Some(advice.map_or_else(|| count("settings.health_problems", *n), tr)),
+                    control: Control::None,
+                }
+            })
+            .collect(),
+    });
+    if health.fixable {
+        groups.push(Group {
+            title: None,
+            rows: vec![Row {
+                key: "health.fix".to_string(),
+                label: tr("settings.health_fix_label"),
+                hint: Some(tr("settings.health_fix_hint")),
+                control: Control::Button(tr("settings.health_fix")),
+            }],
+        });
+    }
+    groups
+}
+
+/// A `doctor` part as the Status page names it, and what to do about it
+/// when applying again cannot mend it.
+fn health_part(part: &str) -> (Option<&'static str>, Option<&'static str>) {
+    match part {
+        "env" => (Some("settings.health_part_env"), None),
+        "install" => (
+            Some("settings.health_part_install"),
+            Some("settings.health_advice_install"),
+        ),
+        "look" => (Some("settings.appearance"), None),
+        "wallpaper" => (Some("settings.wallpaper"), None),
+        "panel" => (Some("settings.menubar"), None),
+        "notify" => (Some("settings.health_part_notify"), None),
+        "desktop" => (Some("settings.health_part_desktop"), None),
+        "folders" => (Some("settings.health_part_folders"), None),
+        "menu" => (Some("settings.health_part_menu"), None),
+        "lock" => (Some("settings.lock"), None),
+        "power" => (Some("settings.power"), None),
+        "dock" => (Some("settings.dock"), None),
+        "mimshel" => (Some("settings.health_part_service"), None),
+        "config" => (
+            Some("settings.health_part_config"),
+            Some("settings.health_advice_config"),
+        ),
+        "build" => (
+            Some("settings.health_part_build"),
+            Some("settings.health_advice_build"),
+        ),
+        _ => (None, None),
+    }
 }
 
 /// One box per monitor: resolution, refresh rate, rotation — and with
@@ -700,10 +822,12 @@ mod tests {
         for page in &all {
             if let PageKind::Rows(groups) = &page.kind {
                 for row in groups.iter().flat_map(|g| &g.rows) {
+                    // The Status page's rows are actions and plain text.
                     assert!(
-                        mimshel_core::config::SETTINGS
-                            .iter()
-                            .any(|(k, _)| *k == row.key),
+                        row.key.starts_with("health.")
+                            || mimshel_core::config::SETTINGS
+                                .iter()
+                                .any(|(k, _)| *k == row.key),
                         "{}",
                         row.key
                     );
@@ -711,7 +835,82 @@ mod tests {
                 }
             }
         }
-        assert_eq!(all.len(), 8 + LINKS.len());
+        assert_eq!(all.len(), 9 + LINKS.len());
+    }
+
+    /// The rows of the Status page for this result of the checks.
+    fn health_rows(health: Option<Health>) -> Vec<Row> {
+        let env = Env {
+            health,
+            ..Env::default()
+        };
+        let all = pages(Language::En, &values(&Config::default()), &env);
+        let page = all.iter().find(|p| p.id == "health").expect("the page");
+        let PageKind::Rows(groups) = &page.kind else {
+            panic!("the Status page has rows");
+        };
+        groups.iter().flat_map(|g| g.rows.clone()).collect()
+    }
+
+    #[test]
+    fn status_page_before_and_after_the_checks() {
+        // Not checked yet: one line, nothing to press.
+        let rows = health_rows(None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].control, Control::None);
+
+        // All is well: the summary with «Check again», nothing to fix.
+        let rows = health_rows(Some(Health {
+            checks: 60,
+            failed: Vec::new(),
+            fixable: false,
+        }));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "health.check");
+        assert!(matches!(rows[0].control, Control::Button(_)));
+        assert_eq!(rows[0].hint.as_deref(), Some("Checks passed: 60"));
+    }
+
+    #[test]
+    fn status_page_lists_failed_parts_and_offers_the_fix() {
+        let failed = vec![
+            ("lock".to_string(), 2),
+            ("install".to_string(), 3),
+            ("later-part".to_string(), 1),
+        ];
+        let rows = health_rows(Some(Health {
+            checks: 60,
+            failed: failed.clone(),
+            fixable: true,
+        }));
+        let text = |key: &str| {
+            let row = rows.iter().find(|r| r.key == key).expect(key);
+            (row.label.clone(), row.hint.clone().unwrap_or_default())
+        };
+        assert_eq!(text("health.check").0, "Needs attention: 6 of 60 checks");
+        assert_eq!(
+            text("health.part.lock"),
+            ("Lock Screen".to_string(), "Problems: 2".to_string())
+        );
+        // What applying again cannot mend says what to do instead.
+        assert_eq!(
+            text("health.part.install").1,
+            "Run ./install.sh in the project folder"
+        );
+        // A part this page has no name for yet is shown by its id.
+        assert_eq!(text("health.part.later-part").0, "later-part");
+        assert!(matches!(
+            rows.last().map(|r| (&*r.key, &r.control)),
+            Some(("health.fix", Control::Button(_)))
+        ));
+
+        // Nothing `apply` can mend: no «Fix».
+        let rows = health_rows(Some(Health {
+            checks: 60,
+            failed,
+            fixable: false,
+        }));
+        assert!(rows.iter().all(|r| r.key != "health.fix"));
     }
 
     #[test]

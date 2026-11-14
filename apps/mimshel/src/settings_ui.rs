@@ -46,6 +46,8 @@ enum Msg {
     Tick,
     /// The picture chosen for the wallpaper.
     Picked(Option<String>),
+    /// What the checks of the setup found (the Status page).
+    Health(mimshel_settings::Health),
 }
 
 /// Work for the worker thread, done one after another.
@@ -55,6 +57,8 @@ enum Job {
     SaveDisplays,
     /// Go back to these display settings.
     Restore(Vec<Output>),
+    /// Mend what the checks found, as `mimshel doctor --fix` does.
+    Fix,
 }
 
 /// How long «Keep these display settings?» waits before going back.
@@ -131,6 +135,9 @@ fn window(
     let mut trying = Trying(None);
     // A display change is at the worker and has not answered yet.
     let mut display_job = false;
+    // The checks of the setup have been asked for: they run when the
+    // Status page is first shown, not for every window.
+    let mut health_asked = false;
 
     let mut dirty = true;
     // The last frame sent (pixel size and RGBA), and whether the window
@@ -220,6 +227,12 @@ fn window(
                     if key == "look.wallpaper" {
                         request_thumbs(&view, d.scale(), &tx);
                     }
+                    if key == "health.fix" {
+                        // The service and the panel need a moment to come up
+                        // before the checks can tell whether it helped.
+                        view.set_health(None);
+                        request_health(&tx, Duration::from_secs(3));
+                    }
                     Action::Redraw
                 }
                 Msg::Tried(before) => {
@@ -254,7 +267,15 @@ fn window(
                     Action::Redraw
                 }
                 Msg::Picked(None) => Action::Nothing,
+                Msg::Health(health) => {
+                    view.set_health(Some(health));
+                    Action::Redraw
+                }
             };
+            if !health_asked && view.page_id() == "health" {
+                health_asked = true;
+                request_health(&tx, Duration::ZERO);
+            }
             match action {
                 Action::Nothing => {}
                 Action::Redraw => dirty = true,
@@ -265,6 +286,17 @@ fn window(
                 // may not show at all.
                 Action::Set(key, _)
                     if key.starts_with("display.") && (display_job || trying.0.is_some()) => {}
+                // The Status page's buttons are actions, not settings.
+                Action::Set(key, _) if key == "health.check" => {
+                    view.set_health(None);
+                    request_health(&tx, Duration::ZERO);
+                    dirty = true;
+                }
+                Action::Set(key, _) if key == "health.fix" => {
+                    view.set_status(Some(t(view.language(), "settings.restarting").to_string()));
+                    let _ = jobs.send(Job::Fix);
+                    dirty = true;
+                }
                 Action::Set(key, value) => {
                     display_job |= key.starts_with("display.");
                     applying(&mut view, &key);
@@ -405,6 +437,7 @@ fn worker(tx: Sender<Msg>) -> Sender<Job> {
                     Msg::Applied("display".into(), displays::save(&displays::outputs()))
                 }
                 Job::Restore(before) => Msg::Applied("display".into(), revert(&before)),
+                Job::Fix => Msg::Applied("health.fix".into(), crate::setup::fix_health()),
             };
             if tx.send(msg).is_err() {
                 break;
@@ -412,6 +445,16 @@ fn worker(tx: Sender<Msg>) -> Sender<Job> {
         }
     });
     jobs
+}
+
+/// Run the checks of the setup off the main thread (they start dozens of
+/// small programs) and send what they found; `after` — wait first.
+fn request_health(tx: &Sender<Msg>, after: Duration) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(after);
+        let _ = tx.send(Msg::Health(crate::setup::health()));
+    });
 }
 
 /// The config's settings and the system pages' state, as the pages show them.
@@ -516,6 +559,7 @@ fn env(config: &mimshel_core::config::Config, outputs: &[Output]) -> Env {
         monitors: system::monitors(outputs),
         layouts: mimshel_setup::keyboards::available_layouts(),
         switches: system::switches(config.language),
+        health: None,
     }
 }
 
@@ -553,6 +597,10 @@ pub fn snapshot(page: &str, file: &str) -> crate::platform::Result<()> {
         env(&config, &displays::outputs()),
     );
     view.show_page(page);
+    // The Status page as it is after the checks, not «Checking…».
+    if page == "health" {
+        view.set_health(Some(crate::setup::health()));
+    }
     let mut fonts = Fonts::new(&config.font);
     let mut icons = Icons::new(&config.icon_theme);
     let (w, h) = SettingsView::thumb_size();

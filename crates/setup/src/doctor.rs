@@ -738,6 +738,72 @@ pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
     (!parts.is_empty()).then_some(parts)
 }
 
+/// The parts `mimshel apply` takes that mend `parts` (as [`fix_parts`] names
+/// them). Packages and themes (`install`) are the installer's work, not ours.
+pub fn apply_names(parts: &[&'static str]) -> Vec<&'static str> {
+    parts
+        .iter()
+        .filter_map(|part| match *part {
+            "install" => None,
+            "menu" => Some("launchers"),
+            part => crate::parts::APPLY_PARTS
+                .iter()
+                .copied()
+                .find(|name| *name == part),
+        })
+        .collect()
+}
+
+/// How many checks failed in each part, in the order the parts come up.
+pub fn failed_by_part(checks: &[Check]) -> Vec<(&'static str, usize)> {
+    let mut parts: Vec<(&'static str, usize)> = Vec::new();
+    for check in checks.iter().filter(|c| !c.ok) {
+        match parts.iter_mut().find(|(part, _)| *part == check.part) {
+            Some((_, count)) => *count += 1,
+            None => parts.push((check.part, 1)),
+        }
+    }
+    parts
+}
+
+/// The checks as JSON for other programs (`mimshel doctor --json`): an array
+/// of `{"part", "what", "ok", "hint"}`, one object per line.
+pub fn json(checks: &[Check]) -> String {
+    let lines: Vec<String> = checks
+        .iter()
+        .map(|c| {
+            format!(
+                "  {{\"part\": {}, \"what\": {}, \"ok\": {}, \"hint\": {}}}",
+                json_string(c.part),
+                json_string(&c.what),
+                c.ok,
+                json_string(&c.hint)
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return "[]\n".to_string();
+    }
+    format!("[\n{}\n]\n", lines.join(",\n"))
+}
+
+fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Наша ли программа держит имя на шине (новое имя процесса или прежнее).
 fn ours(comm: &str) -> bool {
     comm == mimshel_core::names::APP || comm == mimshel_core::names::OLD
@@ -810,6 +876,54 @@ mod tests {
         );
         assert_eq!(fix_parts(&[check("config", false)]), None);
         assert_eq!(fix_parts(&[check("build", false)]), None);
+    }
+
+    #[test]
+    fn names_for_apply() {
+        // `panel` and `mimshel` are already `menubar` and `service` here.
+        assert_eq!(
+            apply_names(&["install", "menu", "menubar", "service", "wallpaper"]),
+            ["launchers", "menubar", "service", "wallpaper"]
+        );
+        assert!(apply_names(&["install"]).is_empty());
+    }
+
+    #[test]
+    fn failures_counted_by_part() {
+        assert!(failed_by_part(&[check("look", true)]).is_empty());
+        assert_eq!(
+            failed_by_part(&[
+                check("lock", false),
+                check("look", true),
+                check("dock", false),
+                check("lock", false),
+            ]),
+            [("lock", 2), ("dock", 1)]
+        );
+    }
+
+    #[test]
+    fn json_escapes_what_it_must() {
+        assert_eq!(json(&[]), "[]\n");
+        let checks = [
+            Check {
+                part: "look",
+                what: "тема \"Colloid\"".into(),
+                ok: true,
+                hint: String::new(),
+            },
+            Check {
+                part: "config",
+                what: "a\\b".into(),
+                ok: false,
+                hint: "line 1\nline 2\u{1}".into(),
+            },
+        ];
+        assert_eq!(
+            json(&checks),
+            "[\n  {\"part\": \"look\", \"what\": \"тема \\\"Colloid\\\"\", \"ok\": true, \"hint\": \"\"},\n  \
+             {\"part\": \"config\", \"what\": \"a\\\\b\", \"ok\": false, \"hint\": \"line 1\\nline 2\\u0001\"}\n]\n"
+        );
         assert_eq!(
             fix_parts(&[check("dock", false), check("env", false)]),
             None

@@ -39,7 +39,7 @@ const HELP: &str = "\
                         нарисовать окно с этим текстом в картинку
   mimshel --version       версия программы
   mimshel settings [РАЗДЕЛ] окно «Системные настройки» (appearance wallpaper menubar dock
-                        lock apps terminal parts)
+                        lock apps terminal parts health)
   mimshel snapshot transfer ФАЙЛ.png
   mimshel snapshot settings РАЗДЕЛ ФАЙЛ.png
                         нарисовать окно настроек в картинку (проверка вида)
@@ -54,6 +54,7 @@ const HELP: &str = "\
   mimshel watch           следить за ярлыками и печатать, что появилось и пропало
   mimshel doctor --report [ПАПКА]  собрать обезличенный отчёт (по умолчанию — дома)
   mimshel doctor [--fix]  проверить, что всё на месте; --fix — починить
+  mimshel doctor --json   те же проверки в виде JSON (для других программ)
   mimshel crashes [last]  отчёты о сбоях: время, часть, причина (новые первыми;
                         last — последний отчёт целиком)
   mimshel config          где файл настроек и что в нём можно менять
@@ -157,6 +158,9 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+        }
+        Some("doctor") if args.len() == 2 && args[1] == "--json" => {
+            std::process::exit(setup::doctor_json())
         }
         Some("doctor") if args.len() == 1 || (args.len() == 2 && args[1] == "--fix") => {
             std::process::exit(setup::doctor(args.len() == 2))

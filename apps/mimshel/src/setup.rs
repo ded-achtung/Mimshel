@@ -2,7 +2,7 @@
 //! `mimshel apply`, `mimshel config`. Сама работа — в `crates/setup`.
 
 use mimshel_core::config::{self, PARTS, SETTINGS, set_value, setting_value};
-use mimshel_setup::doctor::{Check, checks, fix_parts};
+use mimshel_setup::doctor::{Check, apply_names, checks, fix_parts};
 use mimshel_setup::parts::{APPLY_PARTS, apply};
 
 use crate::ui::{config_path, config_store, load_config};
@@ -37,14 +37,7 @@ pub fn doctor(fix: bool) -> i32 {
     if parts.contains(&"install") {
         println!("⚠ Не хватает пакетов или оформления — запустите ./install.sh в папке проекта");
     }
-    let mine: Vec<&str> = parts
-        .iter()
-        .filter_map(|p| match *p {
-            "install" => None,
-            "menu" => Some("launchers"),
-            p => APPLY_PARTS.iter().copied().find(|a| *a == p),
-        })
-        .collect();
+    let mine = apply_names(&parts);
     if !mine.is_empty() {
         run_apply(&config, &mine);
     }
@@ -63,6 +56,39 @@ pub fn doctor(fix: bool) -> i32 {
         0
     } else {
         1
+    }
+}
+
+/// `mimshel doctor --json`: the same checks for another program to read.
+/// The exit code is `doctor`'s: 0 — all is well, 1 — something is not.
+pub fn doctor_json() -> i32 {
+    let found = checks(&load_config(), config_path().as_deref());
+    print!("{}", mimshel_setup::doctor::json(&found));
+    i32::from(found.iter().any(|c| !c.ok))
+}
+
+/// What the Status page of the settings window shows: the checks counted,
+/// the failures by part, and whether `apply` can mend any of them.
+pub fn health() -> mimshel_settings::Health {
+    let found = checks(&load_config(), config_path().as_deref());
+    mimshel_settings::Health {
+        checks: found.len(),
+        failed: mimshel_setup::doctor::failed_by_part(&found)
+            .into_iter()
+            .map(|(part, count)| (part.to_string(), count))
+            .collect(),
+        fixable: fix_parts(&found).is_some_and(|parts| !apply_names(&parts).is_empty()),
+    }
+}
+
+/// The Status page's «Fix»: what `mimshel doctor --fix` applies.
+pub fn fix_health() -> Result<(), String> {
+    let config = load_config();
+    let found = checks(&config, config_path().as_deref());
+    let parts = fix_parts(&found).map(|parts| apply_names(&parts));
+    match parts {
+        Some(parts) if !parts.is_empty() => try_apply(&config, &parts),
+        _ => Ok(()),
     }
 }
 

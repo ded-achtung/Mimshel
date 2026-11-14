@@ -235,6 +235,19 @@ impl SettingsView {
         self.lang
     }
 
+    /// The id of the page shown.
+    pub fn page_id(&self) -> &'static str {
+        self.pages.get(self.page).map_or("", |p| p.id)
+    }
+
+    /// What `mimshel doctor` found, for the Status page; `None` — being
+    /// checked again.
+    pub fn set_health(&mut self, health: Option<crate::model::Health>) {
+        self.env.health = health;
+        let values = std::mem::take(&mut self.values);
+        self.set_values(self.lang, values);
+    }
+
     /// «Keep these display settings?» with `seconds` left, or gone.
     pub fn set_confirm(&mut self, seconds: Option<u32>) {
         self.confirm = seconds;
