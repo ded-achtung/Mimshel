@@ -92,30 +92,41 @@ fetch() { # fetch NAME URL REV — put exactly commit REV of NAME into $SRC/NAME
     fi
     [ "$(rev_of "$dir")" = "$3" ] || fail "$1: скачалась не та версия (ждали $3)."
 }
+# install_theme LABEL NAME URL REV SUBDIR DIR [ARGS…] — run SUBDIR/install.sh ARGS
+# of source NAME at commit REV, unless the theme in DIR was installed from that
+# very commit (the marker DIR/.mimshel-rev). "Already there" is not enough: a
+# machine that installed once would stay on the old commit for ever after the
+# pin in packaging/third-party.sh moves. A theme installed before the markers
+# existed has none and is installed again, once.
 # By a file inside, not by the folder: an interrupted install leaves the
-# folder behind. Colloid-Dark links into Colloid-Light (lesson 28), so both.
-if [ -f "$HOME/.local/share/icons/Colloid-Dark/index.theme" ] \
-    && [ -f "$HOME/.local/share/icons/Colloid-Light/index.theme" ]; then
-    ok "Значки Colloid уже стоят"
-else
-    step "Значки Colloid"
-    fetch Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
-    (cd "$SRC/Colloid-icon-theme" && ./install.sh)
-fi
-if [ -f "$HOME/.local/share/icons/Colloid-cursors/index.theme" ]; then
-    ok "Курсор Colloid уже стоит"
-else
-    step "Курсор Colloid"
-    fetch Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV"
-    (cd "$SRC/Colloid-icon-theme/cursors" && ./install.sh)
-fi
-if [ -f "$HOME/.themes/Colloid-Dark/index.theme" ]; then
-    ok "Тема окон Colloid уже стоит"
-else
-    step "Тема окон Colloid (тёмная, обычные кнопки окна)"
-    fetch Colloid-gtk-theme "$COLLOID_GTK_URL" "$COLLOID_GTK_REV"
-    (cd "$SRC/Colloid-gtk-theme" && ./install.sh -c dark --tweaks normal)
-fi
+# folder behind.
+install_theme() {
+    local label="$1" name="$2" url="$3" rev="$4" sub="$5" dir="$6"
+    shift 6
+    if [ -f "$dir/index.theme" ] && [ "$(cat "$dir/.mimshel-rev" 2>/dev/null)" = "$rev" ]; then
+        ok "$label: уже стоит"
+        return
+    fi
+    step "$label"
+    # In a subshell: without the network the theme that is already there stays.
+    if (fetch "$name" "$url" "$rev" && cd "$SRC/$name/$sub" && ./install.sh "$@"); then
+        printf '%s\n' "$rev" >"$dir/.mimshel-rev"
+    elif [ -f "$dir/index.theme" ]; then
+        warn "$label: не обновлено (нет сети?) — остаётся то, что стояло"
+    else
+        fail "$label: не установлено"
+    fi
+}
+# Colloid-Dark links into Colloid-Light (lesson 28): without it the dark
+# icons are broken, so its absence means "install again".
+[ -f "$HOME/.local/share/icons/Colloid-Light/index.theme" ] \
+    || rm -f "$HOME/.local/share/icons/Colloid-Dark/.mimshel-rev"
+install_theme "Значки Colloid" Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV" \
+    . "$HOME/.local/share/icons/Colloid-Dark"
+install_theme "Курсор Colloid" Colloid-icon-theme "$COLLOID_ICON_URL" "$COLLOID_ICON_REV" \
+    cursors "$HOME/.local/share/icons/Colloid-cursors"
+install_theme "Тема окон Colloid (тёмная, обычные кнопки окна)" Colloid-gtk-theme \
+    "$COLLOID_GTK_URL" "$COLLOID_GTK_REV" . "$HOME/.themes/Colloid-Dark" -c dark --tweaks normal
 
 # --- Сама программа ---------------------------------------------------------
 step "Собираю Mimshel (первый раз — несколько минут)"

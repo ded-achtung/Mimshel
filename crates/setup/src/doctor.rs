@@ -133,10 +133,17 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         || std::path::PathBuf::from(&cfg.wallpaper),
         |st| crate::parts::wallpaper_path(st, sw as u32, sh as u32),
     );
+    // Own wallpapers: drawn, and by this program's revision of the drawing
+    // (a picture that merely exists may be an older build's).
+    let own_wallpaper = mimshel_wallpaper::Style::parse(&cfg.wallpaper).is_some();
     add(
-        "install",
+        "wallpaper",
         &format!("обои {}", cfg.wallpaper),
-        wallpaper.exists(),
+        if own_wallpaper {
+            crate::parts::wallpaper_drawn(&wallpaper)
+        } else {
+            wallpaper.exists()
+        },
         "mimshel apply wallpaper",
     );
     add(
@@ -170,11 +177,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         add(
             "look",
             "надстройка значков: знак вместо яблока Apple",
-            paths
-                .icons
-                .join(crate::parts::OVERLAY_THEME)
-                .join("places/scalable/start-here.svg")
-                .exists(),
+            crate::parts::overlay_logo_current(&paths),
             "mimshel apply icons",
         );
     }
@@ -215,6 +218,12 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         "look",
         "модуль меню не включён «на лету» (роняет программы)",
         xs("/Gtk/Modules").is_none(),
+        "mimshel apply look",
+    );
+    add(
+        "look",
+        "правки для программ GTK записаны (рамка выделения в Проводнике)",
+        crate::gtk_fixes::current(),
         "mimshel apply look",
     );
     let gtk4 = home().join(".config/gtk-4.0/gtk.css");
@@ -324,7 +333,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         add(
             "panel",
             "знак меню (планета) на месте",
-            crate::parts::logo_path().exists(),
+            crate::parts::logo_current(),
             "mimshel apply menubar",
         );
     }
@@ -400,7 +409,7 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     add(
         "menu",
         "файл главного меню",
-        paths.main_menu().exists(),
+        read(&paths.main_menu()) == crate::parts::main_menu_text(&paths),
         "mimshel apply launchers",
     );
     for (id, label, _) in APPLE_MENU {
@@ -522,8 +531,10 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
     add(
         "lock",
         "старая заставка Xfce отключена",
-        paths.autostart.join("xfce4-screensaver.desktop").exists() && !running("xfce4-screensaver"),
-        "",
+        read(&paths.autostart.join("xfce4-screensaver.desktop"))
+            == crate::parts::screensaver_off_text()
+            && !running("xfce4-screensaver"),
+        "mimshel apply lock",
     );
     add(
         "lock",
@@ -568,11 +579,9 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
         add(
             "mimshel",
             "автозапуск службы Mimshel",
-            paths
-                .autostart
-                .join(crate::parts::DAEMON_AUTOSTART)
-                .exists(),
-            "",
+            read(&paths.autostart.join(crate::parts::DAEMON_AUTOSTART))
+                == crate::parts::daemon_autostart_text(&paths),
+            "mimshel apply service",
         );
         // The guard starts the kept build when the installed one falls at
         // its start (see `kept`). Nothing `apply` can mend: a fixed build is.

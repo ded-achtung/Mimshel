@@ -38,6 +38,12 @@ impl Style {
 /// Во сколько раз меньше рисуются мягкие формы перед размытием.
 const SMALL: u32 = 4;
 
+/// The revision of the drawing. Raise it with any change to how a style
+/// looks: pictures kept from an earlier revision are then drawn again
+/// (`mimshel_setup::parts::wallpaper_file`) instead of staying as they were
+/// on every machine that had drawn them once.
+pub const REVISION: u32 = 1;
+
 /// Обои размером `w`×`h`.
 pub fn draw(style: Style, w: u32, h: u32) -> Option<Pixmap> {
     let (sw, sh) = ((w / SMALL).max(8), (h / SMALL).max(8));

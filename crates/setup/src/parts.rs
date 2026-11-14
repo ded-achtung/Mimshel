@@ -519,19 +519,10 @@ impl Plan<'_> {
             return;
         }
         println!("▶ Служба Mimshel");
-        let bin = self.paths.shell_bin.display().to_string();
-        write(
-            &autostart,
-            &desktop_entry(
-                "Mimshel: строка меню, док, стол, «Поиск» и «Программы»",
-                &format!("{bin} daemon"),
-                "",
-                &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
-            ),
-        );
+        write(&autostart, &daemon_autostart_text(&self.paths));
         // Новая служба не займёт сокет, пока старая не вышла.
         crate::sys::kill_daemon();
-        spawn(&[&bin, "daemon"]);
+        spawn(&[&self.paths.shell_bin.display().to_string(), "daemon"]);
     }
 
     /// Экран блокировки: `mimshel lock` по команде Xfce (меню, перед сном) и
@@ -616,10 +607,7 @@ impl Plan<'_> {
         // Штатная заставка Xfce не нужна: она рисовала старое окно пароля.
         write(
             &self.paths.autostart.join("xfce4-screensaver.desktop"),
-            &format!(
-                "[Desktop Entry]\nType=Application\nName=xfce4-screensaver\nHidden=true\n\
-                 {MANAGED_MARK}\n"
-            ),
+            &screensaver_off_text(),
         );
         // …и по требованию через D-Bus (как xfce4-notifyd) — тоже закрыть.
         write(
@@ -741,6 +729,68 @@ pub fn logo_path() -> std::path::PathBuf {
     home().join(format!(
         ".local/share/icons/hicolor/scalable/apps/{LOGO_NAME}.svg"
     ))
+}
+
+/// Is the installed logo the one this program carries? (`doctor`: a file
+/// that merely exists may be an older build's.)
+pub fn logo_current() -> bool {
+    read(&logo_path()) == LOGO_SVG
+}
+
+/// The files of the icon overlay that hold our logo.
+fn overlay_logos(paths: &Paths) -> [std::path::PathBuf; 2] {
+    ["start-here", "start-here-symbolic"].map(|name| {
+        paths
+            .icons
+            .join(OVERLAY_THEME)
+            .join(format!("places/scalable/{name}.svg"))
+    })
+}
+
+/// Does the icon overlay hold the logo this program carries?
+pub fn overlay_logo_current(paths: &Paths) -> bool {
+    overlay_logos(paths)
+        .iter()
+        .all(|file| read(file) == LOGO_SYMBOLIC_SVG)
+}
+
+/// The autostart entry of the service.
+pub fn daemon_autostart_text(paths: &Paths) -> String {
+    desktop_entry(
+        "Mimshel: строка меню, док, стол, «Поиск» и «Программы»",
+        &format!("{} daemon", paths.shell_bin.display()),
+        "",
+        &format!("NoDisplay=true\n{MANAGED_MARK}\n"),
+    )
+}
+
+/// The autostart entry that keeps the Xfce screensaver from starting.
+pub fn screensaver_off_text() -> String {
+    format!(
+        "[Desktop Entry]\nType=Application\nName=xfce4-screensaver\nHidden=true\n\
+         {MANAGED_MARK}\n"
+    )
+}
+
+/// The main menu file: the order of the items and the separators.
+pub fn main_menu_text(paths: &Paths) -> String {
+    let mut layout = Vec::new();
+    for (id, _, separator) in crate::paths::APPLE_MENU {
+        if *separator {
+            layout.push("    <Separator/>".to_string());
+        }
+        layout.push(format!(
+            "    <Filename>{}-{id}.desktop</Filename>",
+            mimshel_core::names::APP
+        ));
+    }
+    format!(
+        "<!DOCTYPE Menu PUBLIC \"-//freedesktop//DTD Menu 1.0//EN\"\n \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n\
+         <Menu>\n  <Name>Apple</Name>\n  <AppDir>{}</AppDir>\n  \
+         <Include><All/></Include>\n  <Layout>\n{}\n  </Layout>\n</Menu>\n",
+        paths.main_menu_items().display(),
+        layout.join("\n")
+    )
 }
 
 fn install_logo() {
@@ -884,7 +934,7 @@ pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf>
     };
     let (w, h) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
     let out = wallpaper_path(style, w, h);
-    if out.exists() {
+    if wallpaper_drawn(&out) {
         return Some(out);
     }
     let png = mimshel_wallpaper::draw(style, w, h)?.encode_png().ok()?;
@@ -892,7 +942,28 @@ pub fn wallpaper_file(value: &str, w: i64, h: i64) -> Option<std::path::PathBuf>
     let tmp = out.with_extension("png.tmp");
     std::fs::write(&tmp, png).ok()?;
     std::fs::rename(&tmp, &out).ok()?;
+    // Without the note the picture is taken for revision 1 and drawn again
+    // at the next start: slower, never wrong.
+    let _ = std::fs::write(revision_note(&out), mimshel_wallpaper::REVISION.to_string());
     Some(out)
+}
+
+/// The note next to a drawn wallpaper: the revision of the drawing it was
+/// made by.
+fn revision_note(picture: &Path) -> std::path::PathBuf {
+    picture.with_extension("rev")
+}
+
+/// Is the own wallpaper at `picture` there and drawn by this program's
+/// revision of the drawing? "Drawn once" is not enough: a picture kept from
+/// an older revision would hide every later change of the drawing. A
+/// picture without a note was drawn before notes existed, by revision 1.
+pub fn wallpaper_drawn(picture: &Path) -> bool {
+    let by = std::fs::read_to_string(revision_note(picture))
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .unwrap_or(1);
+    picture.exists() && by == mimshel_wallpaper::REVISION
 }
 
 impl Plan<'_> {
@@ -1051,11 +1122,8 @@ impl Plan<'_> {
             );
             // Одна залитая фигура: GTK перекрашивает одноцветные значки,
             // заливая все фигуры, — маски и линии при этом ломаются.
-            for name in ["start-here", "start-here-symbolic"] {
-                write(
-                    &dir.join(format!("places/scalable/{name}.svg")),
-                    LOGO_SYMBOLIC_SVG,
-                );
+            for file in overlay_logos(&self.paths) {
+                write(&file, LOGO_SYMBOLIC_SVG);
             }
             let png = crate::png_icons::theme_name(OVERLAY_THEME);
             if !self.config.png_icons {
@@ -1105,17 +1173,12 @@ impl Plan<'_> {
         let dir = self.paths.main_menu_items();
         let bin = self.paths.shell_bin.display();
         let mut wanted = Vec::new();
-        let mut layout = Vec::new();
-        for (id, label, separator) in crate::paths::APPLE_MENU {
-            if *separator {
-                layout.push("    <Separator/>".to_string());
-            }
+        for (id, label, _) in crate::paths::APPLE_MENU {
             let file = format!("{}-{id}.desktop", mimshel_core::names::APP);
             write(
                 &dir.join(&file),
                 &desktop_entry(label, &format!("{bin} action {id}"), "", ""),
             );
-            layout.push(format!("    <Filename>{file}</Filename>"));
             wanted.push(file);
         }
         // Папку не пересоздаём: панель Xfce следит за ней. Лишнее — убрать.
@@ -1127,16 +1190,7 @@ impl Plan<'_> {
                 remove(&old.path());
             }
         }
-        write(
-            &self.paths.main_menu(),
-            &format!(
-                "<!DOCTYPE Menu PUBLIC \"-//freedesktop//DTD Menu 1.0//EN\"\n \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n\
-                 <Menu>\n  <Name>Apple</Name>\n  <AppDir>{}</AppDir>\n  \
-                 <Include><All/></Include>\n  <Layout>\n{}\n  </Layout>\n</Menu>\n",
-                dir.display(),
-                layout.join("\n")
-            ),
-        );
+        write(&self.paths.main_menu(), &main_menu_text(&self.paths));
     }
 }
 
@@ -1293,6 +1347,53 @@ fn tray_apps(paths: &Paths) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wallpaper_from_another_revision_is_not_drawn() {
+        let dir =
+            std::env::temp_dir().join(format!("mimshel-wallpaper-rev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let picture = dir.join("space-1920x1080.png");
+        let note = revision_note(&picture);
+        let now = mimshel_wallpaper::REVISION;
+        assert!(!wallpaper_drawn(&picture), "no picture");
+        std::fs::write(&picture, b"png").unwrap();
+        // Pictures drawn before the notes existed are revision 1.
+        assert_eq!(wallpaper_drawn(&picture), now == 1);
+        std::fs::write(&note, now.to_string()).unwrap();
+        assert!(wallpaper_drawn(&picture));
+        std::fs::write(&note, (now + 1).to_string()).unwrap();
+        assert!(!wallpaper_drawn(&picture), "another revision's picture");
+        std::fs::remove_file(&picture).unwrap();
+        std::fs::write(&note, now.to_string()).unwrap();
+        assert!(!wallpaper_drawn(&picture), "a note without its picture");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn main_menu_lists_every_item_in_order() {
+        let paths = Paths::new();
+        let text = main_menu_text(&paths);
+        let mut from = 0;
+        for (id, ..) in crate::paths::APPLE_MENU {
+            let item = format!(
+                "<Filename>{}-{id}.desktop</Filename>",
+                mimshel_core::names::APP
+            );
+            let at = text[from..]
+                .find(&item)
+                .unwrap_or_else(|| panic!("{item} is missing or out of order"));
+            from += at + item.len();
+        }
+        assert_eq!(
+            text.matches("<Separator/>").count(),
+            crate::paths::APPLE_MENU
+                .iter()
+                .filter(|(.., separator)| *separator)
+                .count()
+        );
+    }
 
     #[test]
     fn monitors_from_xrandr() {

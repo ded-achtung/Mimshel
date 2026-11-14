@@ -57,6 +57,13 @@ pub fn present() -> bool {
     std::fs::read_to_string(file()).is_ok_and(|t| t.contains(BEGIN) || t.contains(OLD_BEGIN))
 }
 
+/// Is our piece in the file, and is it the one this program writes? An
+/// older build's piece counts as missing: `apply look` puts the new one in.
+pub fn current() -> bool {
+    std::fs::read_to_string(file())
+        .is_ok_and(|text| text.contains(&format!("{BEGIN}\n{CSS}\n{END}\n")))
+}
+
 fn apply_in(path: &Path) -> bool {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let new = with_block(&text);
