@@ -13,6 +13,41 @@ use xkeysym::key;
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Something the shell needs from the screen that not every backend can do.
+/// A part asks the door whether the screen can do it
+/// (`Display::can`) rather than which backend runs: X11 can do all of
+/// these, the Wayland side gets them one by one (docs/platform.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    /// The wallpaper and desktop icons layer under all windows.
+    DesktopLayer,
+    /// The usable area and the size of the screen, and its changes.
+    ScreenArea,
+    /// Dragging files to and from other programs.
+    DragAndDrop,
+    /// Other programs' windows: the list, titles, icons, menus, and
+    /// activating, minimizing and closing them.
+    OtherWindows,
+    /// The keyboard layouts and switching between them.
+    KeyboardLayouts,
+    /// Where the pointer is when it is over no window of ours.
+    PointerPosition,
+    /// A picture of the screen or of a window.
+    ScreenCapture,
+}
+
+impl Capability {
+    pub const ALL: [Capability; 7] = [
+        Capability::DesktopLayer,
+        Capability::ScreenArea,
+        Capability::DragAndDrop,
+        Capability::OtherWindows,
+        Capability::KeyboardLayouts,
+        Capability::PointerPosition,
+        Capability::ScreenCapture,
+    ];
+}
+
 /// Which property of a window changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Property {

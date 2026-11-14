@@ -15,7 +15,7 @@
 //! calls, no state, no copies (docs/platform.md, rule 7).
 
 pub use mimshel_core::windows::WindowInfo;
-pub use mimshel_platform::{DragTarget, Event, Key, KeyPress, Property, Result};
+pub use mimshel_platform::{Capability, DragTarget, Event, Key, KeyPress, Property, Result};
 use mimshel_render::Image;
 
 /// The connection to the screen: one per process.
@@ -31,15 +31,33 @@ enum Backend {
 /// What a door call answers on Wayland while it has no Wayland side yet.
 const NOT_ON_WAYLAND: &str = "not available on Wayland yet";
 
+/// What the Wayland side cannot do yet: every door call that answers
+/// "nothing" there names one of these, and a test below keeps the list and
+/// the calls the same. A capability leaves the list when the last of its
+/// calls has its Wayland side.
+const WAYLAND_LACKS: &[Capability] = &[
+    Capability::DesktopLayer,
+    Capability::ScreenArea,
+    Capability::DragAndDrop,
+    Capability::OtherWindows,
+    Capability::KeyboardLayouts,
+    Capability::PointerPosition,
+    Capability::ScreenCapture,
+];
+
 /// Calls the X11 backend; on Wayland gives `$none` until that call has its
-/// Wayland side. Harmless actions (watching, activating, grabbing) answer
+/// Wayland side, and `$lacks` names the [`Capability`] that is missing
+/// there for it. Harmless actions (watching, activating, grabbing) answer
 /// `Ok` there and do nothing, so a part keeps running; calls that would
 /// create something answer an error through [`Display::x11`].
 macro_rules! x11_or {
-    ($d:expr, $none:expr, |$x:ident| $body:expr) => {
+    ($d:expr, $lacks:ident, $none:expr, |$x:ident| $body:expr) => {
         match &$d.backend {
             Backend::X11($x) => $body,
-            Backend::Wayland(_) => $none,
+            Backend::Wayland(_) => {
+                const _: Capability = Capability::$lacks;
+                $none
+            }
         }
     };
 }
@@ -75,17 +93,30 @@ impl Display {
     }
 
     /// The X11 display, or an error on Wayland (for calls with no Wayland
-    /// side yet).
-    fn x11(&self) -> Result<&mimshel_x11::Display> {
+    /// side yet): `lacks` is the capability missing there.
+    fn x11(&self, lacks: Capability) -> Result<&mimshel_x11::Display> {
         match &self.backend {
             Backend::X11(x) => Ok(x),
-            Backend::Wayland(_) => Err(NOT_ON_WAYLAND.into()),
+            Backend::Wayland(_) => Err(format!("{NOT_ON_WAYLAND}: {lacks:?}").into()),
+        }
+    }
+
+    /// Whether this screen can do `what`. A part that offers something asks
+    /// this — what the screen can do, never which screen it is — so that a
+    /// control with nothing behind it is not shown. X11 can do all of it;
+    /// Wayland cannot do what is in [`WAYLAND_LACKS`] yet.
+    pub fn can(&self, what: Capability) -> bool {
+        match &self.backend {
+            Backend::X11(_) => true,
+            Backend::Wayland(_) => !WAYLAND_LACKS.contains(&what),
         }
     }
 
     /// The wallpaper and icons layer. Wayland: layer-shell background layer.
     pub fn create_background(&self) -> Result<Background> {
-        Ok(Background(self.x11()?.create_desktop()?))
+        Ok(Background(
+            self.x11(Capability::DesktopLayer)?.create_desktop()?,
+        ))
     }
 
     /// Whether other programs have desktop windows (a video wallpaper),
@@ -93,7 +124,7 @@ impl Display {
     /// window manager has not taken ours). Wayland: other clients'
     /// background-layer surfaces, which our compositor orders (none yet).
     pub fn foreign_desktops(&self, ours: u32) -> (bool, Option<Vec<u32>>) {
-        x11_or!(self, (false, Some(Vec::new())), |xd| xd
+        x11_or!(self, DesktopLayer, (false, Some(Vec::new())), |xd| xd
             .foreign_desktops(ours))
     }
 
@@ -107,44 +138,45 @@ impl Display {
 
     /// Usable output area in points. Wayland: output minus exclusive zones.
     pub fn workarea(&self) -> Option<(i32, i32, u32, u32)> {
-        x11_or!(self, None, |xd| xd.workarea())
+        x11_or!(self, ScreenArea, None, |xd| xd.workarea())
     }
 
     /// Screen size in physical pixels. Wayland: compositor output bounds.
     pub fn screen_pixels(&self) -> (u16, u16) {
-        x11_or!(self, (0, 0), |xd| xd.screen_pixels())
+        x11_or!(self, ScreenArea, (0, 0), |xd| xd.screen_pixels())
     }
 
     /// Begin offering files. Wayland: `wl_data_device` / `wl_data_source`.
     pub fn drag_begin(&self, source: u32, paths: &[std::path::PathBuf]) {
-        x11_or!(self, (), |xd| xd.drag_begin(source, paths));
+        x11_or!(self, DragAndDrop, (), |xd| xd.drag_begin(source, paths));
     }
 
     /// Update a file drag. Wayland: `wl_data_device` / `wl_data_source`.
     pub fn drag_motion(&self, x: i16, y: i16, copy: bool) -> DragTarget {
-        x11_or!(self, DragTarget::Nothing, |xd| xd.drag_motion(x, y, copy))
+        x11_or!(self, DragAndDrop, DragTarget::Nothing, |xd| xd
+            .drag_motion(x, y, copy))
     }
 
     /// End a file drag. Wayland: `wl_data_device` / `wl_data_source`.
     pub fn drag_end(&self) -> DragTarget {
-        x11_or!(self, DragTarget::Nothing, |xd| xd.drag_end())
+        x11_or!(self, DragAndDrop, DragTarget::Nothing, |xd| xd.drag_end())
     }
 
     /// Take received file paths. Wayland: read the `wl_data_device` offer.
     pub fn take_drop(&self, ticket: u64) -> Vec<std::path::PathBuf> {
-        x11_or!(self, Vec::new(), |xd| xd.take_drop(ticket))
+        x11_or!(self, DragAndDrop, Vec::new(), |xd| xd.take_drop(ticket))
     }
 
     /// A drop agreed as a move is carried out as a copy (another disk).
     /// Wayland: the same, `wl_data_offer.set_actions` before `finish`.
     pub fn drop_copied(&self, ticket: u64) {
-        x11_or!(self, (), |xd| xd.drop_copied(ticket));
+        x11_or!(self, DragAndDrop, (), |xd| xd.drop_copied(ticket));
     }
 
     /// Report completion after the file operation. Wayland: finish the
     /// `wl_data_offer` with the accepted result.
     pub fn finish_drop(&self, ticket: u64, success: bool) {
-        x11_or!(self, (), |xd| xd.finish_drop(ticket, success));
+        x11_or!(self, DragAndDrop, (), |xd| xd.finish_drop(ticket, success));
     }
 
     /// Wait for the next event (blocks).
@@ -221,7 +253,7 @@ impl Display {
     /// Bring a window forward and give it keyboard focus. Wayland: an
     /// activation request through foreign-toplevel management in our compositor.
     pub fn activate(&self, window: u32) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.activate(window))
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.activate(window))
     }
 
     /// Find an already running app window by its class and try to raise it.
@@ -290,106 +322,110 @@ impl Display {
     /// Whether an event concerns the whole screen / desktop state rather
     /// than one window. Wayland: desktop/output state identified by our compositor.
     pub fn is_screen(&self, window: u32) -> bool {
-        x11_or!(self, false, |x| window == x.root())
+        x11_or!(self, ScreenArea, false, |x| window == x.root())
     }
 
     /// A program window's metadata. Wayland: ext-foreign-toplevel-list /
     /// wlr-foreign-toplevel-management, implemented by our compositor.
     pub fn window_info(&self, window: u32) -> Option<WindowInfo> {
-        x11_or!(self, None, |xd| xd.window_info(window))
+        x11_or!(self, OtherWindows, None, |xd| xd.window_info(window))
     }
 
     /// List program windows. Wayland: ext-foreign-toplevel-list.
     pub fn program_windows(&self) -> Vec<u32> {
-        x11_or!(self, Vec::new(), |xd| xd.client_list())
+        x11_or!(self, OtherWindows, Vec::new(), |xd| xd.client_list())
     }
 
     /// A program window's title. Wayland: foreign-toplevel metadata.
     pub fn window_title(&self, window: u32) -> String {
-        x11_or!(self, String::new(), |xd| xd.window_title(window))
+        x11_or!(self, OtherWindows, String::new(), |xd| xd
+            .window_title(window))
     }
 
     /// A program window's icon at the requested size in points.
     /// Wayland: foreign-toplevel icon data from our compositor.
     pub fn window_icon(&self, window: u32, size: u32) -> Option<tiny_skia::Pixmap> {
-        x11_or!(self, None, |xd| xd.window_icon(window, size))
+        x11_or!(self, OtherWindows, None, |xd| xd.window_icon(window, size))
     }
 
     /// A program window's rectangle on screen, including its frame, in points.
     /// Wayland: our compositor knows the foreign toplevel's frame rectangle.
     pub fn window_frame(&self, window: u32) -> Option<(i32, i32, u32, u32)> {
-        x11_or!(self, None, |xd| xd.frame_geometry(window))
+        x11_or!(self, OtherWindows, None, |xd| xd.frame_geometry(window))
     }
 
     /// Follow one program window's title, icon and state changes.
     /// Wayland: foreign-toplevel updates from our compositor.
     pub fn watch_window(&self, window: u32) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.watch_window(window))
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.watch_window(window))
     }
 
     /// Watch new program windows and their first frame.
     /// Wayland: our compositor tells the shell directly.
     pub fn watch_new_windows(&self) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.watch_new_windows())
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.watch_new_windows())
     }
 
     /// How much longer to wait for a new window's first frame over a screen
     /// rectangle in pixels. Wayland: our compositor tells the shell directly.
     pub fn undrawn_over(&self, rect: (i32, i32, u32, u32)) -> Option<std::time::Duration> {
-        x11_or!(self, None, |xd| xd.undrawn_over(rect))
+        x11_or!(self, OtherWindows, None, |xd| xd.undrawn_over(rect))
     }
 
     /// Close a program window. Wayland: foreign-toplevel management.
     pub fn close(&self, window: u32) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.close(window))
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.close(window))
     }
 
     /// Minimize a program window. Wayland: foreign-toplevel management.
     pub fn minimize(&self, window: u32) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.minimize(window))
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.minimize(window))
     }
 
     /// Read an app-menu address property by name. X11 only; None on Wayland,
     /// where GTK has no standard global menu (docs/wayland-plan.md).
     pub fn window_menu_property(&self, window: u32, name: &str) -> Option<String> {
-        x11_or!(self, None, |xd| xd.window_text(window, name))
+        x11_or!(self, OtherWindows, None, |xd| xd.window_text(window, name))
     }
 
     /// Watch layout/group changes. Wayland: the compositor's xkb keymap.
     pub fn watch_keyboard(&self) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.watch_keyboard())
+        x11_or!(self, KeyboardLayouts, Ok(()), |xd| xd.watch_keyboard())
     }
 
     /// Layout names. Wayland: the compositor's xkb keymap.
     pub fn keyboard_layouts(&self) -> Vec<String> {
-        x11_or!(self, Vec::new(), |xd| xd.keyboard_layouts())
+        x11_or!(self, KeyboardLayouts, Vec::new(), |xd| xd
+            .keyboard_layouts())
     }
 
     /// Current layout group. Wayland: the compositor's xkb keymap.
     pub fn keyboard_group(&self) -> u8 {
-        x11_or!(self, 0, |xd| xd.keyboard_group())
+        x11_or!(self, KeyboardLayouts, 0, |xd| xd.keyboard_group())
     }
 
     /// Select a layout group. Wayland: the compositor's xkb keymap.
     pub fn set_keyboard_group(&self, group: u8) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.set_keyboard_group(group))
+        x11_or!(self, KeyboardLayouts, Ok(()), |xd| xd
+            .set_keyboard_group(group))
     }
 
     /// Pointer position on screen, in points.
     /// Wayland: our compositor tells the shell the pointer's position.
     pub fn pointer_position(&self) -> Option<(i16, i16)> {
-        x11_or!(self, None, |xd| xd.pointer_position())
+        x11_or!(self, PointerPosition, None, |xd| xd.pointer_position())
     }
 
     /// Keep pointer events during an icon drag. Wayland: an implicit grab
     /// during the press or an xdg_popup grab.
     pub fn grab_pointer_for_drag(&self, window: u32) -> Result<bool> {
-        x11_or!(self, Ok(false), |xd| xd.grab_pointer_for_drag(window))
+        x11_or!(self, DragAndDrop, Ok(false), |xd| xd
+            .grab_pointer_for_drag(window))
     }
 
     /// Release the drag's pointer grab. Wayland: finish the implicit or popup grab.
     pub fn ungrab_pointer(&self) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.ungrab_pointer())
+        x11_or!(self, DragAndDrop, Ok(()), |xd| xd.ungrab_pointer())
     }
 
     /// Hear about any window appearing or being restacked, and the screen
@@ -397,25 +433,25 @@ impl Display {
     /// screen can stay on top. Wayland: not needed — under
     /// `ext-session-lock-v1` nothing else is shown while locked.
     pub fn watch_stacking(&self) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.watch_stacking())
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.watch_stacking())
     }
 
     /// Give the keyboard back to the active window after the lock screen
     /// had it. Wayland: the compositor restores focus when the lock ends.
     pub fn restore_focus(&self) -> Result<()> {
-        x11_or!(self, Ok(()), |xd| xd.restore_focus())
+        x11_or!(self, OtherWindows, Ok(()), |xd| xd.restore_focus())
     }
 
     /// A picture of the whole screen (the Apps window's blurred background).
     /// Wayland: our compositor renders it (screencopy).
     pub fn capture_screen(&self) -> Result<tiny_skia::Pixmap> {
-        self.x11()?.capture_screen()
+        self.x11(Capability::ScreenCapture)?.capture_screen()
     }
 
     /// A picture of a window as it is on screen, for previews and tests.
     /// Wayland: our compositor renders the window (screencopy).
     pub fn capture_window(&self, window: u32) -> Option<tiny_skia::Pixmap> {
-        x11_or!(self, None, |xd| xd.capture_window(window))
+        x11_or!(self, ScreenCapture, None, |xd| xd.capture_window(window))
     }
 }
 
@@ -754,22 +790,23 @@ impl Background {
     }
 
     pub fn show(&self, d: &Display) -> Result<()> {
-        self.0.show(d.x11()?)
+        self.0.show(d.x11(Capability::DesktopLayer)?)
     }
 
     /// Over other programs' desktop windows (our icons on a video
     /// wallpaper). Wayland: the compositor orders background layers.
     pub fn raise_over_others(&self, d: &Display) -> Result<()> {
-        x11_or!(d, Ok(()), |xd| self.0.remap(xd))
+        x11_or!(d, DesktopLayer, Ok(()), |xd| self.0.remap(xd))
     }
 
     pub fn set_wallpaper(&self, d: &Display, image: &tiny_skia::Pixmap) -> Result<()> {
-        self.0.set_wallpaper(d.x11()?, image)
+        self.0
+            .set_wallpaper(d.x11(Capability::DesktopLayer)?, image)
     }
 
     /// Update an area at an offset in pixels. Wayland: surface buffer damage.
     pub fn update(&self, d: &Display, image: &tiny_skia::Pixmap, x: i32, y: i32) -> Result<()> {
-        self.0.update(d.x11()?, image, x, y)
+        self.0.update(d.x11(Capability::DesktopLayer)?, image, x, y)
     }
 }
 
@@ -780,15 +817,15 @@ pub struct SelectionOverlay(mimshel_x11::SelectionRenderer);
 impl SelectionOverlay {
     /// Optional acceleration; the desktop retains its picture-based fallback.
     pub fn new(d: &Display, window: u32) -> Option<Self> {
-        mimshel_x11::SelectionRenderer::new(d.x11().ok()?, window).map(Self)
+        mimshel_x11::SelectionRenderer::new(d.x11(Capability::DesktopLayer).ok()?, window).map(Self)
     }
 
     pub fn paint(&mut self, d: &Display, rect: (f32, f32, f32, f32)) -> Result<()> {
-        self.0.paint(d.x11()?, rect)
+        self.0.paint(d.x11(Capability::DesktopLayer)?, rect)
     }
 
     pub fn reset(&mut self, d: &Display) -> Result<()> {
-        self.0.reset(d.x11()?)
+        self.0.reset(d.x11(Capability::DesktopLayer)?)
     }
 }
 
@@ -817,6 +854,51 @@ impl ServerWatch {
 
 #[cfg(test)]
 mod tests {
+    use super::{Capability, WAYLAND_LACKS};
+
+    /// The capabilities named by the door calls that answer "nothing" on
+    /// Wayland are exactly the ones [`WAYLAND_LACKS`] lists. Claiming a
+    /// capability whose call does nothing would offer a dead control;
+    /// leaving one listed after its calls got their Wayland side would hide
+    /// a working one.
+    #[test]
+    fn wayland_lacks_what_its_calls_say() {
+        let source = include_str!("platform.rs");
+        let door = source.split("#[cfg(test)]").next().unwrap();
+        let mut named: Vec<String> = Vec::new();
+        let mut note = |rest: &str| {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            if !named.contains(&name) {
+                named.push(name);
+            }
+        };
+        // `x11_or!(display, Capability, …)`: the second argument.
+        for call in door.split("x11_or!(").skip(1) {
+            let Some((first, rest)) = call.split_once(',') else {
+                continue;
+            };
+            // The macro's own definition and its description.
+            if first.contains('$') || first.contains('`') {
+                continue;
+            }
+            note(rest.trim_start());
+        }
+        // `.x11(Capability::Name)`.
+        for call in door.split(".x11(Capability::").skip(1) {
+            note(call);
+        }
+        named.sort();
+        let mut listed: Vec<String> = WAYLAND_LACKS.iter().map(|c| format!("{c:?}")).collect();
+        listed.sort();
+        assert_eq!(named, listed);
+        for capability in WAYLAND_LACKS {
+            assert!(Capability::ALL.contains(capability));
+        }
+    }
+
     /// Only this file reaches a backend, X11 or Wayland; every other file of
     /// the program goes through the door.
     #[test]

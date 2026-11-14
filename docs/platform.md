@@ -86,6 +86,26 @@ notification history (50) and the icon caches are full: no leak.
 | 11 | `lock_ui` (own process) | `Popup` as a lock surface (`show_lock`, `regrab`), `restore_focus`, `watch_stacking` | Claude |
 | 12 | finish | `Display::x11()` removed; `main.rs` and `guard.rs` (`ServerWatch`, `system_scale`) moved too; the test `only_the_door_names_the_backend` | Claude |
 
+## Capabilities
+
+While the Wayland side is being built, a door call without its Wayland side
+answers "nothing" there (or an error, for calls that create something). Each
+such call names what is missing — a `mimshel_platform::Capability`:
+`DesktopLayer`, `ScreenArea`, `DragAndDrop`, `OtherWindows`,
+`KeyboardLayouts`, `PointerPosition`, `ScreenCapture`.
+
+- A part that offers something which needs one of these asks
+  `Display::can(Capability)` — **what the screen can do, never which screen
+  it is** — and does not show a control with nothing behind it.
+- X11 can do all of them. What Wayland lacks is the list `WAYLAND_LACKS` in
+  `platform.rs`. The test `wayland_lacks_what_its_calls_say` keeps the list
+  and the calls the same in both directions: a call that does nothing must be
+  listed, and a capability leaves the list when the last of its calls has its
+  Wayland side. Claiming a capability whose call does nothing is worse than
+  not claiming it.
+- `can` is a lookup in that list: no state, no call to the server (rule 7).
+- The service writes what the screen lacks into its log once at its start.
+
 ## What things become on Wayland
 
 | Door (X11 today) | Wayland |

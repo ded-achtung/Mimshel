@@ -374,6 +374,15 @@ pub fn run(once: Option<Panel>) -> Result<()> {
     }
     let platform = Arc::new(Display::connect()?);
     step("экран");
+    // What this screen cannot do yet (the Wayland side while it is being
+    // built): said once, so that a part doing nothing there is no riddle.
+    let lacks: Vec<crate::platform::Capability> = crate::platform::Capability::ALL
+        .into_iter()
+        .filter(|what| !platform.can(*what))
+        .collect();
+    if !lacks.is_empty() {
+        eprintln!("Этот экран пока не умеет: {lacks:?}");
+    }
     {
         let platform = platform.clone();
         let tx = tx.clone();
