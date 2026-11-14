@@ -534,6 +534,12 @@ pub fn t(lang: Language, key: &str) -> &str {
             "恢复 Xfce 面板：mimshel restore",
             "還原 Xfce 面板：mimshel restore",
         ),
+        "crash.kept_build" => (
+            "The installed build crashes at its start, so the previous working build is running. Install a fixed build to return to it.",
+            "Установленная сборка падает при запуске, поэтому работает прежняя рабочая. Поставьте исправленную сборку — она запустится сама.",
+            "已安装的版本启动时崩溃，现在运行的是上一个可用版本。安装修复后的版本即可恢复。",
+            "已安裝的版本啟動時當機，現在執行的是上一個可用版本。安裝修復後的版本即可恢復。",
+        ),
         "dock.remove" => ("Remove", "Удалить", "移除", "移除"),
         "folder.search_placeholder" => (
             "Search in folder",
@@ -1149,6 +1155,7 @@ pub const KEYS: &[&str] = &[
     "crash.give_up_head",
     "crash.give_up_reason",
     "crash.give_up_restore",
+    "crash.kept_build",
     "dock.remove",
     "folder.search_placeholder",
     "menubar.sound_unnamed",

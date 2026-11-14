@@ -49,7 +49,8 @@ const WATCHERS: &str = r"^(pactl subscribe|udevadm monitor --kernel --subsystem-
 
 pub struct Check {
     /// Часть оформления: env, install, look, wallpaper, panel, notify, menu,
-    /// lock, power, dock, mimshel; config — свой файл настроек, его правят руками.
+    /// lock, power, dock, mimshel; config — свой файл настроек, его правят руками;
+    /// build — the installed program itself, mended by installing another.
     pub part: &'static str,
     pub what: String,
     pub ok: bool,
@@ -573,6 +574,14 @@ pub fn checks(cfg: &Config, config: Option<&Path>) -> Vec<Check> {
                 .exists(),
             "",
         );
+        // The guard starts the kept build when the installed one falls at
+        // its start (see `kept`). Nothing `apply` can mend: a fixed build is.
+        add(
+            "build",
+            "служба работает на установленной сборке (не на прежней запасной)",
+            !crate::kept::Kept::new().is_some_and(|k| k.is_bad(&paths.shell_bin)),
+            "установленная сборка падала при запуске (mimshel crashes) — поставьте исправленную",
+        );
         let guard = [
             pgrep(r"^(\S*/)?mimshel daemon$"),
             pgrep(r"^(\S*/)?shell daemon$"),
@@ -703,8 +712,9 @@ pub fn fix_parts(checks: &[Check]) -> Option<Vec<&'static str>> {
     for c in checks.iter().filter(|c| !c.ok) {
         match c.part {
             "env" => return None,
-            // Ошибку в файле настроек исправит только человек.
-            "config" => continue,
+            // Ошибку в файле настроек исправит только человек; a build that
+            // falls is mended by installing another.
+            "config" | "build" => continue,
             _ => {}
         }
         let part = match c.part {
@@ -790,6 +800,7 @@ mod tests {
             Some(vec!["service", "dock", "menu"])
         );
         assert_eq!(fix_parts(&[check("config", false)]), None);
+        assert_eq!(fix_parts(&[check("build", false)]), None);
         assert_eq!(
             fix_parts(&[check("dock", false), check("env", false)]),
             None

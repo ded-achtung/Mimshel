@@ -8,12 +8,22 @@
 //! не перезапускает службу (иначе, запущенный не из сеанса, например по SSH,
 //! он пережил бы выход и цеплялся к X следующего сеанса). Остановить обоих: `pkill -f 'mimshel daemon'` (так делает `mimshel apply service`).
 //! Служба следит за сторожем и выходит, если его не стало.
+//!
+//! A build that cannot start: once a service has run for [`STABLE`], the
+//! guard keeps a copy of that build (`mimshel_setup::kept`). When a newly
+//! installed build falls [`GIVE_UP`] times in a row right after its start,
+//! the guard starts the kept copy instead of giving up, tells the user, and
+//! goes back to the installed file as soon as another build is put there.
+//! Only the service is covered: the lock screen has its own guard.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use mimshel_setup::kept::{Identity, Kept};
 
 /// Служба уже запущена — перезапускать незачем.
 pub const ALREADY_RUNNING: i32 = 3;
@@ -98,10 +108,37 @@ pub fn run() -> ! {
         }
     });
     let exe = own_exe();
+    let kept = Kept::new();
+    // The kept build that stands in for the installed one, and which
+    // installed build it stands in for.
+    let mut stand_in: Option<(PathBuf, Option<Identity>)> = None;
+    if let Some(program) = kept
+        .as_ref()
+        .filter(|k| k.is_bad(&exe))
+        .and_then(|k| k.stand_in(&exe))
+    {
+        log("установленная сборка раньше падала при запуске — запускаю прежнюю рабочую");
+        let lang = mimshel_core::i18n::language_from_config();
+        crate::crash::note_last_crash(
+            "service",
+            mimshel_core::i18n::t(lang, "crash.kept_build"),
+            None,
+        );
+        stand_in = Some((program, Identity::of(&exe)));
+    }
     let mut quick_failures = 0;
     loop {
+        // A build installed over the failing one gets its own try.
+        if let Some((_, failed)) = &stand_in
+            && Identity::of(&exe) != *failed
+        {
+            log("установлена другая сборка — запускаю её");
+            stand_in = None;
+            quick_failures = 0;
+        }
+        let program = stand_in.as_ref().map_or(&exe, |(program, _)| program);
         let started = Instant::now();
-        let child = spawn(&exe);
+        let child = spawn(program, after_a_stable_run(kept.clone(), &stand_in));
         let lived = started.elapsed();
         let (reason, report, ended) = match &child {
             Ok((s, _)) if s.code() == Some(ALREADY_RUNNING) => {
@@ -120,6 +157,7 @@ pub fn run() -> ! {
             }
             Err(e) => (format!("не запустилась: {e}"), None, Ended::Crashed),
         };
+        let mut last_report = None;
         if ended == Ended::Crashed {
             // No panic report (a signal, an exit code): write one here, with
             // the last lines of the log, so `mimshel crashes` and `doctor` see it.
@@ -134,6 +172,7 @@ pub fn run() -> ! {
             });
             // The restarted service will explain the crash to the user.
             crate::crash::note_last_crash("service", &reason, report.as_deref());
+            last_report = report;
         }
         match next_step(&mut quick_failures, ended, lived) {
             Next::Exit => {
@@ -154,11 +193,68 @@ pub fn run() -> ! {
                 std::thread::sleep(pause);
             }
             Next::GiveUp => {
+                let lang = mimshel_core::i18n::language_from_config();
+                // The installed build cannot start. A kept build that ran
+                // before takes over; when it is the kept one that falls, or
+                // there is none, the fault is not the build's.
+                let way_out = match (&stand_in, &kept) {
+                    (None, Some(kept)) => kept.stand_in(&exe),
+                    _ => None,
+                };
+                let Some(program) = way_out else {
+                    log(&format!(
+                        "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — больше не перезапускаю"
+                    ));
+                    give_up(&reason, lang);
+                };
                 log(&format!(
-                    "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — больше не перезапускаю"
+                    "служба {reason}, {GIVE_UP} раз подряд вскоре после запуска — \
+                     запускаю прежнюю рабочую сборку {}",
+                    program.display()
                 ));
-                give_up(&reason, mimshel_core::i18n::language_from_config());
+                crate::crash::note_last_crash(
+                    "service",
+                    // One line: the note is read back line by line.
+                    &format!(
+                        "{} {} {reason}",
+                        mimshel_core::i18n::t(lang, "crash.kept_build"),
+                        mimshel_core::i18n::t(lang, "crash.give_up_reason")
+                    )
+                    .replace('\n', " "),
+                    last_report.as_deref(),
+                );
+                stand_in = Some((program, Identity::of(&exe)));
+                quick_failures = 0;
             }
+        }
+    }
+}
+
+/// What to do once a started service has stayed up for [`STABLE`]: the
+/// installed build is kept as the one to fall back to; a kept build that
+/// stands in confirms that the installed one is at fault, so the next login
+/// starts the kept one at once.
+fn after_a_stable_run(
+    kept: Option<Kept>,
+    stand_in: &Option<(PathBuf, Option<Identity>)>,
+) -> impl FnOnce(u32) + Send + 'static {
+    let failed = stand_in.as_ref().map(|(_, failed)| *failed);
+    move |pid| {
+        let Some(kept) = kept else { return };
+        match failed {
+            None => match kept.keep(Path::new(&format!("/proc/{pid}/exe"))) {
+                Ok(true) => log("сборка работает — сохранена как запасная"),
+                Ok(false) => {}
+                Err(e) => log(&format!("запасная сборка не сохранена: {e}")),
+            },
+            Some(Some(failed)) => {
+                if let Err(e) = kept.mark_bad(failed) {
+                    log(&format!(
+                        "не записать, что установленная сборка падает: {e}"
+                    ));
+                }
+            }
+            Some(None) => {}
         }
     }
 }
@@ -212,7 +308,16 @@ pub fn watch_parent() {
     });
 }
 
-fn spawn(exe: &PathBuf) -> std::io::Result<(ExitStatus, u32)> {
+/// Counts started services: a timer set for one of them must not act once
+/// that one has ended.
+static RUN: AtomicU64 = AtomicU64::new(0);
+
+/// Start the service from `exe` and wait for its end. `stable` is called
+/// with the service's pid if it is still running after [`STABLE`].
+fn spawn(
+    exe: &Path,
+    stable: impl FnOnce(u32) + Send + 'static,
+) -> std::io::Result<(ExitStatus, u32)> {
     let mut cmd = Command::new(exe);
     cmd.args(["daemon", "--child"]).stdin(Stdio::null());
     // Распределитель памяти glibc после первого освобождения большого
@@ -234,8 +339,17 @@ fn spawn(exe: &PathBuf) -> std::io::Result<(ExitStatus, u32)> {
     }
     let mut child = cmd.spawn()?;
     let pid = child.id();
-    let status = child.wait()?;
-    Ok((status, pid))
+    let run = RUN.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(STABLE);
+        if RUN.load(Ordering::SeqCst) == run {
+            stable(pid);
+        }
+    });
+    let status = child.wait();
+    // The service has ended: its timer, if still asleep, does nothing.
+    RUN.fetch_add(1, Ordering::SeqCst);
+    Ok((status?, pid))
 }
 
 /// Путь к своей программе. Если её файл заменили новой сборкой (`install`),

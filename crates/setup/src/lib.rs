@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod greeter;
 pub mod gtk_fixes;
 pub mod gtk_links;
+pub mod kept;
 pub mod keyboards;
 pub mod lock;
 pub mod parts;
