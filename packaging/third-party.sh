@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Third-party sources the installer builds from, pinned to reviewed commits.
 # Sourced by install.sh and tools/make-offline.sh.
 #
