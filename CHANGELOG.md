@@ -12,8 +12,36 @@ Kept since the first public alpha. **Mimshel** became the project name after the
   program's window, also after the program restarts its window; the window in use keeps
   the keyboard focus.
 
+- **A build that cannot start no longer leaves the desktop bare.** Once the service has
+  run for a minute, the guard keeps a copy of that build
+  (`~/.local/state/mimshel/kept-build/`). If a newly installed build crashes five times
+  in a row right after its start, the guard starts the kept one instead of giving up,
+  says so in a notification, and goes back to the installed file as soon as another
+  build is put there. `mimshel doctor` shows when the kept build is the one running.
+  The lock screen is not covered: it has its own guard.
+- **Status page in System Settings** (`mimshel settings health`): what `mimshel doctor`
+  found, by part, with «Check again» and «Fix» — the same repair as
+  `mimshel doctor --fix`, without a terminal. The checks run when the page is first
+  shown.
+- `mimshel doctor --json` prints the same checks for other programs to read.
+
 ### Fixed
 
+- **Files from an older build are no longer taken for current ones.** `mimshel doctor`
+  compared several installed files only by their presence: the menu logo, the logo in
+  the icon overlay, the main menu file, the autostart entries of the service and of the
+  disabled Xfce screensaver. It now compares their contents with what this build
+  writes, and also checks the GTK fixes in `gtk.css`.
+- The program's own wallpapers were drawn once per screen size and kept for ever, so a
+  change in how they are drawn would never have reached a machine that already had the
+  picture. A drawn wallpaper now carries the revision of the drawing and is drawn again
+  when the revision changes.
+- `install.sh` skipped the Colloid icons, cursor and window theme whenever they were
+  already there, so a machine that installed once stayed on the old commit after the pin
+  in `packaging/third-party.sh` moved. Each theme now records the commit it was
+  installed from and is installed again when the pin differs (themes installed before
+  this have no record and are installed again once). Without a network the theme that
+  is there stays.
 - The menu bar and the Dock no longer stay on top of fullscreen games and videos: they
   were marked «always on top», which xfwm4 places above even a focused fullscreen
   window. Now they are ordinary panels — above normal windows, below the one on full

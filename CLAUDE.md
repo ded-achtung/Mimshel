@@ -37,6 +37,8 @@ The detailed step-by-step history up to 2026-10-28 (in Russian) is in git:
   platform boundary, is in `docs/platform.md`: the program reaches the screen only
   through `apps/mimshel/src/platform.rs` (a test keeps it so). The door costs nothing:
   thin calls, no state, no copies; new needs add a door method with its Wayland meaning.
+  A door call with no Wayland side yet names the `Capability` it lacks there; parts ask
+  `Display::can(…)` (what the screen can do, never which screen it is).
   Phase 2 (2026-10-31): the compositor, a separate program `apps/mimshel-compositor`,
   first nested in a window — plan and steps in `docs/compositor.md`.
 - **No GTK** (GTK 5 drops X11). Own widgets (`crates/widgets`).
@@ -104,7 +106,12 @@ the environment; the service links the whole `setup` crate.
   service `mimshel daemon --child` and restarts it. Rules (`next_step`): a crash →
   restart after 1, 2, 3, 4 s; five quick crashes in a row → a dialog and give up; a run of
   60 s starts the count anew; TERM/HUP (a deploy, the session ending) restart at once and
-  clear the count. The guard exits when X closes (`ServerWatch`, lesson 17); the service
+  clear the count. **Kept build** (`mimshel_setup::kept`): after a run of 60 s the guard
+  copies that build to `~/.local/state/mimshel/kept-build/mimshel`; when the installed
+  build gives up, the guard starts the kept one (if it is another build), notes the
+  installed one as bad once the kept one has run 60 s (the next login starts the kept
+  one at once), and returns to the installed file when its size or time changes. The
+  lock screen's guard has no such fallback. The guard exits when X closes (`ServerWatch`, lesson 17); the service
   exits when the guard is gone. Log: `~/.local/state/mimshel/daemon.log` (kept under
   1 MB, the previous one is `daemon.log.1`).
 - The service holds the menu bar, dock, desktop, folder windows, Search/Apps, notifications
@@ -145,8 +152,17 @@ the environment; the service links the whole `setup` crate.
   backup|backups|restore [--dry-run]`; the first copy, «original», is plain Xfce),
   `wallpapers/`. `~/.local/state/mimshel`: logs, `desktop-icons` (icon cells),
   crashes. `~/.cache/mimshel/lock/`: lock backgrounds.
-- `mimshel doctor [--fix]` checks the setup; `doctor --report` makes an archive for a bug
-  report with home path, user names, real name, host and Wi-Fi names removed.
+- `mimshel doctor [--fix]` checks the setup; `doctor --json` prints the checks for other
+  programs; `doctor --report` makes an archive for a bug report with home path, user
+  names, real name, host and Wi-Fi names removed. The settings window's Status page
+  (`mimshel settings health`) shows the failures by part and mends them like `--fix`.
+- **A check compares content, not presence** (2026-11-14): a file an older build
+  wrote is there too. What `apply` writes has a function that gives its text
+  (`parts::daemon_autostart_text`, `main_menu_text`, `logo_current`…) and `doctor`
+  compares with it. Generated pictures carry the revision of their drawing
+  (`mimshel_wallpaper::REVISION`, the lock's `BACKGROUND_VERSION`): raise it with any
+  change to the drawing. Themes installed by `install.sh` carry `.mimshel-rev`, the
+  pinned commit they came from.
 
 ### Screen and windows
 
